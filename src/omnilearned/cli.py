@@ -14,6 +14,13 @@ app = typer.Typer(
 
 
 @app.command()
+def likelihood(fit_config: str, output: str = typer.Option(...), device: str = typer.Option(...)):
+    """Evaluate an observation-only joint likelihood grid using a density checkpoint."""
+    from omnilearned.sbi.__main__ import main
+    main([fit_config, "--output", output, "--device", device])
+
+
+@app.command()
 def train(
     # General Options
     outdir: str = typer.Option(

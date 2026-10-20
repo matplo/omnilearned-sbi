@@ -326,6 +326,13 @@ def estimate_max_logp(
     Returns a dict with the best-fit parameters, the max log-likelihood,
     per-parameter 1D log-likelihood profiles, and the grid axes.
     """
+    import warnings
+    warnings.warn(
+        "Legacy estimate_max_logp performs independent coordinate slices and batch sums; "
+        "use omnilearned.sbi.log_prob and scan (or the likelihood CLI) for fixed-mask per-event joint inference. "
+        "Existing PET density regularity and masks require separate validation.",
+        FutureWarning, stacklevel=2,
+    )
     model.eval()
     for p in model.parameters():
         p.requires_grad_(False)
