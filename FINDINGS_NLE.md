@@ -53,6 +53,9 @@ inside an allocation with `SLURM_*` unset. On a login node run tests with
 | 2026-10-22 | M1 acceptance | 60101162 (cpu, debug) | 1 × 0.04 | shard regeneration on nid006833 + cross-host tests |
 | 2026-10-22 | M3 | 60101552 (gpu, regular) | 0 (cancelled while pending) | gate of `set_d256_L6` with the old p(N\|θ) |
 | 2026-10-22 | M3 | 60101555 (gpu, regular) | 0 (cancelled while pending) | gate of `pet_d256_L6_66k` with the old p(N\|θ) |
+| 2026-10-22 | M3, M2 round 2 | 60132411 (interactive, urgent_gpu_ss11, nid003940) | 1 × 4 | p(N\|θ) on all counts, gates of `set` / `pet100k` with it, `v2_m2` data |
+| 2026-10-22 | M2 round 2 | 60133655 (gpu, shared, 1 GPU, 3.5 h limit) | pending | `set_d256_L6_200k` on `v2_m2` |
+| 2026-10-22 | M2 round 2 | 60133656 (gpu, shared, 1 GPU, 5 h limit) | pending | `pet_d256_L6_200k` on `v2_m2` |
 
 Interactive job 60098593 used: 4 GPUs × ~4 h (3 trainings ≈ 1.3, 1.3, 1.6 GPU-h; M3
 sampling, shifts, gate points and fit timing on the rest) and the node's CPUs for all toy
@@ -270,7 +273,8 @@ direct `fidelity` jets; 200 permutations; relevance at N = 1000. Source snapshot
     data have 2000 jets per point (se of mean N ≈ 0.16).
   - **Fix confirmed: more (θ, N) data.** Counts-only shards (`datasets generate
     --counts-only`, schema `toy-counts-v1`, `data/v2_m1_counts`): 20 000 jets at each
-    training point, same seeds (the original 2000 per point are a subset). 49 of 64 shards
+    training point, same seeds (not a superset of the original 2000 per point; see the correction in M3
+    session 2). 49 of 64 shards
     (784 points, 15.7 M pairs) finished in-session; 15 shards were killed by memory at 64
     parallel processes (each holds full padded records ≈ 5 GB; use ≤ 16 in parallel); a
     resumable rerun with 16 processes was started at 05:00 and may not have finished.
@@ -311,6 +315,48 @@ direct `fidelity` jets; 200 permutations; relevance at N = 1000. Source snapshot
   in lesson 5 before the data scale-up. The PET backbone at equal steps (100k) looks at
   least as good as SetFlow at the development point; at equal GPU time (66k) it is worse.
   Backbone choice waits for the complete gates.
+
+## M3 session 2 (2026-10-22 16:00–20:00 PDT, interactive job 60132411, nid003940, 4 × A100-SXM4-40GB)
+
+Batch-style processes run from snapshot d13fd04 (`src_snapshots/d13fd04f…`, clean). The
+p(N|θ) retrain, `attach`, `check`, data generation and `index` ran from the checkout at
+d13fd04 with **dirty = true**: another session's uncommitted closure work was in the tree
+(`design.py` adds the stream `self_closure` = 11; `closure.py`, `closure_*.sh` untracked;
+`tests/sbi/test_datasets.py`). None of it is imported by these drivers and no existing
+stream number changed.
+
+- **p(N|θ) on all 64 counts shards** (20.48 M (θ, N) pairs; 256 × 4, 30k steps, batch 8192,
+  GPU, 124 s): best validation NLL **3.44784** at 29k; `runs/m3/mult/set_d256_L6_multC64.pt`
+  (sha 25fa66a1bb5d…, flow = `set_d256_L6`). Attached unchanged to the PET flows:
+  `pet_d256_L6_66k_multC64.pt` (97ded917694c…), `pet_d256_L6_100k_multC64.pt` (4e6ecd8b23ac…).
+- `check` against `v2_m1_fidelity` (128 points × 20 000 jets): **rms z 1.27, max |z| 4.6,
+  χ² p < 0.01 at 2/128** (≈ 1.3 expected), max relevance 1.03 at N = 1000. Same quality as
+  the 49-shard model (rms z 1.38, 3/128, 0.91): more counts no longer help, the residuals
+  are at the noise level except at box corners. Worst: point 98 (b 10.5, T_ref 0.54, τ_init
+  0.22; ΔN −0.224 ± 0.049, relevance 1.03, 2-se lower bound ≈ 0.58), point 118 (ΔN −0.20,
+  0.70), 69 (+0.11, 0.69). `runs/m3/mult/check_set_d256_L6_multC64.json`.
+- Gates and shifts of the swapped checkpoints: `runs/m3/set_d256_L6_multC64/`,
+  `runs/m3/pet_d256_L6_100k_multC64/` (launcher `runs/m3/launch_multC64.sh`: GPU A shift then
+  gate shard 0/2, GPU B gate shard 1/2; GPUs 0–1 set, 2–3 pet100k). Results below.
+- **Round-2 data `data/v2_m2`**: same train design and seeds as `v2_m1`, **6000 jets per
+  point**, 1024 points = **6.144 M jets**, 64 shards, 3.6 GB, 6 min 45 s with 16 processes;
+  acceptance 0.042–0.192. Validation shards and index copied from `v2_m1` (unchanged).
+- **Correction**: a larger jet count is *not* a superset of a smaller one at the same seed.
+  `sample_toy` uses batch = min(20000, max(256, 2 × count)) attempts per vectorized draw, so
+  the map from the random stream to events depends on `count`. Checked on `train_00007`:
+  of the 2000 `v2_m1` jets per point only ≈ 300 event ids recur in `v2_m2`, and with
+  different content. The earlier note that the counts shards contain the original 2000 per
+  point is wrong in the same way. Consequences: none for the statistics (the draws are
+  effectively independent, validation/fidelity use other streams), but **event ids are
+  unique only within one dataset**, not across datasets with different jet counts.
+- **Round-2 trainings** submitted (snapshot d13fd04, shared GPU queue, estimated start
+  ~30 h): `runs/m2r2/set_d256_L6_200k` (60133655) and `runs/m2r2/pet_d256_L6_200k`
+  (60133656, `--arch pet_smooth --local-dim 64`), both on `v2_m2`, **200k steps** (equal
+  steps; round 1 showed PET needs equal steps rather than equal GPU time), otherwise the M2
+  settings (d256 L6 h8, batch 512, lr 3e-4, warmup 1000, cosine, EMA 0.9995, length buckets
+  16, TF32 training, val every 2000 × 16 batches). 200k × 512 = 17 epochs of `v2_m2` (round
+  1: 25 epochs of `v2_m1`). Their own p(N|θ) (4000 steps) will be replaced by
+  `set_d256_L6_multC64` via `attach` before the gate.
 
 ## Open items
 
