@@ -6,6 +6,12 @@ of `matplo/omnilearned-sbi`, created 2026-10-21 from `dev/agent-a` (commit `fe19
 GPU-node state it builds on is tagged `devA-2026-10-22` in this repository and in the
 omni-sbi-mc application.
 
+Optional reading (rendered pages; this file stays self-contained):
+- the full technical report with figures: https://claude.ai/artifact/DnBXmQboAAFabFmnbhzszC;
+- the status page: https://claude.ai/artifact/4gzmAX82tW5xSAvLqQR7Gs.
+
+They are private until the user shares them; ask for access if a link does not open.
+
 ## 1. Goal
 
 Infer (b [fm], T_ref [GeV], τ_init [fm/c]) from sets of jets with a **neural likelihood
@@ -149,9 +155,18 @@ conditioning ideas, not its inference.
 ## 5. The toy and the inference problem
 
 **Toy physics** (`toy-quenching-v1`; constants in `[toy]`):
-- **Medium:** overlap geometry with R_geom = 6.5 fm. Production density ∝ F+F−, uniform
-  direction, T(ℓ) = T_ref g_b^(1/3) (τ/ℓ)^(1/3) for ℓ ≥ τ_init, interactions for T > 0.17 GeV.
-- **Path moments:** I_m by a 64-step midpoint rule on [τ_init, L_exit].
+- **Medium:** two disks of radius R_geom = 6.5 fm at (±b/2, 0).
+  - F±(r) = max(0, 1 − |r − c±|²/R_geom²) and g_b = √(F₊F₋).
+  - Production point drawn ∝ g_b²; direction uniform in azimuth; L_exit is the forward distance
+    to leave the overlap.
+  - T(ℓ) = T_ref · g_b(r(ℓ))^(1/3) · (τ_init/ℓ)^(1/3) for ℓ ≥ τ_init, and 0 before. There are
+    interactions only where T > 0.17 GeV.
+  - **T_ref is the initial temperature at the centre of a head-on (b = 0) collision**, not a
+    per-event temperature. At the same T_ref, larger b gives a smaller, cooler overlap with
+    shorter paths: central collisions are hottest.
+- **Path moments:** I_m = ∫ 1[ℓ ≥ τ_init, T > T_cut] (T/0.35 GeV)^m dℓ/1 fm for m = 1, 2, 3,
+  by a 64-step midpoint rule on [τ_init, L_exit]. I₃ drives energy loss, I₂ broadening, and I₁
+  the soft fraction (and, in v2, the medium-induced soft multiplicity).
 - **Hard spectrum:** P0 ~ P^−5 on [40, 500] GeV, lognormal loss exp(−0.12 I_3 Z).
 - **Constituents:** 24 core + 8 soft, with Dirichlet momentum weights; soft fraction f_soft(I_1).
 - **Widths:** σ_vac(P0), σ_core(I_2), σ_soft = 2.2 σ_core.
@@ -210,6 +225,21 @@ broadening and the soft energy fraction are as in v1. What changes:
    - Conditional widths at N = 250: σ_b ≈ 0.5 fm, σ_T ≈ 0.012 GeV, σ_τ ≈ 0.2 fm/c.
    - Marginal widths: about 1.4–2.4 fm, 0.08 GeV, 0.23 fm/c.
    - b–T correlation: 0.86.
+   - **Cause: a physical degeneracy of the toy.** Quenching scales roughly as
+     T_ref³ · G(b, τ_init), where the geometric factor G falls with b. So the jets stay the
+     same along T_ref ∝ G^(−1/3), which rises with b.
+     - On the GPU node, the mean I₁, I₂ and I₃ were computed over the (b, T_ref) plane at
+       τ_init = 0.95. Their iso-curves through the development point nearly coincide, and every
+       fitted posterior ridge lies on them.
+     - Jets alone cannot separate (b, T_ref, τ_init) along that curve, and it is the same for
+       every surrogate.
+     - Expect the same for toy v2: the soft multiplicity also depends on I₁. Check it with the
+       same iso-moment plot before assuming N adds a new direction.
+   - **Consequences:**
+     - mean marginal pulls at a fixed truth are non-zero even with an exact likelihood
+       (lesson 8);
+     - in experiments and in JEWEL, b comes from centrality, not from jets, so the
+       event-local-b mode (M7) is the physically relevant fit and breaks the degeneracy.
 2. **Coarse grids are artifacts.** A 5³ + 2 × 6³ refinement grid gave marginals 0.71σ off a fine
    reference, because the refinement box never shrinks. `support_scan` on fine grids fixes it.
    Nested-grid comparison (subsampling the fine reference every other node) is free and reliable.
@@ -375,7 +405,8 @@ p-values under the null). Extend it with the δθ step at scale; the application
 `a/scripts/fidelity_report.py` and `fidelity_html.py` show one way to drive it and build the
 page.
 
-Produce a self-contained HTML report:
+Produce a self-contained HTML report (the GPU-node report linked at the top is a template:
+plots with "how to read" captions; the exact model, data and numerics behind each number):
 - verdict per point;
 - particle- and jet-level histograms with ratio panels;
 - response curves along the development scans;
@@ -405,6 +436,10 @@ Produce a self-contained HTML report:
     standard errors for every parameter.
 - If M5 fails while M3 passes, the gate missed something relevant: add it to M3 and iterate
   M2/M3. Never tune on test data.
+- **Known-b diagnostic** (cheap, development data): repeat the development fits with b fixed
+  at its true value, a 2D (T_ref, τ_init) scan. It shows how much the jets constrain the medium
+  once centrality is known, and it previews M7. Report it next to the 3D result. It is not a
+  replacement for the 3D closure.
 
 ### M6: Test closure
 - Reserved settings: primary test 20 ensembles at N = 250 and ≥ 5 at N = 1000; additional
@@ -416,6 +451,10 @@ Produce a self-contained HTML report:
 ### M7: Shared medium with event-local b
 `local_variable_loglik`: the φ = (T_ref, τ_init) grid needs the same resolution study; g_S from
 an independent direct acceptance table.
+
+This is the fit that matches how data and JEWEL define b: per-event geometry from centrality.
+It removes the b direction of the degeneracy (lesson 1). Give it priority right after M6 rather
+than treating it as optional.
 
 ### M8: JEWEL
 Only with an approved budget. JEWEL 2.6.0-custom adapter from the omni-sbi-mc application.
