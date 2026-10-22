@@ -2,7 +2,9 @@
 
 This file is the complete brief for the agent continuing this work on Perlmutter. Read it
 fully before acting; it replaces the earlier hand-off documents. Branch: `dev/nle-perlmutter`
-of `matplo/omnilearned-sbi`, created 2026-10-21 from `dev/agent-a` (commit `fe19020`).
+of `matplo/omnilearned-sbi`, created 2026-10-21 from `dev/agent-a` (commit `fe19020`). The
+GPU-node state it builds on is tagged `devA-2026-10-22` in this repository and in the
+omni-sbi-mc application.
 
 ## 1. Goal
 
@@ -14,10 +16,14 @@ Infer (b [fm], T_ref [GeV], τ_init [fm/c]) from sets of jets with a **neural li
 
 The bar is **direct-simulator closure**: pseudo data drawn directly from the simulator at
 reserved, off-grid settings give unbiased posteriors with correct coverage at N = 250 and
-N = 1000 jets. The toy `toy-quenching-v1` comes first, JEWEL later.
+N = 1000 jets. The toy comes first, JEWEL later. The primary toy is **`toy-quenching-v2`**:
+variable constituent multiplicity, up to 256 constituents per jet, padded with zeros and an
+explicit mask. `toy-quenching-v1` (fixed 32 constituents) stays as the reference for
+everything measured on the GPU node.
 
 What is new on this branch:
-- the toy is part of the repository;
+- the toy is part of the repository, now with variable multiplicity (v2);
+- the likelihood includes the multiplicity: q(x, N | θ) = p(N | θ) q(x | N, θ);
 - training data are much larger, in a JEST-like HDF5 layout;
 - **generator fidelity is established before any inference**;
 - everything runs at Perlmutter scale (A100 GPUs, many CPU nodes).
@@ -29,6 +35,9 @@ conditioning ideas, not its inference.
 ## 2. Ground rules (non-negotiable)
 
 1. **Pseudo data:** only from the simulator at reserved settings, never from the generator.
+   The one exception is the labelled *self-closure control* (§6 lesson 8): pseudo data drawn
+   from the surrogate itself, to measure the pulls an exact likelihood gives. It is a
+   diagnostic, never closure evidence.
 2. **Training data:** no training θ equals a reserved setting. The main test setting lies
    strictly between design values on every axis (continuous designs: keep a margin, §5).
 3. **Truth:** test truth is opened only by a report step after each fit's seal (hashes of
@@ -63,7 +72,9 @@ conditioning ideas, not its inference.
   `python -c "from omnilearned.sbi.toy import reco; print(reco.fastjet_version())"`.
 - **Tests:** `pytest tests/sbi`. The cross-host check is `test_toy.py::test_cross_host_reproducibility`:
   θ = (6.0, 0.40, 0.65), 300 jets, seed 424242, array sha256 `63a9cf13…d24d4`, 7760 attempts.
-  **If it fails, stop and report**: a non-reproducing toy invalidates everything downstream.
+  For v2: `test_variable_multiplicity.py::test_v2_cross_host_reproducibility`, with the same
+  θ, n and seed, sha256 `b5014583…b23a8b` and 2227 attempts.
+  **If either fails, stop and report**: a non-reproducing toy invalidates everything downstream.
 - **Smoke chain** before scaling up:
   1. tiny data (e.g. 27 settings × 500 jets);
   2. a 1k-step train;
@@ -100,19 +111,39 @@ conditioning ideas, not its inference.
 - `observations.py`: observation file format (features, mask, event ids, sha256).
 - `base.py`, `transforms.py`, `parameters.py`: base distributions, the atanh feature
   transform with log-Jacobian, condition layout.
-- `fidelity.py`: the statistics-aware fidelity gate (§7, M3).
+- `fidelity.py`: the statistics-aware fidelity gate (§7, M3). It is mask-aware:
+  `evaluate(..., direct_mask=, surrogate_mask=)` adds the multiplicity as a jet observable.
+- `multiplicity.py`, for variable multiplicity:
+  - `MultiplicityModel`: a categorical p(N | θ) over 0..256 with smooth (SiLU) logits in θ;
+  - `train_multiplicity` (cross entropy, best validation state);
+  - `layout_with_multiplicity`: the flow's condition is θ plus the known context
+    `n_constituents` / 100.
+- `FlowSurrogate` with a multiplicity model, which is saved in the checkpoint:
+  - `log_prob` adds log p(N | θ);
+  - the N context is filled from the mask;
+  - `sample(theta, n, None, ...)` draws N first and returns `(x, mask)`.
+- **Padding:** all computation is cut to the active width (`flow.active_width`). Padding to 256
+  costs nothing and changes no value (tested). Probes do not depend on the padding length.
 
-**Toy** (`src/omnilearned/sbi/toy/`, config `configs/toy-quenching-v1.toml`; ported unchanged
-from the omni-sbi-mc application):
-- `simulator.sample_toy(theta, count, rng, constants, selection, stream, index)` returns
-  records plus a manifest (attempted / accepted / acceptance / rejections);
+**Toy** (`src/omnilearned/sbi/toy/`; configs `configs/toy-quenching-v1.toml` and
+`-v2.toml`; v1 ported unchanged from the omni-sbi-mc application):
+- `simulator.sample_toy(theta, count, rng, constants, selection, stream, index)` (v1) and
+  `simulator_v2.sample_toy` (v2) return records plus a manifest (attempted / accepted /
+  acceptance / rejections; v2 also the multiplicity range). v2 records hold `x` [n, 256, 3],
+  `mask` and `n_constituents`;
+- `simulator_v2.select_sets`: the v2 selection on constituent sets, shared by toy jets and
+  surrogate samples;
+- `config.load_toy_config(path)` and `sample_setting(..., path=)` dispatch on the config's
+  `backend`;
 - `reco` (FastJet anti-kt R = 0.4 through cppyy);
-- `selection.select_clouds` (the same selection applied to generated clouds);
-- `selection.acceptance_table` (Pr_q(S | θ) of a surrogate);
-- `observables.jet_observables` (jet pT, η, width, soft-8 fraction, outer fraction, pTD,
-  leading fraction);
+- `selection.select_clouds(x, sel, mask=None)` (the same selection applied to generated
+  clouds; v2 with a mask);
+- `selection.acceptance_table` (Pr_q(S | θ) of a surrogate; for v2 the surrogate draws N);
+- `observables.jet_observables(x, mask=None)` (jet pT, η, width, soft-8 fraction, outer
+  fraction, pTD, leading fraction, multiplicity; padded slots ignored);
 - `design` (event-id streams, `rng_for(seed, *keys)`, reserved settings, `check_reservation`);
-- `records` (HDF5 writers);
+- `records` (HDF5 writers; `read_training_set(trim=True)` cuts the padded axis to the
+  largest real multiplicity);
 - `config.sample_setting` and `config.array_sha256`.
 
 ## 5. The toy and the inference problem
@@ -135,6 +166,27 @@ from the omni-sbi-mc application):
 The steep spectrum makes the selected jet-pT shape nearly θ-invariant. The information is in
 broadening and the soft fraction.
 
+**Toy v2** (`toy-quenching-v2`, the primary toy here). Medium, geometry, hard spectrum, loss,
+broadening and the soft energy fraction are as in v1. What changes:
+- **Multiplicities:**
+  - core 1 + Poisson(μ_core − 1), with μ_core = 20 (P0 / 100 GeV)^0.3;
+  - medium-induced soft Poisson(μ_soft), with μ_soft = 4 + 26 (1 − e^(−0.8 I_1)).
+- **Observed object:** the leading anti-kt R = 0.4 jet's actual constituents. Particles may
+  leak out of the cone and are then not observed. Constituents are pT-ordered and
+  left-packed into 256 slots with zero padding and a mask.
+- **Selection** (`select_sets`, identical for toy jets and surrogate clouds):
+  - 2 ≤ N ≤ 256;
+  - all constituents inside |η| < 2.5 and |φ| < 1.2;
+  - re-clustering the constituents alone gives exactly one jet containing all of them;
+  - 60 ≤ pT_jet ≤ 200 GeV and |η_jet| < 1.
+- **Measured on 2000 jets per setting:**
+  - acceptance 8–19%;
+  - mean N from 25 (0, 0.25, 0.2) to 40 (0, 0.55, 0.2), and 30 at the development setting;
+  - maximum N seen: 67;
+  - every rejection is the jet-pT cut.
+
+  The multiplicity carries information on the medium.
+
 **Box and reserved settings:**
 - box: b ∈ [0, 11], T_ref ∈ [0.25, 0.55], τ_init ∈ [0.2, 1.2];
 - reserved (`[holdout]`): primary test (4.5, 0.40, 0.65); additional tests (1.5, 0.50, 0.35)
@@ -146,6 +198,9 @@ broadening and the soft fraction.
 - −N log Pr_q(S | θ) comes from an acceptance table. It is small: Pr ≈ 0.88–0.92, spanning
   about 9 units of log L at N = 250.
 - Fixed-vector mode: log L(θ) = Σ_i log q_sel(x_i | θ).
+- With variable multiplicity (v2): log q(x_i, N_i | θ) = log p(N_i | θ) + log q(x_i | N_i, θ).
+  The flow is conditioned on N, and the multiplicity model is part of the surrogate and of
+  the acceptance computation, since Pr_q(S | θ) samples N first.
 - Later, the shared-medium mode: b is event-local, integrated per event against the selected
   geometry law g_S(b | φ). Never multiply likelihoods before integrating b.
 
@@ -198,9 +253,28 @@ broadening and the soft fraction.
    integrates the model's density, so fidelity must use samples whose distribution no longer
    changes with more sampler steps: check 64 vs 128 vs 256 and use the converged setting.
 6. **Selection normalization** matters little at this toy's acceptance, but keep it.
-7. **Earlier scale-up test.** On the GPU node, 1430 settings × 1500 jets (2.1 M) with the same
-   and with a wider model; outcome recorded in the omni-sbi-mc FINDINGS, "Surrogate fidelity".
-   Use it as a baseline, not as a result to reproduce.
+7. **Data and training length fixed fidelity; capacity did not matter.** The GPU-node
+   scale-up used toy v1, 1430 Cartesian settings × 1500 jets (2.1 M) and 100k steps. Tagged
+   `devA-2026-10-22`.
+   - `dense_base`, the same 1.0 M-parameter model, passes the gate: 0 of 22 settings fail, and
+     the p-values are uniform (KS p 0.39, none below 0.01). The equivalent τ_init shift at
+     128 steps is +0.14 ± 0.13 fm/c.
+   - A 3.3 M-parameter model is no better; its validation loss agrees to 5 digits.
+   - Development closure at N = 250: the truth is inside the joint 68% region in 6 of 7 (was 1)
+     and the 95% region in 7 of 7; joint levels 0.17–0.77.
+   - Selection acceptance of the surrogate: 0.96–0.98.
+   - Cost: training 1.04 h on a TITAN RTX; fits ≈ 16 min at N = 250 (12 × 14 × 6 support grid).
+   - Expect to need at least this data density per unit volume of θ with any new model.
+8. **Mean marginal pulls are not zero even with an exact likelihood.** Fits to pseudo data
+   drawn from `dense_base` itself (the self-closure control) gave mean pulls T_ref +0.52 ±
+   0.08, τ_init −0.54 ± 0.12 and b −0.06 ± 0.14 at the development setting. With toy data
+   they were +0.69 ± 0.16, −0.52 ± 0.07 and +0.40 ± 0.25. The difference (the fidelity effect)
+   is consistent with zero.
+   - Cause: the tube posterior spans the prior box, so marginal posterior means at a fixed
+     truth are pulled toward the tube's centre.
+   - **Judge closure by coverage and the joint-level distribution, and compare pulls with the
+     exact-likelihood control, never with zero.** M5 is written that way.
+   - The control is cheap: one extra dev-bias run with pseudo data sampled from the surrogate.
 
 ## 7. Work plan
 
@@ -219,15 +293,20 @@ hours) and a commit.
 - **Generation:** parallel over points with Slurm job arrays. Seeds via
   `rng_for(seed, STREAMS[split], point_index)`. One shard per job, then a merged index with
   sha256 per shard.
-- **Layout** (HDF5, one file per shard, JEST-like):
-  - `data` [n, 32, 3] float32: (η, φ, log pT/GeV), absolute coordinates as now, plus `mask` [n, 32];
+- **Toy:** `toy-quenching-v2` (`configs/toy-quenching-v2.toml`). Keep v1 only for a small
+  reference set that reproduces the GPU-node numbers if a regression question comes up.
+- **Layout** (HDF5, one file per shard, JEST-like; `records.write_training_set` already
+  writes most of it):
+  - `data`/`x` [n, 256, 3] float32: (η, φ, log pT/GeV), absolute coordinates, zero-padded,
+    with `mask` [n, 256] and `n_constituents` [n]. Real constituents are pT-ordered and
+    left-packed. Chunked gzip; padding compresses to almost nothing;
   - `global` [n, k]: θ (3), jet pT, jet η, jet φ, N_const, with `attrs["global_names"]`;
   - `event_id` int64 (stream-tagged); `point_id`;
-  - `p4` and `membership` optional;
   - hidden generator diagnostics in a separate file, never read by training or fitting.
 
-  Keep 32 constituents (`toy-quenching-v1` unchanged). Write a reader that serves batches
-  without loading everything into memory if the data exceed host RAM.
+  Readers cut the padded axis to the largest real N (`read_training_set(trim=True)`).
+  2 M jets × 70 × 3 float32 is about 1.7 GB in memory. Write a reader that serves batches
+  without loading everything if the data exceed host RAM.
 - **Acceptance:** shard hashes reproducible; the reproducibility test passes on several node
   types; per-point acceptance recorded.
 
@@ -248,17 +327,30 @@ Common to both:
 - EMA, cosine schedule, checkpoint by validation flow-matching loss of the EMA weights;
 - log GPU hours.
 
-Conditioning: θ mapped to [−1, 1] over the box. Jet pT is **not** a condition in the baseline
-(see §9 for the factorized variant).
+Conditioning: θ mapped to [−1, 1] over the box, plus N / 100 as known context
+(`layout_with_multiplicity`). Jet pT is **not** a condition in the baseline (see §9 for the
+factorized variant).
+
+Multiplicity:
+- Train `MultiplicityModel` on (θ, N) of the training split with `train_multiplicity`, and
+  select it on the validation split.
+- Attach it to the `FlowSurrogate` before saving, so one checkpoint holds p(N | θ) and
+  q(x | N, θ).
+- Check it directly: for each validation point compare the N histogram with the direct toy
+  (it is also part of M3).
+
+Batching: the cost is set by the largest N in a batch, because batches are cut to the active
+width. Bucket batches by N (sort-by-length sampling) to avoid paying for the tail.
 
 ### M3: Fidelity gate (CPU + light GPU sampling): must pass before any inference
 - **Samples:**
-  - at every validation point, ≥ 20k selected direct jets and ≥ 20k generated jets, with
-    generated clouds selected by `select_clouds`;
+  - at every validation point, ≥ 20k selected direct jets and ≥ 20k generated jets. Generated
+    clouds draw N from p(N | θ) and are selected by `select_clouds(x, sel, mask)`;
   - generation with a converged sampler (lesson 5b): at least 128 steps, verified against 256
     at a few points.
 - **Observables:**
-  - jet level: jet pT, width, soft-8 fraction, outer fraction (ΔR > 0.15), pTD, leading fraction;
+  - jet level: jet pT, width, soft-8 fraction, outer fraction (ΔR > 0.15), pTD, leading
+    fraction, and the multiplicity N (`JET_VARIABLE`);
   - constituent level: η, φ, log pT, ΔR to the jet axis, log z.
 - **Significance (calibrated null):** per point, a permutation test.
   1. Pool direct and generated jets, re-split at random (jets as units), R ≥ 200 times.
@@ -293,6 +385,8 @@ Produce a self-contained HTML report:
 - Convergence at N = 250 and 1000: candidates around the development fit maximum along the
   tube. Reference rk4-64 with 16 per-step probes, 12 probe seeds. Criteria as in lesson 3.
 - Exact-divergence subset: 24 jets.
+- The multiplicity term log p(N | θ) is exact (categorical). Report its share of Δlog L across
+  the posterior and check that it is smooth in θ on the scan grid.
 - Device check: CUDA vs CPU log p.
 - Record `[likelihood]` settings in config before M5.
 
@@ -302,8 +396,13 @@ Produce a self-contained HTML report:
   as in lesson 2.
 - Per ensemble: pulls, marginal 68/95% coverage, and the **joint level of truth** (posterior
   mass at higher density than at the truth; evaluate log L at the truth as one extra candidate).
-- **Pass:** mean pulls consistent with 0 within 2 standard errors, or |mean pull| < 0.3; and
-  joint levels consistent with uniform (KS p > 0.01).
+- **Control (lesson 8):** the same fits on ≥ 10 ensembles drawn from the chosen surrogate
+  itself at the development truth (labelled diagnostic, rule 1).
+- **Pass** (criteria fixed now, before any v2 result):
+  - joint levels consistent with uniform (KS p > 0.01), with marginal and joint 68/95%
+    coverage within Clopper–Pearson 95% bounds;
+  - toy-data mean pulls minus control mean pulls consistent with 0 within 2 combined
+    standard errors for every parameter.
 - If M5 fails while M3 passes, the gate missed something relevant: add it to M3 and iterate
   M2/M3. Never tune on test data.
 
@@ -325,8 +424,9 @@ Only with an approved budget. JEWEL 2.6.0-custom adapter from the omni-sbi-mc ap
 
 ## 8. Compute notes (Perlmutter)
 
-- **Toy:** 1000 selected jets in about 1.4 s on one CPU core, so 2 M jets is about 45
-  core-minutes. FastJet is called in a compiled cppyy loop.
+- **Toy:** v1, 1000 selected jets in about 1.4 s on one CPU core, so 2 M jets is about 45
+  core-minutes. v2, 2000 selected jets in 0.6–2.3 s, depending on acceptance (8–19%).
+  FastJet is called in a compiled cppyy loop.
 - **Surrogate sampling:** 5200 jets with 32 steps take about 45 s on 6 CPU threads; use GPUs
   for the fidelity samples.
 - **Fits:** a candidate's cost scales with N × (steps × NFE) × probes. Budget support scans
@@ -345,8 +445,8 @@ Only with an approved budget. JEWEL 2.6.0-custom adapter from the omni-sbi-mc ap
   `/global/cfs/cdirs/alice/$USER/jest-nle` (not `$PSCRATCH`, which is purged). Use it as
   the run root, e.g. `JEST_NLE_ROOT=/global/cfs/cdirs/alice/$USER/jest-nle`, with
   `data/`, `checkpoints/`, `runs/` and `manifests/` below it. CFS is slower than scratch:
-  read each HDF5 split into memory once per job (2 M jets × 32 × 3 float32 ≈ 0.8 GB), and
-  write checkpoints at a modest cadence. Nothing from this directory is committed.
+  read each HDF5 split into memory once per job, trimmed to the largest N (2 M v2 jets ≈ 1.7
+  GB), and write checkpoints at a modest cadence. Nothing from this directory is committed.
 
 ## 9. To-do and forks (not in the baseline)
 
@@ -359,16 +459,22 @@ Only with an approved budget. JEWEL 2.6.0-custom adapter from the omni-sbi-mc ap
      one) or use another bijection, and include the Jacobian.
    - Fork from this branch once the baseline gate results are known.
 2. **JEST NPE** as an independent comparison on the same data.
-3. **A variable-multiplicity toy v2** (new backend id), closer to JEWEL.
+3. ~~A variable-multiplicity toy v2~~: done (`toy-quenching-v2`), and it is the primary toy.
+   For JEWEL, the same padded layout and p(N | θ) apply with a larger N range. Check the
+   256 cap against JEWEL jets first.
 4. A **classifier two-sample test** per point as an additional fidelity diagnostic (never a
    replacement for the calibrated gate).
 
-## 10. Settled with the user (2026-10-21)
+## 10. Settled with the user (2026-10-21/22)
 
 - **Account and queue:** account `alice` (user `ploskon`); batch jobs plus the on-demand
   4 h interactive GPU QOS (section 8).
 - **Budget:** none fixed; run what is needed and log usage (section 8).
 - **Install:** `pip install -e .` into the prepared `henv` environment.
 - **Data:** `/global/cfs/cdirs/alice/$USER/jest-nle` (project directory, not scratch).
+- **Constituents** (2026-10-22): use the full variable list of jet constituents, up to 256,
+  zero-padded with a mask. Toy v2 has Poisson core and medium-induced soft multiplicities
+  and keeps the leading jet's actual constituents. The code lives on this branch only; the
+  application keeps toy v1 at the tag.
 
 Ask the user only for new decisions, JEWEL budget or external blockers.

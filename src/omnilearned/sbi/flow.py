@@ -4,6 +4,14 @@ Training, generation and likelihood evaluation share the checkpoint's base
 specification, feature transform, condition layout and explicit masks. The
 trainer runs on one explicitly selected device (CPU, CUDA or MPS) without
 distributed setup; model tensors are float32.
+
+Variable multiplicity: clouds are padded (zeros, explicit mask) to a fixed
+width such as 256. Every computation is cut to the active width (the last
+real slot in the batch), which changes no value because padded slots never
+influence real ones. With a multiplicity model the checkpoint represents
+q(x, N | theta) = p(N | theta) q(x | N, theta): ``log_prob`` adds
+log p(N | theta), the known condition column ``n_constituents`` is filled from
+the mask, and ``sample`` draws N first.
 """
 
 import copy
@@ -23,6 +31,11 @@ from omnilearned.sbi.likelihood import (
     frozen_for_inference,
     log_prob,
     sample,
+)
+from omnilearned.sbi.multiplicity import (
+    MULTIPLICITY_COLUMN,
+    MultiplicityModel,
+    multiplicity_context,
 )
 from omnilearned.sbi.parameters import ConditionLayout
 from omnilearned.sbi.transforms import FeatureTransform
@@ -52,8 +65,22 @@ class TrainOptions:
         return asdict(self)
 
 
+def active_width(mask):
+    """Number of leading slots that hold any real particle in the batch."""
+    cols = mask.reshape(-1, mask.shape[-1]).any(0)
+    idx = torch.nonzero(cols)
+    return int(idx.max()) + 1 if idx.numel() else 1
+
+
 def flow_matching_loss(model, x, mask, cond, base, generator=None, t=None, eps=None):
-    """Masked conditional flow-matching loss (mean over real coordinates)."""
+    """Masked conditional flow-matching loss (mean over real coordinates).
+
+    Padded slots beyond the batch's active width are cut first (no value changes).
+    """
+    w = active_width(mask)
+    x, mask = x[:, :w], mask[:, :w]
+    if eps is not None:
+        eps = eps[:, :w]
     mask_f = mask.to(x.dtype).unsqueeze(-1)
     if t is None:
         t = torch.rand(x.shape[0], device=x.device, generator=generator)
@@ -71,13 +98,52 @@ def flow_matching_loss(model, x, mask, cond, base, generator=None, t=None, eps=N
 class FlowSurrogate:
     """A conditional generator O with everything needed to use it."""
 
-    def __init__(self, model, base, transform, layout, metadata=None, device="cpu"):
+    def __init__(self, model, base, transform, layout, metadata=None, device="cpu",
+                 multiplicity=None):
         self.model = model
         self.base = base
         self.transform = transform
         self.layout = layout
         self.metadata = dict(metadata or {})
         self.device = torch.device(device)
+        self.multiplicity = multiplicity
+        if multiplicity is not None:
+            multiplicity.to(self.device)
+
+    @property
+    def uses_multiplicity_context(self):
+        return MULTIPLICITY_COLUMN in self.layout.known
+
+    def _context(self, mask, context, context_names):
+        """Known context rows, with ``n_constituents`` derived from the mask if needed."""
+        if not self.uses_multiplicity_context:
+            return context, context_names
+        n = multiplicity_context(mask)
+        if context is None:
+            return n, [MULTIPLICITY_COLUMN]
+        names = list(context_names or [c for c in self.layout.known if c != MULTIPLICITY_COLUMN])
+        return np.concatenate([np.asarray(context, np.float64), n], 1), names + [MULTIPLICITY_COLUMN]
+
+    def log_multiplicity(self, counts, candidates, candidate_names=None):
+        """log p(N | theta) [M, len(counts)] for candidate rows (0 without a model)."""
+        candidates = np.atleast_2d(candidates)
+        counts = np.asarray(counts)
+        if self.multiplicity is None:
+            return np.zeros((candidates.shape[0], counts.size))
+        lay = self.multiplicity.layout
+        cond = torch.from_numpy(lay.assemble(candidates, candidate_names)).to(self.device)
+        with torch.no_grad():
+            lp = torch.log_softmax(self.multiplicity.logits(cond).double(), -1).cpu().numpy()
+        n = np.clip(counts, 0, self.multiplicity.max_n)
+        out = lp[:, n]
+        out[:, (counts < 0) | (counts > self.multiplicity.max_n)] = -np.inf
+        return out
+
+    @staticmethod
+    def _trim(x, mask):
+        m = np.asarray(mask, dtype=bool)
+        w = active_width(torch.from_numpy(m))
+        return np.asarray(x)[:, :w], m[:, :w]
 
     # ---- density --------------------------------------------------------
     def log_prob(self, x_phys, mask, candidates, event_ids, options,
@@ -90,6 +156,8 @@ class FlowSurrogate:
         Returns:
             (float64 array [M, N], diagnostics)
         """
+        x_phys, mask = self._trim(x_phys, mask)
+        context, context_names = self._context(mask, context, None)
         x = torch.as_tensor(np.asarray(x_phys), dtype=torch.float32)
         mask_t = torch.as_tensor(np.asarray(mask), dtype=torch.bool)
         u, logj = self.transform.forward(x.double(), mask_t)
@@ -100,7 +168,8 @@ class FlowSurrogate:
         if context is not None:
             ctx = np.repeat(np.asarray(context)[None], M, 0).reshape(M * N, -1)
         cond = self.layout.assemble(
-            np.repeat(candidates, N, axis=0), candidate_names, context=ctx
+            np.repeat(candidates, N, axis=0), candidate_names, context=ctx,
+            context_names=context_names,
         )
         xs = u.repeat(M, 1, 1).to(self.device)
         ms = mask_t.repeat(M, 1).to(self.device)
@@ -116,46 +185,87 @@ class FlowSurrogate:
                 event_ids=ids,
             )
         lp = lp + logj.repeat(M)
-        return lp.numpy().reshape(M, N), diag
+        out = lp.numpy().reshape(M, N)
+        if self.multiplicity is not None:
+            lm = self.log_multiplicity(mask_t.sum(1).numpy(), candidates, candidate_names)
+            diag["log_multiplicity"] = lm
+            out = out + lm
+        return out, diag
 
     def log_prob_paired(self, x_phys, mask, rows, event_ids, options,
                         candidate_names=None, context=None):
         """Log density of event i at its own parameter row ``rows[i]`` -> [N]."""
+        x_phys, mask = self._trim(x_phys, mask)
+        context, context_names = self._context(mask, context, None)
         x = torch.as_tensor(np.asarray(x_phys), dtype=torch.float32)
         mask_t = torch.as_tensor(np.asarray(mask), dtype=torch.bool)
         u, logj = self.transform.forward(x.double(), mask_t)
-        cond = self.layout.assemble(np.asarray(rows), candidate_names, context=context)
+        cond = self.layout.assemble(np.asarray(rows), candidate_names, context=context,
+                                    context_names=context_names)
         with frozen_for_inference(self.model):
             lp, diag = log_prob(self.model, u.float().to(self.device),
                                 mask_t.to(self.device), self.base,
                                 cond=torch.from_numpy(cond).to(self.device),
                                 options=options, event_ids=np.asarray(event_ids))
-        return (lp + logj).numpy(), diag
+        out = (lp + logj).numpy()
+        if self.multiplicity is not None:
+            counts = mask_t.sum(1).numpy()
+            rows = np.atleast_2d(rows)
+            lm = np.array([self.log_multiplicity(counts[i:i + 1], rows[i], candidate_names)[0, 0]
+                           for i in range(len(counts))])
+            diag["log_multiplicity"] = lm
+            out = out + lm
+        return out, diag
 
     # ---- generation -----------------------------------------------------
-    def sample(self, candidate, n, num_particles, seed, nsteps=64, solver="midpoint",
-               candidate_names=None, batch=4096):
-        """Physical-coordinate samples at one candidate (fixed multiplicity)."""
+    def sample(self, candidate, n, num_particles=None, seed=0, nsteps=64, solver="midpoint",
+               candidate_names=None, batch=4096, pad_to=None, return_mask=False):
+        """Physical-coordinate samples at one candidate.
+
+        ``num_particles`` fixes the multiplicity (returns ``x`` [n, P, F], or
+        ``(x, mask)`` with ``return_mask``). With ``num_particles=None`` N is
+        drawn from the multiplicity model and ``(x, mask)`` is returned:
+        left-packed, zero-padded to ``pad_to`` (default: the largest N drawn).
+        """
         F = self.base.num_features
         gen = torch.Generator().manual_seed(int(seed))
-        out = []
+        cand = np.atleast_2d(candidate)
+        if num_particles is None:
+            if self.multiplicity is None:
+                raise ValueError("variable multiplicity needs a multiplicity model")
+            mcond = torch.from_numpy(
+                self.multiplicity.layout.assemble(np.repeat(cand, n, 0), candidate_names)
+            ).to(self.device)
+            counts = self.multiplicity.sample(mcond, gen).numpy()
+        else:
+            counts = np.full(n, int(num_particles))
+        width = int(pad_to or max(1, counts.max() if n else 1))
+        if counts.max(initial=0) > width:
+            raise ValueError("pad_to is smaller than a drawn multiplicity")
+        xs, ms = [], []
         with frozen_for_inference(self.model):
             for s in range(0, n, batch):
                 m = min(batch, n - s)
-                mask = torch.ones(m, num_particles, dtype=torch.bool)
-                noise = self.base.sample_like(
-                    torch.zeros(m, num_particles, F), mask, gen
-                )
+                cnt = torch.as_tensor(counts[s:s + m])
+                w = max(1, int(cnt.max()))
+                mask = torch.arange(w)[None, :] < cnt[:, None]
+                noise = self.base.sample_like(torch.zeros(m, w, F), mask, gen)
+                context, context_names = self._context(mask.numpy(), None, None)
                 cond = self.layout.assemble_torch(
-                    np.repeat(np.atleast_2d(candidate), m, 0), self.device,
-                    candidate_names=candidate_names,
+                    np.repeat(cand, m, 0), self.device,
+                    candidate_names=candidate_names, context=context,
+                    context_names=context_names,
                 )
-                u = sample(self.model, self.base, (m, num_particles, F), mask,
+                u = sample(self.model, self.base, (m, w, F), mask,
                            cond=cond, nsteps=nsteps, solver=solver,
                            device=self.device, noise=noise)
-                x = self.transform.inverse(u.cpu().double(), mask)
-                out.append(x.float().numpy())
-        return np.concatenate(out)
+                x = self.transform.inverse(u.cpu().double(), mask).float().numpy()
+                xs.append(np.pad(x, ((0, 0), (0, width - w), (0, 0))))
+                ms.append(np.pad(mask.numpy(), ((0, 0), (0, width - w))))
+        x, mask = np.concatenate(xs), np.concatenate(ms)
+        if num_particles is not None and not return_mask:
+            return x
+        return x, mask
 
     # ---- persistence ----------------------------------------------------
     def state(self):
@@ -167,6 +277,7 @@ class FlowSurrogate:
             "transform": self.transform.to_dict(),
             "condition_layout": self.layout.to_dict(),
             "metadata": self.metadata,
+            "multiplicity": None if self.multiplicity is None else self.multiplicity.state(),
         }
 
     def save(self, path):
@@ -199,6 +310,8 @@ class FlowSurrogate:
             ConditionLayout.from_dict(state["condition_layout"]),
             meta,
             device,
+            multiplicity=(None if state.get("multiplicity") is None
+                          else MultiplicityModel.from_state(state["multiplicity"], device)),
         )
 
 

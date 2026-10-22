@@ -19,12 +19,24 @@ from pathlib import Path
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from omnilearned.sbi.toy.reco import four_vectors
+from omnilearned.sbi.toy import simulator, simulator_v2
 from omnilearned.sbi.toy.simulator import PARAMETERS, apply_selection
 
 
-def select_clouds(x_phys, sel):
-    """Apply the toy selection to physical-coordinate clouds [N, 32, 3]."""
+def select_clouds(x_phys, sel, mask=None):
+    """Apply the toy selection to physical-coordinate clouds [N, P, 3].
+
+    toy-quenching-v1 (``sel`` a ``simulator.Selection``): fixed 32 particles.
+    toy-quenching-v2 (``simulator_v2.Selection``): left-packed constituents
+    with an explicit ``mask`` (default: all real), selected by
+    ``simulator_v2.select_sets``, the same function the toy applies to its jets.
+    """
+    x_phys = np.asarray(x_phys, dtype=np.float64)
+    if isinstance(sel, simulator_v2.Selection):
+        m = np.ones(x_phys.shape[:2], bool) if mask is None else np.asarray(mask, bool)
+        return simulator_v2.select_sets(x_phys[..., 0], x_phys[..., 1],
+                                        np.where(m, np.exp(np.where(m, x_phys[..., 2], 0.0)), 0.0),
+                                        m, sel)
     ev = {"eta": x_phys[..., 0], "phi": x_phys[..., 1], "pt": np.exp(x_phys[..., 2]),
           "valid": np.all(np.isfinite(x_phys), axis=(1, 2))}
     ok, reason, r = apply_selection(ev, sel)
@@ -33,18 +45,28 @@ def select_clouds(x_phys, sel):
 
 def acceptance_table(surrogate, sel, axes, n_samples, seed, nsteps=32, solver="midpoint",
                      log=print):
-    """Pr_q(S | theta) on the product grid ``axes`` (PARAMETERS order)."""
+    """Pr_q(S | theta) on the product grid ``axes`` (PARAMETERS order).
+
+    For v2 selections the surrogate draws N from its multiplicity model.
+    """
+    variable = isinstance(sel, simulator_v2.Selection)
+    nreason = len(simulator_v2.REJECTION_REASONS if variable else simulator.REJECTION_REASONS)
     shape = tuple(len(a) for a in axes)
     acc = np.zeros(shape)
-    reasons = np.zeros(shape + (5,), dtype=np.int64)
+    reasons = np.zeros(shape + (nreason,), dtype=np.int64)
     pts = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, len(axes))
     for i, th in enumerate(pts):
-        x = surrogate.sample(th, n_samples, sel.fixed_constituent_count, seed=seed,
-                             nsteps=nsteps, solver=solver, candidate_names=list(PARAMETERS))
-        ok, reason, _ = select_clouds(x.astype(np.float64), sel)
+        if variable:
+            x, mask = surrogate.sample(th, n_samples, None, seed=seed, nsteps=nsteps,
+                                       solver=solver, candidate_names=list(PARAMETERS))
+        else:
+            x = surrogate.sample(th, n_samples, sel.fixed_constituent_count, seed=seed,
+                                 nsteps=nsteps, solver=solver, candidate_names=list(PARAMETERS))
+            mask = None
+        ok, reason, _ = select_clouds(x.astype(np.float64), sel, mask)
         idx = np.unravel_index(i, shape)
         acc[idx] = ok.mean()
-        for k in range(5):
+        for k in range(nreason):
             reasons[idx + (k,)] = int((reason == k).sum())
         if (i + 1) % max(1, len(pts) // 10) == 0:
             log(f"  acceptance table {i + 1}/{len(pts)}: Pr={acc[idx]:.4f}")

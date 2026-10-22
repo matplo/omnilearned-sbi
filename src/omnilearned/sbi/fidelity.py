@@ -29,28 +29,34 @@ import numpy as np
 from omnilearned.sbi.toy.observables import jet_observables
 
 JET = ["jet_pt", "width", "soft8_fraction", "outer_fraction", "ptd", "lead_fraction"]
+JET_VARIABLE = JET + ["n_constituents"]  # variable-multiplicity clouds (toy v2)
 PARTICLE = ["eta", "phi", "logpt", "dr", "logz"]
 
 
-def particle_obs(x):
-    """Per-jet arrays [n, P] of constituent observables."""
+def particle_obs(x, mask=None):
+    """Per-jet arrays [n, P] of constituent observables (NaN where padded)."""
     x = np.asarray(x, dtype=np.float64)
-    eta, phi, pt = x[..., 0], x[..., 1], np.exp(x[..., 2])
+    m = np.ones(x.shape[:2], bool) if mask is None else np.asarray(mask, bool)
+    eta, phi = x[..., 0], x[..., 1]
+    pt = np.where(m, np.exp(np.where(m, x[..., 2], 0.0)), 0.0)
     px, py, pz = (pt * np.cos(phi)).sum(1), (pt * np.sin(phi)).sum(1), (pt * np.sinh(eta)).sum(1)
     jpt = np.hypot(px, py)
     jeta, jphi = np.arcsinh(pz / jpt), np.arctan2(py, px)
     dr = np.hypot(eta - jeta[:, None], np.angle(np.exp(1j * (phi - jphi[:, None]))))
-    return {"eta": eta, "phi": phi, "logpt": x[..., 2], "dr": dr,
-            "logz": np.log(pt / jpt[:, None])}
+    out = {"eta": eta, "phi": phi, "logpt": x[..., 2], "dr": dr,
+           "logz": np.log(np.where(m, pt, 1.0) / jpt[:, None])}
+    return {k: np.where(m, v, np.nan) for k, v in out.items()}
 
 
-def all_obs(x):
-    o = {k: v for k, v in jet_observables(x).items() if k in JET}
-    o.update(particle_obs(x))
+def all_obs(x, mask=None):
+    keys = JET if mask is None else JET_VARIABLE
+    o = {k: v for k, v in jet_observables(x, mask).items() if k in keys}
+    o.update(particle_obs(x, mask))
     return o
 
 
 def ks_d(a, b):
+    a, b = a[np.isfinite(a)], b[np.isfinite(b)]  # padded constituents are NaN
     a, b = np.sort(a), np.sort(b)
     grid = np.concatenate([a, b])
     return float(np.abs(np.searchsorted(a, grid, side="right") / a.size
@@ -61,12 +67,13 @@ def permutation_test(oa, ob, keys, n_perm=500, seed=0, particle_stride=4):
     """KS D per observable with permutation p-values and a family-wise p-value.
 
     ``oa``/``ob``: dicts of per-jet arrays ([n] jet level, [n, P] particle
-    level). Jets are permuted as units, so constituents stay together.
+    level, NaN where padded). Jets are permuted as units, so constituents
+    stay together.
     Particle observables use every ``particle_stride``-th jet (speed).
     """
     rng = np.random.default_rng(seed)
     na = len(oa[keys[0]])
-    pooled = {k: np.concatenate([oa[k], ob[k]]) for k in keys}
+    pooled = {k: _concat_padded(oa[k], ob[k]) for k in keys}
     ntot = len(pooled[keys[0]])
 
     def stats(ia, ib):
@@ -101,6 +108,15 @@ def permutation_test(oa, ob, keys, n_perm=500, seed=0, particle_stride=4):
     return {"ks_d": dict(zip(keys, obs.tolist())), "p": dict(zip(keys, p_each.tolist())),
             "p_family": float(p_family), "p_perm": float(p_perm), "p_tail": p_tail,
             "p_method": "permutation" if exceed >= 5 else "gumbel_tail", "n_perm": n_perm}
+
+
+def _concat_padded(a, b):
+    """Concatenate per-jet arrays; particle arrays of different widths are NaN-padded."""
+    if a.ndim == 2 and a.shape[1] != b.shape[1]:
+        w = max(a.shape[1], b.shape[1])
+        pad = lambda v: np.pad(v, ((0, 0), (0, w - v.shape[1])), constant_values=np.nan)  # noqa: E731
+        a, b = pad(a), pad(b)
+    return np.concatenate([a, b])
 
 
 def mean_relevance(oa, ob, keys, n_events, rel_tol=0.5):
@@ -151,10 +167,15 @@ def equivalent_shift(G, C, dmu, cov_dmu):
 
 
 def evaluate(direct, surrogate, n_events=1000, n_perm=500, seed=0, n_settings=1,
-             alpha=0.05, rel_tol=0.5):
-    oa, ob = all_obs(direct), all_obs(surrogate)
-    perm = permutation_test(oa, ob, JET + PARTICLE, n_perm=n_perm, seed=seed)
-    rel = mean_relevance(oa, ob, JET, n_events, rel_tol)
+             alpha=0.05, rel_tol=0.5, direct_mask=None, surrogate_mask=None):
+    """Gate one setting. With masks (variable multiplicity) the multiplicity
+    is an additional jet observable; pass both masks or neither."""
+    if (direct_mask is None) != (surrogate_mask is None):
+        raise ValueError("pass masks for both samples or for neither")
+    oa, ob = all_obs(direct, direct_mask), all_obs(surrogate, surrogate_mask)
+    jet = JET if direct_mask is None else JET_VARIABLE
+    perm = permutation_test(oa, ob, jet + PARTICLE, n_perm=n_perm, seed=seed)
+    rel = mean_relevance(oa, ob, jet, n_events, rel_tol)
     return {"permutation": perm, "relevance": rel, "n_events": n_events, "rel_tol": rel_tol,
             "alpha_setting": alpha / n_settings,
             "verdict": setting_verdict(perm, rel, alpha / n_settings)}

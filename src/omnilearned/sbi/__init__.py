@@ -10,6 +10,7 @@ Modules:
     observations  truth-free observation records (closure and measured data)
     velocity      density-compatible set transformer and PET2 adapter
     flow          single-process flow-matching training and checkpoint bundle
+    multiplicity  p(N | theta) for variable-multiplicity (padded, masked) clouds
     fit           configuration-driven fit entry point (``omnilearned sbi-fit``)
 """
 
@@ -33,6 +34,12 @@ from omnilearned.sbi.scan import (
     support_scan,
     trapezoid_weights,
     uniform_log_prior,
+)
+from omnilearned.sbi.multiplicity import (
+    MULTIPLICITY_COLUMN,
+    MultiplicityModel,
+    layout_with_multiplicity,
+    train_multiplicity,
 )
 from omnilearned.sbi.transforms import FeatureTransform
 from omnilearned.sbi.observations import (
@@ -60,6 +67,10 @@ __all__ = [
     "support_scan",
     "trapezoid_weights",
     "uniform_log_prior",
+    "MULTIPLICITY_COLUMN",
+    "MultiplicityModel",
+    "layout_with_multiplicity",
+    "train_multiplicity",
     "FeatureTransform",
     "Observations",
     "read_observations",

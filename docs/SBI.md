@@ -101,6 +101,33 @@ streams (`design.rng_for`) and record writers. Constants: `configs/toy-quenching
 `config.array_sha256` gives a platform-independent hash of drawn records
 (`tests/sbi/test_toy.py::test_cross_host_reproducibility`). Plan: `PLAN_NLE_PERLMUTTER.md`.
 
+`toy-quenching-v2` (`simulator_v2`, `configs/toy-quenching-v2.toml`) has variable
+multiplicity. Core and medium-induced soft particle counts are Poisson, and the observed
+object is the leading anti-kt jet's actual constituents: pT-ordered, left-packed into
+`max_constituents = 256` slots, zero-padded with an explicit mask. `simulator_v2.select_sets`
+is the selection on constituent sets. The toy applies it to its jets, and
+`selection.select_clouds(x, sel, mask)` applies it to surrogate samples, so the selected
+region is the same on both sides.
+
+### Variable multiplicity in the flow
+
+Padded clouds need no special code in the base, transforms, velocity or likelihood: every
+one takes the explicit mask. `flow.active_width` cuts batches to the last real slot. The
+padding length therefore costs nothing and changes no value. The probes
+(`stable_probes`) are also independent of the padding length.
+
+For variable multiplicity, a `FlowSurrogate` may carry a `multiplicity.MultiplicityModel`, a
+categorical p(N | θ) with smooth logits in the inferred parameters, saved in the checkpoint.
+Then:
+- `log_prob` returns log p(N | θ) + log q(x | N, θ);
+- the known condition column `n_constituents` (see `layout_with_multiplicity`) is filled
+  from the mask;
+- `sample(theta, n, None, ...)` draws N first and returns `(x, mask)`.
+
+`toy.observables.jet_observables(x, mask)` and `fidelity.evaluate(..., direct_mask=,
+surrogate_mask=)` ignore padded slots, and the gate adds the multiplicity as a jet
+observable.
+
 ### Fit configuration (`omnilearned sbi-fit`)
 
 See the docstring of `omnilearned/sbi/fit.py`. The configuration may contain

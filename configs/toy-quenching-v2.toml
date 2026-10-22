@@ -1,0 +1,76 @@
+# toy-quenching-v2: toy-quenching-v1 with variable constituent multiplicity.
+# Medium, geometry, spectrum, loss and broadening constants are those of v1.
+# Multiplicity: core 1 + Poisson(core_mean (P0/pt_scale)^core_mean_pt_exponent - 1),
+# medium-induced soft Poisson(soft_mean_baseline + soft_mean_amplitude (1 - exp(-soft_mean_rate I1))).
+# Observed object: the leading anti-kt jet's actual constituents, pT-ordered,
+# left-packed into max_constituents slots, zero-padded with an explicit mask.
+# Changing [toy] or [selection] defines a new backend id.
+# [holdout] values are read only by simulation and report drivers, never by fits.
+
+backend = "toy-quenching-v2"
+
+[toy]
+geometry_radius_fm = 6.5
+temperature_cut_GeV = 0.17
+temperature_scale_GeV = 0.35
+length_scale_fm = 1.0
+integration_steps = 64
+power_law_exponent = 5.0
+hard_pt_min_GeV = 40.0
+hard_pt_max_GeV = 500.0
+loss_coefficient = 0.12
+loss_lognormal_sigma = 0.30
+core_mean = 20.0
+core_mean_pt_exponent = 0.3
+soft_mean_baseline = 4.0
+soft_mean_amplitude = 26.0
+soft_mean_rate = 0.8
+max_generated_particles = 512
+dirichlet_core_alpha = 0.7
+dirichlet_soft_alpha = 0.9
+soft_fraction_baseline = 0.03
+soft_fraction_amplitude = 0.17
+soft_fraction_rate = 0.8
+vacuum_width_rad = 0.08
+vacuum_width_pt_exponent = -0.15
+broadening_width_rad = 0.04
+soft_width_ratio = 2.2
+pt_scale_GeV = 100.0
+center_eta_range = [-0.5, 0.5]
+center_phi_range_rad = [-0.6, 0.6]
+
+[selection]
+jet_algorithm = "antikt"
+jet_radius = 0.4
+jet_pt_range_GeV = [60.0, 200.0]
+jet_abs_eta_max = 1.0
+constituent_abs_eta_max = 2.5
+constituent_abs_phi_max_rad = 1.2
+constituent_pt_min_GeV = 0.0
+min_constituents = 2
+max_constituents = 256
+max_attempts_per_requested_event = 1000
+
+[features]
+names = ["eta_absolute", "phi_absolute", "log_pt_over_GeV"]
+finite_interval_transform = "atanh"
+standardization = "training_split_only"
+explicit_mask = true
+max_constituents = 256
+multiplicity_model = "categorical"  # p(N | theta), part of the likelihood
+condition_on_multiplicity = true  # N enters the flow condition as known context
+unknown_context = ["b", "T_ref", "tau_init"]
+
+[randomness]
+design_seed = 10921
+training_seed = 19071
+validation_seed = 29173
+test_seed = 39181
+probe_seed = 49193
+probe_indexing = "stable_event_id"
+
+[holdout]
+primary_test = [4.5, 0.40, 0.65]
+development_validation = [7.5, 0.30, 0.95]
+additional_test_settings = [[1.5, 0.50, 0.35], [10.0, 0.30, 1.0]]
+truth_manifest_access = "report_only_after_fit"
