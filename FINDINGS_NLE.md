@@ -287,6 +287,10 @@ direct `fidelity` jets; 200 permutations; relevance at N = 1000. Source snapshot
     √(N δθᵀFδθ) with its null level next to the per-parameter δθ, because the
     per-parameter criterion is uninformative along the degeneracy. (Not a re-definition of
     a criterion: no M3 verdict has been declared; both are recorded.)
+- Last in-session summary (05:11): `set_d256_L6` 35/128 points, **5 FAIL** (5, 7, 14, 25,
+  31), 9 significant, 29/35 p < 0.01; `pet_d256_L6_66k` 3/128 points (0 FAIL, 2 p < 0.01);
+  `pet_d256_L6_100k` no gate points. All 64 counts shards finished at 05:08; the retrain on
+  all 64 was cut by the job end (not run to completion).
 - Interim conclusion (development and validation data only): **the first-round v2
   generators do not pass M3**. The largest defect is p(N|θ). The flow itself also shows
   relevant width and jet-pT offsets at several points (relevance 1.0–1.5 at N = 1000), as
