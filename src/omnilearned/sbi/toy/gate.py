@@ -199,7 +199,7 @@ def main(argv=None):
         p.add_argument("--out", required=True)
         p.add_argument("--n-generate", type=int, default=22000)
         p.add_argument("--seed", type=int, default=0)
-        p.add_argument("--batch", type=int, default=4096)
+        p.add_argument("--batch", type=int, default=1024)  # sorted by N: narrow batches are faster
         p.add_argument("--device", default="auto")
         p.add_argument("--config", default=str(V2_CONFIG))
     r = sub.choices["run"]
