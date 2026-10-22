@@ -111,11 +111,15 @@ def run(a):
 
 def summarize(a):
     rows = []
+    if not Path(a.out).is_dir():
+        raise SystemExit(f"no gate directory {a.out}")
     for p in sorted(Path(a.out).glob("point_*.json")):
         with open(p) as f:
             rows.append(json.load(f))
     S = len(rows)
-    alpha_s = a.alpha / max(S, 1)
+    if a.n_settings and a.n_settings < S:
+        raise ValueError("--n-settings is smaller than the number of evaluated points")
+    alpha_s = a.alpha / max(a.n_settings or S, 1)  # Bonferroni over all gate points
     table = []
     for r in rows:
         p = r["permutation"]["p_family"]
@@ -129,7 +133,8 @@ def summarize(a):
                       "acceptance": r["surrogate"]["acceptance"],
                       "n_direct": r["n_direct"], "n_surrogate": r["n_surrogate"]})
     glob = fidelity.global_uniformity([t["p_family"] for t in table]) if table else None
-    doc = {"points": S, "alpha": a.alpha, "alpha_per_point": alpha_s,
+    doc = {"points": S, "n_settings": a.n_settings or S, "complete": S == (a.n_settings or S),
+           "alpha": a.alpha, "alpha_per_point": alpha_s,
            "fails": [t["point_id"] for t in table if t["fail"]],
            "significant": [t["point_id"] for t in table if t["significant"]],
            "global_uniformity": glob, "table": table,
@@ -137,7 +142,7 @@ def summarize(a):
            "nsteps": sorted({r["nsteps"] for r in rows})}
     with open(Path(a.out) / "summary.json", "w") as f:
         f.write(json_dumps(doc))
-    print(f"{S} points, alpha/S {alpha_s:.2e}: {len(doc['fails'])} FAIL, "
+    print(f"{S} of {a.n_settings or S} points, alpha/S {alpha_s:.2e}: {len(doc['fails'])} FAIL, "
           f"{len(doc['significant'])} significant; uniformity {glob}")
     for t in table:
         flag = "FAIL" if t["fail"] else ("sig " if t["significant"] else "    ")
@@ -312,6 +317,8 @@ def main(argv=None):
     s = sub.add_parser("summarize")
     s.add_argument("--out", required=True)
     s.add_argument("--alpha", type=float, default=0.05)
+    s.add_argument("--n-settings", type=int, default=None,
+                   help="number of gate points S for alpha/S (default: points found)")
     a = ap.parse_args(argv)
     {"run": run, "summarize": summarize, "convergence": convergence, "shift": shift}[a.cmd](a)
 

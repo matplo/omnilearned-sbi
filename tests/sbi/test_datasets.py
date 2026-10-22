@@ -167,10 +167,13 @@ def test_gate_driver_run_summarize_convergence(shard_dir, tiny_run, tmp_path):
     gate.main(["run", *common, "--out", str(out), "--nsteps", "4", "--n-perm", "20",
                "--save-samples"])
     gate.main(["run", *common, "--out", str(out), "--nsteps", "4"])  # resumable: no rerun
+    gate.main(["summarize", "--out", str(out), "--n-settings", "4"])
+    with open(out / "summary.json") as f:
+        assert json.load(f)["alpha_per_point"] == 0.0125
     gate.main(["summarize", "--out", str(out)])
     with open(out / "summary.json") as f:
         summ = json.load(f)
-    assert summ["points"] == 2 and summ["alpha_per_point"] == 0.025
+    assert summ["points"] == 2 and summ["alpha_per_point"] == 0.025 and summ["complete"]
     assert {t["point_id"] for t in summ["table"]} == {0, 1}
     with open(out / "point_00000.json") as f:
         p0 = json.load(f)

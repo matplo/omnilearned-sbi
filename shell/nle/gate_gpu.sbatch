@@ -19,5 +19,5 @@ for k in 0 1 2 3; do
     > "$OUT/gate_shard$k.log" 2>&1 &
 done
 wait
-"$PY" -m omnilearned.sbi.toy.gate summarize --out "$OUT" | tee "$OUT/summary.txt"
+"$PY" -m omnilearned.sbi.toy.gate summarize --out "$OUT" --n-settings "${GATE_POINTS:-128}" | tee "$OUT/summary.txt"
 echo "end $(date -Is)" >> "$OUT/job.log"
