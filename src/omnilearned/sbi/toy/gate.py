@@ -189,6 +189,88 @@ def convergence(a):
         f.write(json_dumps(doc))
 
 
+def response_gradients(points, means, dev, labels, window=5):
+    """d mean_k / d theta_p at ``dev`` from quadratic fits along the three lines.
+
+    points [n, 3], means [n, K]; ``labels`` 'line_p' marks the line along axis p.
+    Uses the ``window`` line points nearest to the development value.
+    """
+    points, means = np.asarray(points, float), np.asarray(means, float)
+    G = np.zeros((means.shape[1], 3))
+    for p in range(3):
+        idx = np.array([i for i, s in enumerate(labels) if s == f"line_{p}"])
+        near = idx[np.argsort(np.abs(points[idx, p] - dev[p]))[:window]]
+        u = points[near, p] - dev[p]
+        for k in range(means.shape[1]):
+            c = np.polyfit(u, means[near, k], 2)
+            G[k, p] = c[1]
+    return G
+
+
+def shift(a):
+    """Equivalent parameter shift of the surrogate at the development setting and the tube."""
+    from omnilearned.sbi.toy.simulator import PARAMETERS
+
+    dev_ = resolve_device(a.device)
+    sur = FlowSurrogate.load(a.checkpoint, device=dev_.device)
+    cfg, _, sel = load_toy_config(a.config)
+    with open(Path(a.scan_dir) / "design_development_scan.json") as f:
+        des = json.load(f)
+    dev = np.asarray(des["development"], float)
+    pts, labels = np.asarray(des["points"]), des["labels"]
+    d = read_shards(shard_paths(a.scan_dir, "development_scan"))
+    keys = fidelity.JET_VARIABLE
+    means, obs_by_point = [], {}
+    for pid in range(len(pts)):
+        m = d["point_id"] == pid
+        x, mk = d["x"][m], d["mask"][m]
+        w = max(1, int(mk.sum(1).max()))
+        o = fidelity.all_obs(x[:, :w], mk[:, :w])
+        obs_by_point[pid] = (x[:, :w], mk[:, :w], np.column_stack([o[k] for k in keys]))
+        means.append(obs_by_point[pid][2].mean(0))
+    G = response_gradients(pts, np.array(means), dev, labels)
+    at_dev = [i for i, p in enumerate(pts) if np.allclose(p, dev)]
+    targets = at_dev[:1] + [i for i, s in enumerate(labels) if s == "tube"]
+    if a.max_points:
+        targets = targets[:a.max_points]
+    C = np.cov(obs_by_point[targets[0]][2], rowvar=False)
+    F = G.T @ np.linalg.pinv(C) @ G  # per-jet Fisher information from these observables
+    out = {"parameters": list(PARAMETERS), "observables": keys, "G": G, "C_dev": C,
+           "fisher_per_jet": F, "points": []}
+    for n in ANALYSIS_N:
+        out[f"sigma_conditional_N{n}"] = 1 / np.sqrt(np.diag(F) * n)
+        out[f"sigma_marginal_N{n}"] = np.sqrt(np.diag(np.linalg.pinv(F)) / n)
+    for pid in targets:
+        xd, md, od = obs_by_point[pid]
+        xs, ms, rep = sample_and_select(sur, pts[pid], a.n_generate, sel, seed=a.seed + pid,
+                                        nsteps=a.nsteps, batch=a.batch)
+        o = fidelity.all_obs(xs, ms)
+        osur = np.column_stack([o[k] for k in keys])
+        dmu = osur.mean(0) - od.mean(0)
+        cov = np.cov(od, rowvar=False) / len(od) + np.cov(osur, rowvar=False) / len(osur)
+        dth, cov_th = fidelity.equivalent_shift(G, C, dmu, cov)
+        se = np.sqrt(np.diag(cov_th))
+        sig = out["sigma_conditional_N1000"]
+        row = {"point_id": pid, "label": labels[pid], "theta": pts[pid], "delta_mean": dmu,
+               "delta_theta": dth, "delta_theta_se": se, "in_sigma_conditional_N1000": dth / sig,
+               "se_in_sigma_conditional_N1000": se / sig,
+               "pass_0.2_sigma": bool(np.all(np.maximum(np.abs(dth) - 2 * se, 0) <= 0.2 * sig)),
+               "surrogate": rep, "n_direct": int(len(od))}
+        out["points"].append(row)
+        print(f"point {pid} {labels[pid]} theta={np.round(pts[pid], 3).tolist()} "
+              f"dtheta={np.round(dth, 4).tolist()} +- {np.round(se, 4).tolist()} "
+              f"= {np.round(dth / sig, 2).tolist()} sigma_cond(N=1000) acc={rep['acceptance']:.3f}",
+              flush=True)
+    out.update({"checkpoint": a.checkpoint, "checkpoint_sha256": sur.metadata.get("checkpoint_sha256"),
+                "nsteps": a.nsteps, "n_generate": a.n_generate, "device": dev_.to_dict(),
+                "host": host_info()})
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    with open(a.out, "w") as f:
+        f.write(json_dumps(out))
+    print("sigma_conditional N=1000", np.round(out["sigma_conditional_N1000"], 4).tolist(),
+          "marginal", np.round(out["sigma_marginal_N1000"], 4).tolist())
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -213,11 +295,22 @@ def main(argv=None):
     c = sub.choices["convergence"]
     c.add_argument("--points", type=int, nargs="+", required=True)
     c.add_argument("--steps", type=int, nargs="+", default=[64, 128, 256])
+    h = sub.add_parser("shift", help="equivalent parameter shift at the development setting and tube")
+    h.add_argument("--checkpoint", required=True)
+    h.add_argument("--scan-dir", required=True)
+    h.add_argument("--out", required=True)
+    h.add_argument("--n-generate", type=int, default=22000)
+    h.add_argument("--nsteps", type=int, default=128)
+    h.add_argument("--seed", type=int, default=0)
+    h.add_argument("--batch", type=int, default=1024)
+    h.add_argument("--max-points", type=int, default=None)
+    h.add_argument("--device", default="auto")
+    h.add_argument("--config", default=str(V2_CONFIG))
     s = sub.add_parser("summarize")
     s.add_argument("--out", required=True)
     s.add_argument("--alpha", type=float, default=0.05)
     a = ap.parse_args(argv)
-    {"run": run, "summarize": summarize, "convergence": convergence}[a.cmd](a)
+    {"run": run, "summarize": summarize, "convergence": convergence, "shift": shift}[a.cmd](a)
 
 
 if __name__ == "__main__":

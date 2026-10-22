@@ -29,3 +29,16 @@ def test_development_scan_points_lines_and_tube():
     np.testing.assert_allclose(line[:, 0], 7.5)
     np.testing.assert_allclose(line[:, 2], 0.95)
     np.testing.assert_allclose(line[:, 1], np.linspace(0.25, 0.55, 4))
+
+
+def test_response_gradients_from_lines():
+    from omnilearned.sbi.toy.gate import response_gradients
+    from omnilearned.sbi.toy.tube import development_scan_points
+
+    box = [(0.0, 11.0), (0.25, 0.55), (0.2, 1.2)]
+    dev = np.array([7.5, 0.30, 0.95])
+    pts, labels = development_scan_points(dev, [], [], box)
+    f = lambda p: np.stack([p[:, 0] ** 2 + 3 * p[:, 1], np.sin(p[:, 2]) * p[:, 1] * 10], 1)  # noqa: E731
+    G = response_gradients(pts, f(pts), dev, labels)
+    exact = np.array([[2 * 7.5, 3, 0], [0, 10 * np.sin(0.95), 10 * 0.30 * np.cos(0.95)]])
+    np.testing.assert_allclose(G, exact, rtol=1e-2, atol=1e-6)  # cubic term over the window
