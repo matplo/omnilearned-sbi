@@ -210,6 +210,8 @@ float32), condition θ in [−1, 1] plus N/100.
 
 - ~~Fit cost: sort observed events by N~~: done, `[scan].sort_by_multiplicity` (default
   true); per-event outputs stay in file order (test).
-- Trainer: cap CPU threads / draw training noise on the GPU (speed note in M2).
+- Trainer: `--cpu-threads` (default 8) caps torch CPU threads; effect on speed with
+  concurrent trainings not yet measured. Drawing noise on the GPU would remove the CPU
+  step entirely (changes the noise stream).
 - ~~`sbi-fit` measure string~~: now states log p(N|θ) + log q(x|N,θ) when the checkpoint has
   a multiplicity model.

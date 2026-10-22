@@ -136,7 +136,11 @@ def main(argv=None):
     ap.add_argument("--mult-depth", type=int, default=3)
     ap.add_argument("--save-after", type=int, default=0,
                     help="first step at which an improving checkpoint is written")
+    ap.add_argument("--cpu-threads", type=int, default=8,
+                    help="torch CPU threads (noise is drawn on the CPU; several trainings "
+                         "per node oversubscribe the cores with the default)")
     args = ap.parse_args(argv)
+    torch.set_num_threads(args.cpu_threads)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     logf = open(out / "train.log", "a")
