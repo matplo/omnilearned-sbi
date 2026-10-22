@@ -32,6 +32,9 @@ records source revision, dirty status and device.
 | date | milestone | job id | nodes × hours | what |
 |---|---|---|---|---|
 | 2026-10-22 | first day, M1, M2, M3 prep | 60098593 (interactive, urgent_gpu, 4 h) | 1 × 4 | checks, smoke chain, M1 data (CPU of this node), 3 trainings, sampler timing |
+| 2026-10-22 | M1 acceptance | 60101162 (cpu, debug) | 1 × 0.04 | shard regeneration on nid006833 + cross-host tests |
+| 2026-10-22 | M3 | 60101552 (gpu, regular, ≤ 2 h, pending) | 1 × ≤ 2 | finish gate of `set_d256_L6` (resumable) |
+| 2026-10-22 | M3 | 60101555 (gpu, regular, ≤ 2 h, pending) | 1 × ≤ 2 | finish gate of `pet_d256_L6_66k` (resumable) |
 
 - Slurm associations (`sacctmgr show assoc user=$USER`): accounts **`alice`** and
   **`alice_g`** (GPU allocation), QOS include debug, gpu_debug, gpu_interactive, regular. GPU
@@ -132,7 +135,10 @@ Source: 1af6812 (clean) for the checks; drivers added on top (this commit).
   and 10 points on the I₃ tube at τ_init 0.95 (b = 1–10); 46 points × 20 000 jets = 920 k,
   132 s, acceptance 0.085–0.187. Held out from training; the development setting itself
   is the T_ref line's third point.
-- Not yet done in M1: reproducibility of a shard on a CPU node and a login node.
+- **Reproducibility on a CPU node** (job 60101162, nid006833, Milan; snapshot 7fe5624):
+  `train_00005` and `validation_00003` regenerated with **identical file sha256**, discrete
+  and per-point bitwise hashes; both cross-host tests PASSED there. (Login-node run not done:
+  needs a login shell; the GPU node and CPU node agree bitwise.)
 
 ## M2: generators (started 2026-10-22, interactive node)
 
@@ -160,6 +166,10 @@ float32), condition θ in [−1, 1] plus N/100.
   At random init the 64-mode Fourier time embedding makes the field stiff in t (midpoint
   reconstruction converges at second order only from ~128 steps); trained fields must be
   checked with the sampler-convergence test (lesson 5b) anyway.
+- **Finished**: `set_d256_L6` 100k steps 4670 s (1.30 GPU-h incl. data and multiplicity),
+  best EMA val 1.05229 at step 74k, checkpoint sha fe95c53c1118…; `pet_d256_L6_66k` 66k steps
+  4552 s (1.26 GPU-h), best 1.05245 at step 64k, sha dfb4fe0e8820…. Multiplicity val NLL
+  3.4484 / 3.4485.
 - EMA validation loss (fixed noise): SetFlow 1.05362 (10k), 1.05261 (20k), 1.05240 (48k);
   PET 1.05413 (10k), 1.05287 (20k), 1.05268 (26k). Close; per lesson 5 this loss does not
   measure fidelity — the gate decides.
@@ -183,6 +193,10 @@ float32), condition θ in [−1, 1] plus N/100.
   permutation on CPU).
 - Surrogate acceptance at that early checkpoint: 0.74–0.76 at point 0 (lesson 7 had
   0.96–0.98 for the converged v1 model).
+- **Sampler convergence, final `set_d256_L6`** (validation points 0 and 64, 8192 paired
+  clouds): max jet-observable mean shift 64→128 0.11 / 0.10 se, 128→256 0.02 / 0.02 se;
+  KS ≤ 0.0010 at 128→256. **128 midpoint steps** used for the gate. Surrogate selection
+  acceptance 0.91–0.95 (lesson 7 v1: 0.96–0.98).
 - Equivalent parameter shift (`gate shift`): G from quadratic fits to the 5 line points
   nearest the development value on each axis (test against an analytic response), C the
   per-jet covariance of the 7 jet observables at the development point, δθ =
