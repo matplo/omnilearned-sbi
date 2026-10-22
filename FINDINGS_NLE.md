@@ -40,6 +40,10 @@ records source revision, dirty status and device.
 | 2026-10-22 | M3 | 60101552 (gpu, regular, ≤ 2 h, pending) | 1 × ≤ 2 | finish gate of `set_d256_L6` (resumable) |
 | 2026-10-22 | M3 | 60101555 (gpu, regular, ≤ 2 h, pending) | 1 × ≤ 2 | finish gate of `pet_d256_L6_66k` (resumable) |
 
+Interactive job 60098593 used: 4 GPUs × ~4 h (3 trainings ≈ 1.3, 1.3, 1.6 GPU-h; M3
+sampling, shifts, gate points and fit timing on the rest) and the node's CPUs for all toy
+data (M1 ≈ 5 min, fidelity 2.6 min, development scans 2.2 min, counts ≈ 11 min).
+
 - Slurm associations (`sacctmgr show assoc user=$USER`): accounts **`alice`** and
   **`alice_g`** (GPU allocation), QOS include debug, gpu_debug, gpu_interactive, regular. GPU
   batch jobs most likely need `-A alice_g` (NERSC `_g` convention); to confirm on the first
@@ -249,9 +253,19 @@ direct `fidelity` jets; 200 permutations; relevance at N = 1000. Source snapshot
     1.46, but χ² p < 0.01 at 75/128; validation NLL unchanged (3.4484 → 3.4486), i.e. the
     validation NLL cannot see these errors.
   - Passing relevance at N = 1000 needs |Δ mean N| ≲ 0.1 (σ_N ≈ 7), while the training
-    data have 2000 jets per point (se of mean N ≈ 0.16). p(N|θ) needs far more (θ, N)
-    pairs; they are cheap to make (the same toy run; ~1600 CPU-s per 2 M jets, minutes on
-    one node; only N and θ need storing) — or a smoother parametrization.
+    data have 2000 jets per point (se of mean N ≈ 0.16).
+  - **Fix confirmed: more (θ, N) data.** Counts-only shards (`datasets generate
+    --counts-only`, schema `toy-counts-v1`, `data/v2_m1_counts`): 20 000 jets at each
+    training point, same seeds (the original 2000 per point are a subset). 49 of 64 shards
+    (784 points, 15.7 M pairs) finished in-session; 15 shards were killed by memory at 64
+    parallel processes (each holds full padded records ≈ 5 GB; use ≤ 16 in parallel); a
+    resumable rerun with 16 processes was started at 05:00 and may not have finished.
+    Retrained p(N|θ) (256 × 4, 30k steps, batch 8192, 123 s on GPU; `runs/m3/mult/
+    set_d256_L6_mult256x4_counts49.pt`, sha 3f368c19fd9b…, same SetFlow flow):
+    **validation NLL 3.4478** (was 3.4484), **rms z 1.38, max |z| 4.1, χ² p < 0.01 at
+    3/128 points (expected ≈ 1.3), max relevance 0.91 at N = 1000**, with 2-se lower bounds
+    below 0.5 at the worst points (e.g. point 118: |ΔN| 0.27 ± 0.065). Next: all 64 shards,
+    then gate the swapped checkpoint (flow unchanged).
 - **Sampler convergence** (64 / 128 / 256 midpoint steps, 8192 paired clouds, points 0 and
   64): `set` max shift 0.11 → 0.02 se; `pet_66k` 0.23 → 0.03 se; `pet_100k` 0.06 → 0.01 se.
   128 steps are converged for all three.
@@ -286,10 +300,13 @@ direct `fidelity` jets; 200 permutations; relevance at N = 1000. Source snapshot
   (SetFlow) / 11 s (SmoothPET) at N = 250 on an A100 in IEEE float32. M5 as written is several
   hundred GPU-hours; M6 more. Options: accept the budget, or test smaller models / cheaper
   numerics under M4 first (lesson 7: capacity did not matter for v1).
-- **Next technical step (no decision needed unless the user objects):** p(N|θ) data. Generate
-  N-only training data (≥ 20 k jets per training point, ~20 M jets, one CPU node for a few
-  minutes) and retrain p(N|θ); re-check with `multiplicity_check`. Then a second-round flow
-  training with more data per point (e.g. 1024 × 6000) and the gate again.
+- **Next technical steps (no decision needed unless the user objects):** finish the 15
+  missing counts shards (`shell/nle/gen_toy_local.sh data/v2_m1_counts/design_train.json 64
+  16 20000 data/v2_m1_counts 16 --counts-only`), retrain p(N|θ) on all 64, attach it to
+  every flow checkpoint (`multiplicity_check retrain --counts-dir`), and gate the swapped
+  checkpoints. The flow's own offsets (width, jet pT; relevance 1.0–1.5 at N = 1000) then
+  need a second-round flow training with more jets per point (e.g. 1024 × 6000, as lesson 7
+  needed data density), and the gate again.
 - **M3 criterion reading:** the δθ ≤ 0.2 σ requirement on per-parameter σ is not informative
   along the tube; see the proposal above (both numbers recorded).
 
