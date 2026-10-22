@@ -245,3 +245,17 @@ def test_length_bucketed_minibatches_are_narrow_and_unbiased():
     # ... and uniform inside a group (multinomial spread of ~64 x 500 draws over 500 events).
     first = counts[torch.argsort(lengths, stable=True)][:500]
     assert first.std() / first.mean() < 3 * (500 / first.sum()) ** 0.5
+
+
+def test_sample_sorted_by_length_keeps_draw_order_and_distribution():
+    sur = _variable_surrogate()
+    x0, m0 = sur.sample([0.5, 1.0], 600, None, seed=7, nsteps=4, batch=64)
+    x1, m1 = sur.sample([0.5, 1.0], 600, None, seed=7, nsteps=4, batch=64, sort_by_length=True)
+    np.testing.assert_array_equal(m0, m1)  # same N per draw position, returned in draw order
+    assert np.all(x1[~m1] == 0) and np.isfinite(x1).all()
+    # Different noise assignment, same distribution: per-feature means agree in se.
+    a, b = x0[m0], x1[m1]
+    se = np.sqrt(a.var(0) / len(a) + b.var(0) / len(b))
+    assert np.all(np.abs(a.mean(0) - b.mean(0)) < 4 * se)
+    # Clouds of equal N are exchangeable: within each N the sorted run is a valid draw.
+    assert not np.allclose(x0, x1)

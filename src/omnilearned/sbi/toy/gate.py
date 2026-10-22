@@ -157,7 +157,8 @@ def convergence(a):
         for ns in a.steps:
             t0 = time.time()
             x, m = sur.sample(theta, a.n_generate, None, seed=a.seed, nsteps=ns, solver="midpoint",
-                              candidate_names=["b", "T_ref", "tau_init"], batch=a.batch)
+                              candidate_names=["b", "T_ref", "tau_init"], batch=a.batch,
+                              sort_by_length=True)
             ok, _, _ = __import__("omnilearned.sbi.toy.selection", fromlist=["x"]).select_clouds(
                 x.astype(np.float64), sel, m)
             o = fidelity.all_obs(x, m)  # all clouds (paired across step counts)

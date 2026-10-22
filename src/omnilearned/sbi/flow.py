@@ -228,13 +228,18 @@ class FlowSurrogate:
     # ---- generation -----------------------------------------------------
     @ieee_float32()
     def sample(self, candidate, n, num_particles=None, seed=0, nsteps=64, solver="midpoint",
-               candidate_names=None, batch=4096, pad_to=None, return_mask=False):
+               candidate_names=None, batch=4096, pad_to=None, return_mask=False,
+               sort_by_length=False):
         """Physical-coordinate samples at one candidate.
 
         ``num_particles`` fixes the multiplicity (returns ``x`` [n, P, F], or
         ``(x, mask)`` with ``return_mask``). With ``num_particles=None`` N is
         drawn from the multiplicity model and ``(x, mask)`` is returned:
         left-packed, zero-padded to ``pad_to`` (default: the largest N drawn).
+        ``sort_by_length`` integrates the clouds in order of N (each batch is cut
+        to its largest N, so this saves most of the padded work) and returns them
+        in draw order; the base noise is then assigned in sorted order, so the
+        samples differ from the unsorted ones (same distribution, same N).
         """
         F = self.base.num_features
         gen = torch.Generator().manual_seed(int(seed))
@@ -251,6 +256,10 @@ class FlowSurrogate:
         width = int(pad_to or max(1, counts.max() if n else 1))
         if counts.max(initial=0) > width:
             raise ValueError("pad_to is smaller than a drawn multiplicity")
+        order = None
+        if sort_by_length and num_particles is None:
+            order = np.argsort(counts, kind="stable")
+            counts = counts[order]
         xs, ms = [], []
         with frozen_for_inference(self.model):
             for s in range(0, n, batch):
@@ -272,6 +281,10 @@ class FlowSurrogate:
                 xs.append(np.pad(x, ((0, 0), (0, width - w), (0, 0))))
                 ms.append(np.pad(mask.numpy(), ((0, 0), (0, width - w))))
         x, mask = np.concatenate(xs), np.concatenate(ms)
+        if order is not None:
+            inv = np.empty_like(order)
+            inv[order] = np.arange(order.size)
+            x, mask = x[inv], mask[inv]
         if num_particles is not None and not return_mask:
             return x
         return x, mask

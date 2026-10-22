@@ -33,16 +33,17 @@ from omnilearned.sbi.toy.simulator_v2 import REJECTION_REASONS
 
 
 def sample_and_select(surrogate, theta, n, sel, seed=0, nsteps=128, solver="midpoint",
-                      batch=4096):
+                      batch=4096, sort_by_length=True):
     """Selected surrogate clouds at ``theta``: (x, mask, report)."""
     t0 = time.time()
     x, mask = surrogate.sample(np.asarray(theta, np.float64), n, None, seed=seed, nsteps=nsteps,
-                               solver=solver, candidate_names=list(PARAMETERS), batch=batch)
+                               solver=solver, candidate_names=list(PARAMETERS), batch=batch,
+                               sort_by_length=sort_by_length)
     t_sample = time.time() - t0
     ok, reason, _ = select_clouds(x.astype(np.float64), sel, mask)
     rep = {"generated": int(n), "selected": int(ok.sum()), "acceptance": float(ok.mean()),
            "rejections": {r: int((reason[~ok] == k).sum()) for k, r in enumerate(REJECTION_REASONS)},
-           "nsteps": nsteps, "solver": solver, "seed": seed,
+           "nsteps": nsteps, "solver": solver, "seed": seed, "sort_by_length": sort_by_length,
            "sample_seconds": t_sample, "select_seconds": time.time() - t0 - t_sample}
     return x[ok], mask[ok], rep
 
