@@ -105,9 +105,31 @@ Source: 1af6812 (clean) for the checks; drivers added on top (this commit).
 - Fidelity direct samples (M3): new stream `fidelity` (9) at the 128 validation points,
   20 000 jets each (**2.56 M jets**), 32 shards, 157 s wall; `data/v2_m1_fidelity`, source
   3e7a697 (clean).
-- Not yet done in M1: development scans (1D lines through the development setting and
-  points along the tube; needs the v2 iso-moment curve, lesson 1), reproducibility of a
-  shard on a CPU node and a login node.
+- **v2 iso-response curves** (lesson 1 check; `python -m omnilearned.sbi.toy.tube`,
+  `runs/m1/tube/iso_tau0.95.json`): 12 b × 13 T_ref settings at τ_init = 0.95, 2000 selected
+  jets each (stream `sensitivity`), 14 s. T_ref(b) through the development point (7.5, 0.30)
+  where the mean response equals its development value:
+
+  | b | I₁ | I₂ | I₃ | N | width | outer frac. | pTD |
+  |---|---|---|---|---|---|---|---|
+  | 3 | 0.2546 | 0.2563 | 0.2578 | 0.2529 | 0.2526 | – | 0.2573 |
+  | 5 | 0.2664 | 0.2678 | 0.2691 | 0.2638 | 0.2675 | 0.2636 | 0.2689 |
+  | 7 | 0.2914 | 0.2917 | 0.2919 | 0.2913 | 0.2945 | 0.2930 | 0.2886 |
+  | 8 | 0.3132 | 0.3115 | 0.3103 | 0.3152 | 0.3085 | 0.3089 | 0.3274 |
+  | 9 | 0.3576 | 0.3476 | 0.3430 | 0.3715 | 0.3691 | 0.3540 | 0.3798 |
+  | 10 | 0.5293 | 0.4357 | 0.4045 | – | 0.5271 | 0.4602 | 0.5368 |
+
+  (– : level not crossed inside the box / statistical noise.) For b ≤ 8 all curves,
+  **including the multiplicity N**, coincide within ≈ 0.005 GeV: N follows I₁ and adds no new
+  direction there, as expected. They separate only at b ≥ 9 (I₁ vs I₃ vs N), i.e. some
+  b-information exists in peripheral collisions. The tube runs from (b ≲ 3, T_ref ≈ 0.25,
+  the box edge) to (b ≈ 10, T_ref ≈ 0.40–0.53).
+- **Development scans** (`data/v2_m1_devscan`, stream `development_scan` = 10): lines through
+  (7.5, 0.30, 0.95) along b (12 points, 0–11), T_ref (13, 0.25–0.55), τ_init (11, 0.2–1.2)
+  and 10 points on the I₃ tube at τ_init 0.95 (b = 1–10); 46 points × 20 000 jets = 920 k,
+  132 s, acceptance 0.085–0.187. Held out from training; the development setting itself
+  is the T_ref line's third point.
+- Not yet done in M1: reproducibility of a shard on a CPU node and a login node.
 
 ## M2: generators (started 2026-10-22, interactive node)
 
@@ -158,6 +180,19 @@ float32), condition θ in [−1, 1] plus N/100.
   permutation on CPU).
 - Surrogate acceptance at that early checkpoint: 0.74–0.76 at point 0 (lesson 7 had
   0.96–0.98 for the converged v1 model).
+- Equivalent parameter shift (`gate shift`): G from quadratic fits to the 5 line points
+  nearest the development value on each axis (test against an analytic response), C the
+  per-jet covariance of the 7 jet observables at the development point, δθ =
+  (GᵀC⁻¹G)⁻¹GᵀC⁻¹Δμ with its covariance. Widths from the same per-jet Fisher matrix at
+  N = 1000: **conditional σ = (0.140 fm, 0.0034 GeV, 0.117 fm/c)**, marginal σ = (2.91, 0.072,
+  0.215) — the degeneracy in numbers (cf. lesson 1 at N = 250: conditional 0.5 / 0.012 / 0.2).
+  Probe on the *early* SetFlow checkpoint (~16k steps; diagnostic of the driver, not a
+  verdict), 8192 clouds: development point δθ = (+3.9 ± 1.3, +0.092 ± 0.032, −0.35 ± 0.09),
+  i.e. (+1.3, +1.3, −1.6) marginal σ, almost entirely along the tube; tube points b = 1, 2
+  similar. The plan's criterion (|δθ| ≤ 0.2 σ) needs a stated σ: the conditional σ is the
+  strict reading; both are recorded.
+- Development closure needs fits; fit cost for the scaled models is being timed
+  (`runs/m4/timing`).
 
 ## Open items
 
