@@ -285,3 +285,30 @@ def test_fit_sorted_by_multiplicity_matches_file_order(tmp_path):
     np.testing.assert_allclose(b.per_event, a.per_event, rtol=0, atol=1e-5)  # file order kept
     np.testing.assert_allclose(b.loglik, a.loglik, rtol=0, atol=1e-4)
     assert docs[True]["provenance"]["evaluation_order"] == "sorted by multiplicity"
+
+
+def test_multiplicity_check_chi2_and_mean_shift():
+    from scipy import stats
+
+    from omnilearned.sbi.toy.multiplicity_check import binned_chi2, check
+
+    rng = np.random.default_rng(5)
+    probs = stats.poisson.pmf(np.arange(65), 20.0)
+    probs /= probs.sum()
+    good = rng.choice(65, size=20000, p=probs)
+    _, _, p_good = binned_chi2(good, probs)
+    bad = rng.choice(65, size=20000, p=stats.poisson.pmf(np.arange(65), 20.4) / stats.poisson.pmf(np.arange(65), 20.4).sum())
+    chi2, dof, p_bad = binned_chi2(bad, probs)
+    assert p_good > 1e-3 and p_bad < 1e-6 and dof > 10
+
+    class Fake:  # surrogate stand-in with a fixed p(N | theta)
+        class multiplicity:
+            max_n = 64
+
+        def log_multiplicity(self, counts, cands, names):
+            return np.log(np.maximum(probs, 1e-300))[None]
+
+    doc = check(Fake(), np.concatenate([good, bad]), np.repeat([[1.0, 0.3, 0.5], [2.0, 0.3, 0.5]], 20000, 0),
+                np.repeat([0, 1], 20000))
+    z = {r["point_id"]: r["z"] for r in doc["points"]}
+    assert abs(z[0]) < 4 and z[1] < -8  # model mean 20 below the shifted sample
