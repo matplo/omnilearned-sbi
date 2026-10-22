@@ -18,6 +18,7 @@ STREAMS = {
     "predictive": 8,
     "fidelity": 9,
     "development_scan": 10,
+    "self_closure": 11,  # pseudo data drawn from a surrogate (labelled control, never evidence)
     "jewel_train": 16,
     "jewel_validation": 17,
     "jewel_test": 18,

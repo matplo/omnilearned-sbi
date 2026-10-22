@@ -1,0 +1,42 @@
+# Development closure campaign (M5), N = 250, toy pseudo data. Copy, set the checkpoint and
+# acceptance table, then:
+#   python -m omnilearned.sbi.toy.closure prepare --spec dev_N250.toml --out $JEST_NLE_ROOT/runs/m5/dev_N250_<ckpt>
+#   sbatch -A alice_g -C gpu -q regular -t 04:00:00 -N 1 --gpus 4 --array=0-2 \
+#     shell/nle/closure_node.sbatch <snapshot> <campaign dir>        (or shell/nle/closure_local.sh)
+#   python -m omnilearned.sbi.toy.closure report --dir <campaign dir> --device cuda [--control <control dir>]
+# The self-closure control is the same spec with source = "surrogate" and its own index_offset.
+# The grid is lesson 2's cheapest v1 grid within 0.1 sigma at N = 250; M5 must re-check it for v2
+# (nested subsample against a finer reference) before the campaign counts.
+schema = "toy-closure-campaign-v1"
+name = "dev_N250"
+checkpoint = "CHECKPOINT.pt"
+acceptance_table = "ACCEPTANCE.npz"
+setting = "development_validation"   # [holdout] key; only the driver reads its value
+source = "toy"
+n_events = 250
+n_ensembles = 10
+index_offset = 1000                   # development stream indices 1000..1009 (unused elsewhere)
+device = "cuda"
+
+[fit.grid]
+b = {min = 0.0, max = 11.0, n = 23}
+T_ref = {min = 0.25, max = 0.55, n = 14}
+tau_init = {min = 0.2, max = 1.2, n = 11}
+
+[fit.prior]
+type = "uniform"
+bounds = {b = [0.0, 11.0], T_ref = [0.25, 0.55], tau_init = [0.2, 1.2]}
+
+[fit.likelihood]                      # lesson 3; M4 must confirm for the chosen generator
+solver = "midpoint"
+nsteps = 64
+divergence = "hutchinson"
+num_probes = 8
+probe = "rademacher"
+probe_schedule = "per_step"
+probe_seed = 49193
+
+[fit.scan]
+event_chunk = 256
+candidate_chunk = 8
+support = {seed_stride = [6, 3, 4], delta_logpost = 10.0}

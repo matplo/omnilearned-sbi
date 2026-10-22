@@ -205,3 +205,134 @@ def test_counts_only_shards_match_full_shards(shard_dir, tmp_path):
     np.testing.assert_array_equal(pid, full["point_id"])
     with pytest.raises(ValueError):
         read_counts([shard_dir / "train_00000.h5"])
+
+
+# ---- closure campaigns (toy.closure) ---------------------------------------
+
+def test_joint_level_of_gaussian_posterior():
+    from omnilearned.sbi.scan import Grid, ScanResult
+    from omnilearned.sbi.toy.closure import joint_level
+
+    ax = np.linspace(-6, 6, 241)
+    g = Grid(["a", "b"], [ax, ax])
+    pts = g.points().reshape(241, 241, 2)
+    res = ScanResult(g, -0.5 * (pts ** 2).sum(-1), np.zeros((241, 241)))
+    for r in (0.5, 1.0, 1.5, 2.5):
+        assert abs(joint_level(res, -0.5 * r * r) - (1 - np.exp(-0.5 * r * r))) < 5e-3  # node spacing 0.05
+
+
+def test_clopper_pearson_and_toml_writer(tmp_path):
+    import tomllib
+
+    from omnilearned.sbi.toy.closure import clopper_pearson, dump_toml
+
+    lo, hi = clopper_pearson(7, 10)
+    assert abs(lo - 0.3475) < 1e-3 and abs(hi - 0.9333) < 1e-3
+    assert clopper_pearson(0, 5)[0] == 0.0 and clopper_pearson(5, 5)[1] == 1.0
+    doc = {"a": 1, "s": "x", "grid": {"b": [1.0, 2.0], "c": {"min": 0.0, "max": 1.0, "n": 3}},
+           "scan": {"support": {"seed_stride": [2, 2], "delta_logpost": 10.0}, "flag": True}}
+    assert tomllib.loads(dump_toml(doc)) == doc
+
+
+def _campaign_spec(ck, source="toy", table=None, k=3):
+    spec = {"schema": "toy-closure-campaign-v1", "name": "unit", "checkpoint": str(ck),
+            "setting": "development_validation", "n_events": 20, "n_ensembles": k,
+            "index_offset": 900, "source": source, "device": "cpu",
+            "fit": {"grid": {"b": [6.5, 7.5, 8.5], "T_ref": [0.28, 0.32], "tau_init": [0.85, 1.05]},
+                    "prior": {"type": "uniform", "bounds": {"b": [0.0, 11.0], "T_ref": [0.25, 0.55],
+                                                           "tau_init": [0.2, 1.2]}},
+                    "likelihood": {"solver": "midpoint", "nsteps": 2, "num_probes": 1,
+                                   "probe_schedule": "per_step"},
+                    "scan": {"event_chunk": 16, "candidate_chunk": 6}}}
+    if table:
+        spec["acceptance_table"] = str(table)
+    return spec
+
+
+def test_closure_campaign_prepare_fit_seal_report(tiny_run, tmp_path):
+    from omnilearned.sbi.fit import load_fit_config
+    from omnilearned.sbi.observations import read_observations
+    from omnilearned.sbi.toy import closure
+    from omnilearned.sbi.toy.selection import save_table
+
+    axes = [np.linspace(0, 11, 3), np.linspace(0.25, 0.55, 3), np.linspace(0.2, 1.2, 3)]
+    pts = np.stack(np.meshgrid(*axes, indexing="ij"), -1)
+    acc = 0.9 - 0.1 * (pts[..., 1] - 0.25)  # smooth synthetic Pr(S | theta)
+    save_table(tmp_path / "acc.npz", axes, acc, np.zeros(acc.shape + (0,), np.int64), {})
+    d = tmp_path / "camp"
+    man = closure.prepare(_campaign_spec(tiny_run / "checkpoint.pt", table=tmp_path / "acc.npz"), d,
+                          log=lambda m: None)
+    assert man["label"] == "direct-simulator closure" and len(man["tasks"]) == 3
+    for k in range(3):  # fits see no truth: observations and configs are truth-free
+        cfg = load_fit_config(d / "fits" / f"fit_{k:04d}.toml")
+        obs = read_observations(cfg["observations"])
+        assert len(obs) == 20 and np.all((obs.event_id >> 48) == 4)  # development stream
+        assert "truth" not in (d / "fits" / f"fit_{k:04d}.toml").read_text()
+    with pytest.raises(FileExistsError):
+        closure.prepare(_campaign_spec(tiny_run / "checkpoint.pt"), d)
+    # two workers split the tasks; reruns skip sealed fits
+    closure.main(["fit", "--dir", str(d), "--worker", "0", "--num-workers", "2"])
+    assert sorted(p.parent.name for p in d.glob("fits/*/seal.json")) == ["fit_0000", "fit_0002"]
+    closure.main(["fit", "--dir", str(d), "--worker", "1", "--num-workers", "2"])
+    assert closure.fit_task(d, 1) is None
+    with np.load(d / "fits" / "fit_0001" / "result.npz") as z:
+        assert "log_norm" in z.files
+    doc = closure.report(d, log=lambda m: None)
+    assert doc["n_fits"] == 3 and not doc["refused"]
+    assert all(0.0 <= r["level"] <= 1.0 for r in doc["fits"])
+    assert doc["fits"][0]["truth"] == {"b": 7.5, "T_ref": 0.30, "tau_init": 0.95}
+    agg = doc["aggregate"]
+    assert set(agg["mean_pull"]) == {"b", "T_ref", "tau_init"} and agg["levels_ks"]["n"] == 3
+    # a result edited after its seal is refused
+    res = d / "fits" / "fit_0002" / "result.json"
+    res.write_text(res.read_text().replace('"mode"', '"mode" ', 1))
+    doc = closure.report(d, log=lambda m: None)
+    assert doc["n_fits"] == 2 and doc["refused"][0]["task"] == 2
+    # control comparison
+    (tmp_path / "ctl").mkdir()
+    (tmp_path / "ctl" / "report.json").write_text(json.dumps({"aggregate": agg}))
+    doc = closure.report(d, control=tmp_path / "ctl", log=lambda m: None)
+    assert set(doc["versus_control"]) == {"b", "T_ref", "tau_init"}
+
+
+def test_closure_surrogate_control_and_grid_order(tiny_run, tmp_path, monkeypatch):
+    from omnilearned.sbi.flow import FlowSurrogate
+    from omnilearned.sbi.observations import read_observations
+    from omnilearned.sbi.toy import closure, sample_select
+
+    sur = FlowSurrogate.load(tiny_run / "checkpoint.pt")
+    with pytest.raises(RuntimeError, match="acceptance too low"):  # the 6-step model selects ~nothing
+        closure._surrogate_ensemble(sur, SEL, (7.5, 0.30, 0.95), 5, 0, 0, nsteps=2)
+
+    def accept_all(sur, theta, n, sel, seed=0, nsteps=128, **kw):  # stand-in for a trained model
+        x, m = sur.sample(np.asarray(theta), n, None, seed=seed, nsteps=2,
+                          candidate_names=["b", "T_ref", "tau_init"])
+        return x, m, {"generated": n, "selected": n}
+
+    monkeypatch.setattr(sample_select, "sample_and_select", accept_all)
+    d = tmp_path / "ctl"
+    man = closure.prepare(_campaign_spec(tiny_run / "checkpoint.pt", source="surrogate", k=2), d,
+                          log=lambda m: None)
+    assert man["label"].startswith("self-closure control")
+    obs = read_observations(d / "obs" / "obs_0001.h5")
+    assert len(obs) == 20 and np.all((obs.event_id >> 48) == closure.SELF_CLOSURE_STREAM)
+    spec = _campaign_spec(tiny_run / "checkpoint.pt", table=tmp_path / "missing.npz")
+    spec["fit"]["grid"] = {"T_ref": [0.3], "b": [7.0], "tau_init": [0.9]}
+    with pytest.raises(ValueError, match="ordered"):
+        closure.prepare(spec, tmp_path / "bad")
+
+
+def test_acceptance_shards_merge(tiny_run, tmp_path):
+    from omnilearned.sbi.toy import closure
+
+    ax = ["6:8:2", "0.28:0.32:2", "0.9:1.0:2"]
+    for k in (0, 1):
+        closure.main(["acceptance", "--checkpoint", str(tiny_run / "checkpoint.pt"), *sum([["--axis", a] for a in ax], []),
+                      "--n-samples", "16", "--nsteps", "2", "--shard", str(k), "--num-shards", "2",
+                      "--device", "cpu", "--out", str(tmp_path / f"part{k}.npz")])
+    with pytest.raises(ValueError, match="missing"):
+        closure.acceptance_merge([tmp_path / "part0.npz"], tmp_path / "t.npz")
+    acc = closure.acceptance_merge([tmp_path / "part0.npz", tmp_path / "part1.npz"], tmp_path / "t.npz")
+    assert acc.shape == (2, 2, 2) and np.all((acc >= 0) & (acc <= 1))
+    with open(tmp_path / "t.json") as f:
+        assert json.load(f)["common_random_numbers"] is True
