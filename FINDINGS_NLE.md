@@ -37,6 +37,9 @@ records source revision, dirty status and device.
   **`alice_g`** (GPU allocation), QOS include debug, gpu_debug, gpu_interactive, regular. GPU
   batch jobs most likely need `-A alice_g` (NERSC `_g` convention); to confirm on the first
   GPU sbatch.
+- `sbatch` from inside an allocation inherits `SLURM_*` variables (GPUs, nodes) and is then
+  rejected ("Job request does not match any supported policy") for a CPU job. Submit with
+  them unset: `env $(env | grep -E '^(SLURM|SBATCH|SALLOC)_' | cut -d= -f1 | sed 's/^/-u /') sbatch ...`.
 - Node nid003988: AMD EPYC 7763 (Milan, AVX2, no AVX-512), 128 hardware threads, 251 GB RAM.
 - FastJet through cppyy: `export CLING_STANDARD_PCH=$TMPDIR/cling-$USER/allDict.cxx.pch`
   (here `TMPDIR=/tmp`); the first import builds the PCH (~1 min) per node. Harmless warning
@@ -191,8 +194,17 @@ float32), condition θ in [−1, 1] plus N/100.
   i.e. (+1.3, +1.3, −1.6) marginal σ, almost entirely along the tube; tube points b = 1, 2
   similar. The plan's criterion (|δθ| ≤ 0.2 σ) needs a stated σ: the conditional σ is the
   strict reading; both are recorded.
-- Development closure needs fits; fit cost for the scaled models is being timed
-  (`runs/m4/timing`).
+- **Fit cost of the scaled models** (`runs/m4/timing/timing.json`; intermediate checkpoints,
+  same architectures; N = 250 development jets, midpoint-64, 8 per-step Rademacher probes,
+  event chunk 256, IEEE float32, A100 GPU 3 while the other GPUs trained):
+  **SetFlow d256 L6 8.4 s/candidate, SmoothPET d256 L6 11.1 s/candidate** (candidate chunk 4
+  or 8 the same within 10%; sorting by N irrelevant at N = 250 = one chunk). Lesson 4 had 2.1
+  s for the 1 M v1 model on the TITAN RTX. An N = 250 support scan of ~1300–1650 candidates
+  is then **~3–4 GPU-hours (SetFlow)**; N = 1000 needs ~4× events and ~4× nodes (lesson 2),
+  ~50 GPU-hours per fit. M5 as planned (≥ 10 + 10 ensembles at each N, plus controls) would
+  be several hundred GPU-hours with these models. Lesson 7 found capacity irrelevant for
+  v1 (1.0 M = 3.3 M); a smaller model, fewer probes or fewer steps must pass M4 numerics
+  first. Decision point after the gate results.
 
 ## Open items
 
