@@ -254,12 +254,15 @@ def shift(a):
         row = {"point_id": pid, "label": labels[pid], "theta": pts[pid], "delta_mean": dmu,
                "delta_theta": dth, "delta_theta_se": se, "in_sigma_conditional_N1000": dth / sig,
                "se_in_sigma_conditional_N1000": se / sig,
+               "in_sigma_marginal_N1000": dth / out["sigma_marginal_N1000"],
                "pass_0.2_sigma": bool(np.all(np.maximum(np.abs(dth) - 2 * se, 0) <= 0.2 * sig)),
                "surrogate": rep, "n_direct": int(len(od))}
         out["points"].append(row)
         print(f"point {pid} {labels[pid]} theta={np.round(pts[pid], 3).tolist()} "
               f"dtheta={np.round(dth, 4).tolist()} +- {np.round(se, 4).tolist()} "
-              f"= {np.round(dth / sig, 2).tolist()} sigma_cond(N=1000) acc={rep['acceptance']:.3f}",
+              f"= {np.round(dth / sig, 2).tolist()} sigma_cond "
+              f"{np.round(dth / out['sigma_marginal_N1000'], 2).tolist()} sigma_marg (N=1000) "
+              f"acc={rep['acceptance']:.3f}",
               flush=True)
     out.update({"checkpoint": a.checkpoint, "checkpoint_sha256": sur.metadata.get("checkpoint_sha256"),
                 "nsteps": a.nsteps, "n_generate": a.n_generate, "device": dev_.to_dict(),
