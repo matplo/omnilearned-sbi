@@ -177,8 +177,43 @@ def write_shard(path, parts, split, backend, toy_config_sha256):
     return file_sha256(path), file_sha256(dpath)
 
 
-def generate_shard(out, split, point_ids, points, jets_per_point, config=V2_CONFIG, log=print):
-    """Draw ``jets_per_point`` selected jets at each point and write one shard + manifest."""
+COUNTS_SCHEMA = "toy-counts-v1"
+
+
+def write_counts_shard(path, parts, split, backend, toy_config_sha256):
+    """Multiplicities only (for p(N | theta)): n_constituents, theta, event_id, point_id."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as f:
+        _dataset(f, "n_constituents", np.concatenate([r["n_constituents"] for _, _, r in parts]).astype(np.int32))
+        _dataset(f, "theta", np.concatenate([np.repeat(np.asarray(t, np.float64)[None], r["x"].shape[0], 0)
+                                             for _, t, r in parts]))
+        _dataset(f, "event_id", np.concatenate([r["event_id"] for _, _, r in parts]).astype(np.int64))
+        _dataset(f, "point_id", np.concatenate([np.full(r["x"].shape[0], p, np.int32) for p, _, r in parts]))
+        f.attrs.update({"schema": COUNTS_SCHEMA, "backend": backend, "split": split,
+                        "toy_config_sha256": toy_config_sha256,
+                        "parameter_names": list(PARAMETERS)})
+    return file_sha256(path)
+
+
+def read_counts(paths):
+    """(n_constituents, theta, point_id) from counts shards."""
+    n, th, pid = [], [], []
+    for p in paths:
+        with h5py.File(p, "r") as f:
+            if f.attrs.get("schema") != COUNTS_SCHEMA:
+                raise ValueError(f"{p} is not a {COUNTS_SCHEMA} file")
+            n.append(f["n_constituents"][...])
+            th.append(f["theta"][...])
+            pid.append(f["point_id"][...])
+    return np.concatenate(n), np.concatenate(th), np.concatenate(pid)
+
+
+def generate_shard(out, split, point_ids, points, jets_per_point, config=V2_CONFIG, log=print,
+                   counts_only=False):
+    """Draw ``jets_per_point`` selected jets at each point and write one shard + manifest.
+
+    ``counts_only`` writes only the multiplicities (``write_counts_shard``)."""
     cfg, _, _ = load_toy_config(config)
     seed = int(cfg["randomness"][SPLIT_SEED[split]])
     start = time.time()
@@ -196,9 +231,14 @@ def generate_shard(out, split, point_ids, points, jets_per_point, config=V2_CONF
         log(f"  {split} point {pid} theta={np.round(th, 4).tolist()} acc={man['acceptance']:.4f} "
             f"N=[{man['n_constituents_range'][0]},{man['n_constituents_range'][1]}] {time.time() - t0:.1f}s")
     cfg_sha = file_sha256(config)
-    sha, dsha = write_shard(out, parts, split, cfg["backend"], cfg_sha)
-    manifest = {"schema": SHARD_SCHEMA, "file": Path(out).name, "sha256": sha,
-                "diag_file": Path(out).with_suffix(".diag.h5").name, "diag_sha256": dsha,
+    if counts_only:
+        sha, dsha = write_counts_shard(out, parts, split, cfg["backend"], cfg_sha), None
+    else:
+        sha, dsha = write_shard(out, parts, split, cfg["backend"], cfg_sha)
+    manifest = {"schema": COUNTS_SCHEMA if counts_only else SHARD_SCHEMA,
+                "file": Path(out).name, "sha256": sha,
+                "diag_file": None if counts_only else Path(out).with_suffix(".diag.h5").name,
+                "diag_sha256": dsha,
                 "split": split, "backend": cfg["backend"], "toy_config": str(config),
                 "toy_config_sha256": cfg_sha, "seed": seed, "seed_key": SPLIT_SEED[split],
                 "stream": STREAMS[split], "jets_per_point": int(jets_per_point),
@@ -315,6 +355,8 @@ def _cli(argv=None):
     g.add_argument("--out-dir", required=True)
     g.add_argument("--config", default=str(V2_CONFIG))
     g.add_argument("--skip-existing", action="store_true")
+    g.add_argument("--counts-only", action="store_true",
+                   help="store only multiplicities (training data for p(N | theta))")
     g.add_argument("--split", default=None, choices=sorted(SPLIT_SEED),
                    help="draw with this split's stream and seed instead of the design's "
                         "(e.g. fidelity samples at validation points)")
@@ -353,11 +395,11 @@ def _cli(argv=None):
             print(f"shard {k}: no points")
             return
         split = a.split or des["split"]
-        out = Path(a.out_dir) / f"{split}_{k:05d}.h5"
+        out = Path(a.out_dir) / f"{split}{'_counts' if a.counts_only else ''}_{k:05d}.h5"
         if a.skip_existing and out.with_suffix(".json").exists():
             print(f"shard {k}: exists, skipped")
             return
-        m = generate_shard(out, split, ids, pts[ids], a.jets, a.config)
+        m = generate_shard(out, split, ids, pts[ids], a.jets, a.config, counts_only=a.counts_only)
         print(f"shard {k}: {m['n_jets']} jets, {len(ids)} points, {m['wall_seconds']:.1f}s -> {out}")
     else:
         idx = write_index(a.dir, a.split)

@@ -185,3 +185,22 @@ def test_gate_driver_run_summarize_convergence(shard_dir, tiny_run, tmp_path):
     with open(tmp_path / "conv.json") as f:
         conv = json.load(f)
     assert "2->4" in conv["points"]["1"]["pairs"]
+
+
+def test_counts_only_shards_match_full_shards(shard_dir, tmp_path):
+    from omnilearned.sbi.toy.datasets import generate_shard, read_counts, read_shards
+
+    with open(shard_dir / "train_00000.json") as f:
+        man = json.load(f)
+    pts = np.array([q["theta"] for q in man["points"]])
+    ids = np.array([q["point_id"] for q in man["points"]])
+    m = generate_shard(tmp_path / "train_counts_00000.h5", "train", ids, pts, 60, log=lambda m: None,
+                       counts_only=True)
+    assert m["schema"] == "toy-counts-v1" and m["diag_file"] is None
+    n, th, pid = read_counts([tmp_path / "train_counts_00000.h5"])
+    full = read_shards([shard_dir / "train_00000.h5"])
+    np.testing.assert_array_equal(n, full["n_constituents"])
+    np.testing.assert_array_equal(th, full["theta"])
+    np.testing.assert_array_equal(pid, full["point_id"])
+    with pytest.raises(ValueError):
+        read_counts([shard_dir / "train_00000.h5"])
