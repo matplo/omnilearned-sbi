@@ -29,6 +29,9 @@ export CLING_STANDARD_PCH=$TMPDIR/cling-$USER/allDict.cxx.pch
 3. In parallel on the CPUs: round-2 training data, 1024 × 6000 jets (`datasets generate
    --jets 6000` into `data/v2_m2`, same design and seeds, ≤ 16 processes for memory).
 4. Round-2 trainings as batch jobs (`shell/nle/train_gpu.sbatch`, `-q shared --gpus 1 -c 32`).
+5. Ready once a checkpoint passes M3: the closure driver (`toy.closure`, see "M5 tooling").
+   In any GPU session, spend 5 min on the concurrency test: one campaign with
+   `closure_local.sh SNAP DIR 1` vs `... DIR 2` (2 fits per GPU), compare fits/hour.
 
 Always `$VIRTUAL_ENV/bin/python` (the NERSC conda python shadows it on PATH); batch jobs
 from a source snapshot (`shell/nle/snapshot.sh`, `PYTHONPATH=<snapshot>/src`); submit from
@@ -357,6 +360,35 @@ stream number changed.
   16, TF32 training, val every 2000 × 16 batches). 200k × 512 = 17 epochs of `v2_m2` (round
   1: 25 epochs of `v2_m1`). Their own p(N|θ) (4000 steps) will be replaced by
   `set_d256_L6_multC64` via `attach` before the gate.
+
+## M5 tooling: closure campaigns (2026-10-22, login node; code be669bd + fixed-axis fix)
+
+`python -m omnilearned.sbi.toy.closure prepare|fit|report|acceptance|acceptance-merge`
+(tests in `tests/sbi/test_datasets.py`; template `configs/closure/dev_N250.example.toml`):
+- `prepare`: K ensembles at a reserved setting named by its `[holdout]` key (only the driver
+  reads the value), from the toy (`source = "toy"`; development stream, or test stream for
+  test settings) or from the surrogate (`source = "surrogate"`, stream `self_closure` = 11,
+  labelled control). Truth-free observation files, `truth/` kept apart, one fit config per
+  ensemble (checked by `check_fit_config`), optional Pr_q(S|θ) table (grid must then be in
+  (b, T_ref, τ_init) order).
+- `fit`: worker w of W runs tasks w::W, resumable; each fit is sealed (`seal.json`: sha256
+  of result json/npz, fit config, observations, checkpoint, table; completeness flags).
+- `report`: refuses any fit whose seal no longer verifies (tested by editing a result), then
+  opens truth: pulls, marginal 68/95% coverage, **joint level of the truth** (log posterior
+  at the truth evaluated as one extra candidate with the fit's numerics, probes and
+  normalization; mass of grid cells above it; checked against an analytic 2D Gaussian),
+  Clopper–Pearson bounds, KS of the levels, `--control` pull differences with combined se.
+  Single-node (fixed) axes get no pull.
+- `acceptance`: CRN acceptance table, sharded over GPUs (`--shard/--num-shards`), merged
+  into a `selection.save_table` file for `TableLogNorm`. Cost: 8192 clouds × 128 steps
+  ≈ 70 s per grid point per A100, so a 6 × 4 × 4 table ≈ 30 min on 4 GPUs.
+- Parallelism: `shell/nle/closure_node.sbatch SNAP DIR [PER_GPU]` runs 4 GPUs × PER_GPU
+  workers per node; as a job array (`--array=0-(nodes-1)`) the workers spread over nodes.
+  `closure_local.sh` does the same inside an interactive allocation. Smoke test on the
+  login node (4 workers, 4 × 20 jets, CPU, `runs/m5/smoke_local`): 4 fits sealed in 6 s,
+  report verified 4/4.
+- Not in the driver yet: the M5 grid choice (nested subsample against a finer reference,
+  lesson 2) — a template grid is given; M4 numerics for the chosen generator.
 
 ## Open items
 

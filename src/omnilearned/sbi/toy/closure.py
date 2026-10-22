@@ -334,13 +334,16 @@ def report(out, device="cpu", control=None, log=print):
                "mean": summ["posterior_mean"], "std": summ["posterior_std"], "covered": {},
                "boundary": summ["boundary"],
                "evaluated": None if res.evaluated is None else int(np.sum(res.evaluated))}
+        row["fixed"] = [n for n, ax in zip(res.grid.names, res.grid.axes) if len(ax) < 2]
         for n in res.grid.names:
+            if n in row["fixed"]:  # a single-node axis is held fixed: no pull or coverage
+                continue
             row["pull"][n] = (summ["posterior_mean"][n] - truth[n]) / summ["posterior_std"][n]
             row["covered"][n] = {lv: bool(iv[0] <= truth[n] <= iv[1])
                                  for lv, iv in summ["credible_intervals"][n].items()}
         rows.append(row)
         log(f"  fit {k}: level {row['level']:.3f} pulls "
-            + " ".join(f"{n} {row['pull'][n]:+.2f}" for n in res.grid.names))
+            + " ".join(f"{n} {v:+.2f}" for n, v in row["pull"].items()))
     agg = _aggregate(rows)
     doc = {"campaign": man["spec"].get("name"), "label": man["label"], "n_fits": len(rows),
            "refused": refused, "fits": rows, "aggregate": agg, "host": host_info()}

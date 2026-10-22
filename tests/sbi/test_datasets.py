@@ -316,6 +316,13 @@ def test_closure_surrogate_control_and_grid_order(tiny_run, tmp_path, monkeypatc
     assert man["label"].startswith("self-closure control")
     obs = read_observations(d / "obs" / "obs_0001.h5")
     assert len(obs) == 20 and np.all((obs.event_id >> 48) == closure.SELF_CLOSURE_STREAM)
+    # a fixed (single-node) axis gets no pull: fit and report a 2D campaign
+    spec2 = _campaign_spec(tiny_run / "checkpoint.pt", k=1)
+    spec2["fit"]["grid"]["tau_init"] = [0.95]
+    closure.prepare(spec2, tmp_path / "fixed", log=lambda m: None)
+    closure.fit_task(tmp_path / "fixed", 0, log=lambda m: None)
+    rep = closure.report(tmp_path / "fixed", log=lambda m: None)
+    assert rep["fits"][0]["fixed"] == ["tau_init"] and set(rep["aggregate"]["mean_pull"]) == {"b", "T_ref"}
     spec = _campaign_spec(tiny_run / "checkpoint.pt", table=tmp_path / "missing.npz")
     spec["fit"]["grid"] = {"T_ref": [0.3], "b": [7.0], "tau_init": [0.9]}
     with pytest.raises(ValueError, match="ordered"):
