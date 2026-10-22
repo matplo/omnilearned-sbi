@@ -186,10 +186,10 @@ def write_counts_shard(path, parts, split, backend, toy_config_sha256):
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as f:
         _dataset(f, "n_constituents", np.concatenate([r["n_constituents"] for _, _, r in parts]).astype(np.int32))
-        _dataset(f, "theta", np.concatenate([np.repeat(np.asarray(t, np.float64)[None], r["x"].shape[0], 0)
+        _dataset(f, "theta", np.concatenate([np.repeat(np.asarray(t, np.float64)[None], len(r["n_constituents"]), 0)
                                              for _, t, r in parts]))
         _dataset(f, "event_id", np.concatenate([r["event_id"] for _, _, r in parts]).astype(np.int64))
-        _dataset(f, "point_id", np.concatenate([np.full(r["x"].shape[0], p, np.int32) for p, _, r in parts]))
+        _dataset(f, "point_id", np.concatenate([np.full(len(r["n_constituents"]), p, np.int32) for p, _, r in parts]))
         f.attrs.update({"schema": COUNTS_SCHEMA, "backend": backend, "split": split,
                         "toy_config_sha256": toy_config_sha256,
                         "parameter_names": list(PARAMETERS)})
@@ -223,11 +223,13 @@ def generate_shard(out, split, point_ids, points, jets_per_point, config=V2_CONF
         rec, man = sample_setting(th, jets_per_point, seed, stream=split, index=int(pid), path=config)
         if not man["complete"]:
             raise RuntimeError(f"point {pid} {th} incomplete: {man}")
-        parts.append((int(pid), np.asarray(th, np.float64), rec))
         per_point.append({"point_id": int(pid), "theta": [float(v) for v in th], "toy": man,
                           "array_sha256": array_sha256(rec), "discrete_sha256": discrete_sha256(rec),
                           "float_fingerprint": float_fingerprint(rec).tolist(),
                           "seconds": time.time() - t0})
+        if counts_only:  # keep the multiplicities only (padded records are ~GB per shard)
+            rec = {"n_constituents": rec["n_constituents"].copy(), "event_id": rec["event_id"].copy()}
+        parts.append((int(pid), np.asarray(th, np.float64), rec))
         log(f"  {split} point {pid} theta={np.round(th, 4).tolist()} acc={man['acceptance']:.4f} "
             f"N=[{man['n_constituents_range'][0]},{man['n_constituents_range'][1]}] {time.time() - t0:.1f}s")
     cfg_sha = file_sha256(config)
@@ -242,7 +244,7 @@ def generate_shard(out, split, point_ids, points, jets_per_point, config=V2_CONF
                 "split": split, "backend": cfg["backend"], "toy_config": str(config),
                 "toy_config_sha256": cfg_sha, "seed": seed, "seed_key": SPLIT_SEED[split],
                 "stream": STREAMS[split], "jets_per_point": int(jets_per_point),
-                "n_jets": int(sum(r["x"].shape[0] for _, _, r in parts)),
+                "n_jets": int(sum(len(r["event_id"]) for _, _, r in parts)),
                 "points": per_point, "wall_seconds": time.time() - start, "host": host_info()}
     with open(Path(out).with_suffix(".json"), "w") as f:
         json.dump(manifest, f, indent=1)

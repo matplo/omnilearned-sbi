@@ -197,6 +197,7 @@ def test_counts_only_shards_match_full_shards(shard_dir, tmp_path):
     m = generate_shard(tmp_path / "train_counts_00000.h5", "train", ids, pts, 60, log=lambda m: None,
                        counts_only=True)
     assert m["schema"] == "toy-counts-v1" and m["diag_file"] is None
+    assert m["n_jets"] == 120
     n, th, pid = read_counts([tmp_path / "train_counts_00000.h5"])
     full = read_shards([shard_dir / "train_00000.h5"])
     np.testing.assert_array_equal(n, full["n_constituents"])

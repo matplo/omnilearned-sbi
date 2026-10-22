@@ -124,8 +124,28 @@ def main(argv=None):
     r.add_argument("--seed", type=int, default=0)
     r.add_argument("--device", default="cpu")
     r.add_argument("--threads", type=int, default=8)
+    t = sub.add_parser("attach", help="put the p(N|theta) of one checkpoint onto another flow")
+    t.add_argument("--checkpoint", required=True, help="flow checkpoint to keep")
+    t.add_argument("--multiplicity-from", required=True, help="checkpoint whose p(N|theta) is used")
+    t.add_argument("--out", required=True)
     a = ap.parse_args(argv)
     sur = FlowSurrogate.load(a.checkpoint)
+    if a.cmd == "attach":
+        src = FlowSurrogate.load(a.multiplicity_from)
+        if src.multiplicity.layout.to_dict() != sur.multiplicity.layout.to_dict():
+            raise ValueError("multiplicity condition layouts differ")
+        meta = dict(sur.metadata)
+        parent = meta.pop("checkpoint_sha256")
+        meta["multiplicity_attached"] = {
+            "parent_checkpoint": a.checkpoint, "parent_sha256": parent,
+            "multiplicity_from": a.multiplicity_from,
+            "multiplicity_from_sha256": src.metadata["checkpoint_sha256"],
+            "multiplicity_retrained": src.metadata.get("multiplicity_retrained"), "host": host_info()}
+        new = FlowSurrogate(sur.model, sur.base, sur.transform, sur.layout, meta, "cpu",
+                            multiplicity=src.multiplicity)
+        Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+        print(f"attached p(N|theta) of {a.multiplicity_from} -> {a.out} sha {new.save(a.out)[:12]}")
+        return
     if a.cmd == "check":
         n, th, pid = _counts(a.data_dir, a.split)
         doc = check(sur, n, th, pid)

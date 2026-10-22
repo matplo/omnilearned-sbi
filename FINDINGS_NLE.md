@@ -3,23 +3,37 @@
 Brief: `PLAN_NLE_PERLMUTTER.md`. Newest entries at the bottom of each section. Every result
 records source revision, dirty status and device.
 
-## Resume here (state at the end of interactive job 60098593, 2026-10-22 ~05:15 PDT)
+## Resume here (updated 2026-10-22 ~12:00 PDT, after interactive job 60098593 timed out)
 
-- Done: §3 first day (all checks pass); M1 (data, fidelity samples, development scans,
-  CPU-node reproducibility); M2 first round (SetFlow 100k, SmoothPET 66k and 100k, trained);
-  M3 drivers (gate, shift, convergence, multiplicity check) and **interim M3 results: the
-  first-round generators do not pass the gate** (details in "M3 interim results").
-- Pending batch jobs (resumable, they skip finished points): 60101552 gate `set_d256_L6`,
-  60101555 gate `pet_d256_L6_66k` (regular GPU, ≤ 2 h each; queue estimate was days).
-  No batch gate submitted for `pet_d256_L6_100k` (its post_train was cut by the job end;
-  rerun `shell/nle/post_train.sh` or `gate_gpu.sbatch` if needed).
-- After they finish: `python -m omnilearned.sbi.toy.gate summarize --out runs/m3/<run>/gate
-  --n-settings 128`.
-- **Decisions needed from the user** are listed under "Open items" (top three).
-- Detailed step log: `$JEST_NLE_ROOT/manifests/first_day/STATUS.md`.
-- Batch jobs run from read-only source snapshots (`shell/nle/snapshot.sh` →
-  `$JEST_NLE_ROOT/src_snapshots/<rev>`, `PYTHONPATH=<snapshot>/src`), so editing or switching
-  this checkout cannot reach them. Submit from inside an allocation with `SLURM_*` unset.
+State: job 60098593 ended by TIMEOUT at 05:21 (4 h). Nothing lost: code pushed, results on
+CFS. Complete: M1 data (train, validation, fidelity, development scans), **all 64 counts
+shards** (`data/v2_m1_counts`, 20.5 M (θ, N) pairs), the three trainings, convergence and
+shift for all three. Gate points with the old p(N|θ): set 38/128, pet66k 4, pet100k 0.
+The batch gate jobs 60101552 / 60101555 were **cancelled** (user decision): they would have
+gated the old p(N|θ), which is known to fail.
+
+Next session (plan approved by the user), in a new 4 h interactive GPU node:
+```
+salloc -A alice_g -C gpu -q interactive -N 1 -t 04:00:00 --gpus 4
+export JEST_NLE_ROOT=/global/cfs/cdirs/alice/ploskon/jest-nle
+export CLING_STANDARD_PCH=$TMPDIR/cling-$USER/allDict.cxx.pch
+```
+1. p(N|θ) on all counts shards (GPU, ~3 min):
+   `multiplicity_check retrain --checkpoint runs/m2/set_d256_L6/checkpoint.pt --train-dir
+   data/v2_m1 --counts-dir data/v2_m1_counts --out runs/m3/mult/set_d256_L6_multC64.pt
+   --device cuda`, then `check` against `data/v2_m1_fidelity`; `attach` the same p(N|θ) to
+   `pet_d256_L6_66k` and `pet_d256_L6_100k` (`multiplicity_check attach`).
+2. Gate the swapped checkpoints into `runs/m3/<run>_multC64/` (`shift`, then `gate run`),
+   set and pet100k on 2 GPUs each; finish with `shell/nle/gate_gpu.sbatch` at session end;
+   `gate summarize --n-settings 128`.
+3. In parallel on the CPUs: round-2 training data, 1024 × 6000 jets (`datasets generate
+   --jets 6000` into `data/v2_m2`, same design and seeds, ≤ 16 processes for memory).
+4. Round-2 trainings as batch jobs (`shell/nle/train_gpu.sbatch`, `-q shared --gpus 1 -c 32`).
+
+Always `$VIRTUAL_ENV/bin/python` (the NERSC conda python shadows it on PATH); batch jobs
+from a source snapshot (`shell/nle/snapshot.sh`, `PYTHONPATH=<snapshot>/src`); submit from
+inside an allocation with `SLURM_*` unset. On a login node run tests with
+`CUDA_VISIBLE_DEVICES=` (the shared login GPU can be out of memory).
 
 ## Environment (Perlmutter)
 
@@ -35,10 +49,10 @@ records source revision, dirty status and device.
 
 | date | milestone | job id | nodes × hours | what |
 |---|---|---|---|---|
-| 2026-10-22 | first day, M1, M2, M3 prep | 60098593 (interactive, urgent_gpu, 4 h) | 1 × 4 | checks, smoke chain, M1 data (CPU of this node), 3 trainings, sampler timing |
+| 2026-10-22 | first day, M1, M2, M3 prep | 60098593 (interactive, urgent_gpu, TIMEOUT at 4 h) | 1 × 4 | checks, smoke chain, M1 data (CPU of this node), 3 trainings, sampler timing |
 | 2026-10-22 | M1 acceptance | 60101162 (cpu, debug) | 1 × 0.04 | shard regeneration on nid006833 + cross-host tests |
-| 2026-10-22 | M3 | 60101552 (gpu, regular, ≤ 2 h, pending) | 1 × ≤ 2 | finish gate of `set_d256_L6` (resumable) |
-| 2026-10-22 | M3 | 60101555 (gpu, regular, ≤ 2 h, pending) | 1 × ≤ 2 | finish gate of `pet_d256_L6_66k` (resumable) |
+| 2026-10-22 | M3 | 60101552 (gpu, regular) | 0 (cancelled while pending) | gate of `set_d256_L6` with the old p(N\|θ) |
+| 2026-10-22 | M3 | 60101555 (gpu, regular) | 0 (cancelled while pending) | gate of `pet_d256_L6_66k` with the old p(N\|θ) |
 
 Interactive job 60098593 used: 4 GPUs × ~4 h (3 trainings ≈ 1.3, 1.3, 1.6 GPU-h; M3
 sampling, shifts, gate points and fit timing on the rest) and the node's CPUs for all toy

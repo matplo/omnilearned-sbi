@@ -312,3 +312,21 @@ def test_multiplicity_check_chi2_and_mean_shift():
                 np.repeat([0, 1], 20000))
     z = {r["point_id"]: r["z"] for r in doc["points"]}
     assert abs(z[0]) < 4 and z[1] < -8  # model mean 20 below the shifted sample
+
+
+def test_multiplicity_attach_keeps_flow_and_swaps_pn(tmp_path):
+    from omnilearned.sbi.flow import FlowSurrogate
+    from omnilearned.sbi.toy.multiplicity_check import main
+
+    a, b = _variable_surrogate(seed=0), _variable_surrogate(seed=1)
+    a.save(tmp_path / "a.pt")
+    b.save(tmp_path / "b.pt")
+    main(["attach", "--checkpoint", str(tmp_path / "a.pt"), "--multiplicity-from", str(tmp_path / "b.pt"),
+          "--out", str(tmp_path / "ab.pt")])
+    ab = FlowSurrogate.load(tmp_path / "ab.pt")
+    for k, v in a.model.state_dict().items():
+        assert torch.equal(ab.model.state_dict()[k], v)
+    for k, v in b.multiplicity.state_dict().items():
+        assert torch.equal(ab.multiplicity.state_dict()[k], v)
+    assert ab.metadata["multiplicity_attached"]["multiplicity_from_sha256"] == \
+        FlowSurrogate.load(tmp_path / "b.pt").metadata["checkpoint_sha256"]
