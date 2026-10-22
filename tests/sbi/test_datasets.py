@@ -131,3 +131,12 @@ def test_train_and_sample_select_drivers(shard_dir, tmp_path):
     x, mask, rep = sample_select.sample_and_select(sur, (7.5, 0.30, 0.95), 40, SEL, nsteps=4)
     assert rep["generated"] == 40 and x.shape[0] == mask.shape[0] == rep["selected"]
     assert sum(rep["rejections"].values()) == 40 - rep["selected"]
+
+
+def test_source_revision_of_checkout_and_snapshot(tmp_path):
+    from omnilearned.sbi.toy.datasets import source_revision
+
+    rev, dirty = source_revision()
+    assert rev is not None and len(rev) == 40 and dirty in (True, False)
+    (tmp_path / "SOURCE_REVISION").write_text("a" * 40 + "\n")
+    assert source_revision(tmp_path) == ("a" * 40, False)

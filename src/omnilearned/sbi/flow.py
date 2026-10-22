@@ -60,6 +60,12 @@ class TrainOptions:
     val_seed: int = 1
     device: str = "auto"
     allow_device_fallback: bool = False
+    # 0: uniform minibatches. k > 1: each minibatch is drawn uniformly from one
+    # of k equal-count buckets of the real multiplicity (bucket chosen with
+    # probability proportional to its size, so every event keeps the same
+    # overall probability); batches are cut to the active width, so short
+    # clouds no longer pay for the longest one in the set.
+    length_buckets: int = 0
 
     def to_dict(self):
         return asdict(self)
@@ -328,6 +334,35 @@ def _lr_lambda(warmup, total):
     return f
 
 
+def minibatch_sampler(lengths, batch_size, buckets=0, generator=None):
+    """Callable returning minibatch indices (CPU) over events with real ``lengths``.
+
+    ``buckets`` <= 1: uniform over all events (the original stream). Otherwise the
+    events are split into ``buckets`` equal-count groups by length; a group is
+    chosen with probability proportional to its size and the batch is drawn
+    uniformly inside it, so each event keeps probability 1/n per draw while a
+    batch spans a narrow range of lengths. ``.edges`` lists the largest length
+    per group.
+    """
+    lengths = torch.as_tensor(lengths)
+    n = lengths.numel()
+    if buckets <= 1:
+        def draw():
+            return torch.randint(0, n, (batch_size,), generator=generator)
+        draw.edges = None
+        return draw
+    order = torch.argsort(lengths, stable=True)
+    groups = [g for g in torch.tensor_split(order, buckets) if g.numel()]
+    weights = torch.tensor([float(g.numel()) for g in groups], dtype=torch.float64)
+
+    def draw():
+        g = groups[int(torch.multinomial(weights, 1, generator=generator))]
+        return g[torch.randint(0, g.numel(), (batch_size,), generator=generator)]
+
+    draw.edges = [int(lengths[g[-1]]) for g in groups]
+    return draw
+
+
 def train_flow(model, base, train, val, options, log=print, on_best=None):
     """Train a velocity model by flow matching; select by validation loss only.
 
@@ -370,13 +405,16 @@ def train_flow(model, base, train, val, options, log=print, on_best=None):
     )
     history = {"step": [], "train_loss": [], "val_loss": [], "seconds": [],
                "device": info.to_dict()}
+    draw = minibatch_sampler(tr["mask"].sum(1).cpu(), options.batch_size,
+                             options.length_buckets, gen)
+    history["length_buckets"] = draw.edges
     best = (float("inf"), -1)
     best_state = None
     running = 0.0
     start = time.time()
     for step in range(options.steps):
         model.train()
-        idx = torch.randint(0, ntr, (options.batch_size,), generator=gen).to(device)
+        idx = draw().to(device)
         t = torch.rand(options.batch_size, generator=gen).to(device)
         # Noise is drawn on CPU for device-independent streams; padded
         # entries are masked inside the loss.

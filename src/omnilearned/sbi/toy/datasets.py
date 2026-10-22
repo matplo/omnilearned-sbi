@@ -97,8 +97,15 @@ def make_design(n, split, cfg, box=BOX, margin=0.02):
 
 
 def source_revision(repo=None):
-    """(git revision, dirty flag) of the checkout this module is imported from."""
-    repo = repo or Path(__file__).resolve().parents[4]
+    """(git revision, dirty flag) of the checkout this module is imported from.
+
+    A source snapshot (``git archive`` for batch jobs) has no ``.git``; it carries
+    a ``SOURCE_REVISION`` file with the archived commit and is clean by construction.
+    """
+    repo = Path(repo or Path(__file__).resolve().parents[4])
+    stamp = repo / "SOURCE_REVISION"
+    if stamp.exists() and not (repo / ".git").exists():
+        return stamp.read_text().strip(), False
     try:
         rev = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True,
                              text=True, check=True).stdout.strip()

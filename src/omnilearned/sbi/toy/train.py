@@ -117,6 +117,8 @@ def main(argv=None):
     ap.add_argument("--ema-decay", dest="ema_decay", type=float, default=0.999)
     ap.add_argument("--val-every", dest="val_every", type=int, default=250)
     ap.add_argument("--val-batches", dest="val_batches", type=int, default=8)
+    ap.add_argument("--length-buckets", dest="length_buckets", type=int, default=0,
+                    help="draw each minibatch inside one of k multiplicity quantile buckets")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--tf32", action="store_true", help="TF32 matmuls during training only")
@@ -136,6 +138,8 @@ def main(argv=None):
         logf.flush()
 
     start = time.time()
+    host = host_info()  # source revision at start (the checkout may change while training)
+    log(f"source {host['source_revision']} dirty={host['source_dirty']} host {host['host']}")
     tp, vp = shard_paths(args.data_dir, "train"), shard_paths(args.data_dir, "validation")
     train, val = read_shards(tp), read_shards(vp)
     log(f"data: train {train['x'].shape} from {len(tp)} shards, val {val['x'].shape} "
@@ -149,7 +153,7 @@ def main(argv=None):
     dev = hist["device"]
     run = {"checkpoint": str(out / "checkpoint.pt"), "checkpoint_sha256": sha, "args": vars(args),
            "data": data, "meta": meta, "flow_history": hist, "multiplicity_history": mhist,
-           "wall_seconds": time.time() - start, "host": host_info(), "device": dev,
+           "wall_seconds": time.time() - start, "host": host, "device": dev,
            "gpu_name": torch.cuda.get_device_name() if torch.cuda.is_available() else None}
     with open(out / "run.json", "w") as f:
         f.write(json_dumps(run))

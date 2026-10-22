@@ -217,3 +217,31 @@ def test_fidelity_gate_with_masks_adds_multiplicity(v2_jets):
     assert not res["verdict"]["fail"]  # two halves of the same toy sample
     with pytest.raises(ValueError):
         evaluate(a["x"], b["x"], direct_mask=a["mask"])
+
+
+def test_length_bucketed_minibatches_are_narrow_and_unbiased():
+    from omnilearned.sbi.flow import minibatch_sampler
+
+    lengths = torch.as_tensor(np.random.default_rng(3).poisson(30, 4000) + 2)
+    gen = torch.Generator().manual_seed(0)
+    # buckets <= 1 keeps the original uniform stream
+    uni = minibatch_sampler(lengths, 64, 0, gen)
+    ref = torch.randint(0, 4000, (64,), generator=torch.Generator().manual_seed(0))
+    assert torch.equal(uni(), ref) and uni.edges is None
+    draw = minibatch_sampler(lengths, 64, 8, torch.Generator().manual_seed(1))
+    assert len(draw.edges) == 8 and draw.edges == sorted(draw.edges) and draw.edges[-1] == int(lengths.max())
+    counts = torch.zeros(4000)
+    spans = []
+    for _ in range(4000):
+        idx = draw()
+        counts += torch.bincount(idx, minlength=4000)
+        spans.append(int(lengths[idx].max() - lengths[idx].min()))
+    assert np.median(spans) <= 6 < int(lengths.max() - lengths.min())  # narrow batches
+    # Every event has probability 1/n per draw: per-quantile totals are equal up to
+    # the bucket choice (64 x Binomial(4000, 1/8) events per group) ...
+    per_group = counts[torch.argsort(lengths, stable=True)].reshape(8, -1).sum(1)
+    expected, sd = 4000 * 64 / 8, 64 * (4000 / 8 * 7 / 8) ** 0.5
+    assert torch.all((per_group - expected).abs() < 4 * sd)
+    # ... and uniform inside a group (multinomial spread of ~64 x 500 draws over 500 events).
+    first = counts[torch.argsort(lengths, stable=True)][:500]
+    assert first.std() / first.mean() < 3 * (500 / first.sum()) ** 0.5
