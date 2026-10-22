@@ -17,6 +17,7 @@ STREAMS = {
     "local_test": 7,
     "predictive": 8,
     "fidelity": 9,
+    "development_scan": 10,
     "jewel_train": 16,
     "jewel_validation": 17,
     "jewel_test": 18,

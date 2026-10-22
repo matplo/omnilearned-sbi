@@ -55,7 +55,8 @@ BOX = {"b": (0.0, 11.0), "T_ref": (0.25, 0.55), "tau_init": (0.2, 1.2)}
 GLOBAL_NAMES = ("b", "T_ref", "tau_init", "jet_pt", "jet_eta", "jet_phi", "n_constituents")
 SPLIT_SEED = {"train": "training_seed", "validation": "validation_seed",
               "development": "validation_seed", "test": "test_seed",
-              "fidelity": "validation_seed"}  # direct-toy gate samples at validation points
+              "fidelity": "validation_seed",  # direct-toy gate samples at validation points
+              "development_scan": "validation_seed"}  # lines and tube through the development setting
 X_CHUNK = (2048, 32, 3)
 
 
