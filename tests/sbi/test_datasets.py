@@ -112,15 +112,23 @@ def test_observations_carry_no_truth(tmp_path):
         assert json.load(f)["theta"] == [7.5, 0.30, 0.95]
 
 
-def test_train_and_sample_select_drivers(shard_dir, tmp_path):
-    from omnilearned.sbi.flow import FlowSurrogate
-    from omnilearned.sbi.toy import sample_select, train
+@pytest.fixture(scope="module")
+def tiny_run(shard_dir, tmp_path_factory):
+    from omnilearned.sbi.toy import train
 
-    out = tmp_path / "run"
+    out = tmp_path_factory.mktemp("run")
     train.main(["--data-dir", str(shard_dir), "--out", str(out), "--steps", "6", "--val-every", "3",
                 "--warmup-steps", "2", "--dim", "16", "--depth", "1", "--heads", "2",
                 "--mult-steps", "4", "--mult-hidden", "8", "--mult-depth", "1",
-                "--batch-size", "16", "--device", "cpu"])
+                "--batch-size", "16", "--device", "cpu", "--length-buckets", "2"])
+    return out
+
+
+def test_train_and_sample_select_drivers(tiny_run):
+    from omnilearned.sbi.flow import FlowSurrogate
+    from omnilearned.sbi.toy import sample_select
+
+    out = tiny_run
     with open(out / "run.json") as f:
         run = json.load(f)
     assert run["data"]["n_train"] == 240 and run["flow_history"]["best_step"] in (3, 6)
@@ -140,3 +148,37 @@ def test_source_revision_of_checkout_and_snapshot(tmp_path):
     assert rev is not None and len(rev) == 40 and dirty in (True, False)
     (tmp_path / "SOURCE_REVISION").write_text("a" * 40 + "\n")
     assert source_revision(tmp_path) == ("a" * 40, False)
+
+
+def test_gate_driver_run_summarize_convergence(shard_dir, tiny_run, tmp_path):
+    from omnilearned.sbi.toy import gate
+    from omnilearned.sbi.toy.datasets import generate_shard, make_design, write_index
+
+    pts, _ = make_design(2, "validation", CFG)
+    fdir = tmp_path / "fid"
+    generate_shard(fdir / "fidelity_00000.h5", "fidelity", np.arange(2), pts, 40, log=lambda m: None)
+    write_index(fdir, "fidelity")
+    with h5py.File(fdir / "fidelity_00000.h5") as f, h5py.File(shard_dir / "validation_00000.h5") as g:
+        assert not set(f["event_id"][...]) & set(g["event_id"][...])  # own stream
+    ck = str(tiny_run / "checkpoint.pt")
+    out = tmp_path / "gate"
+    common = ["--checkpoint", ck, "--fidelity-dir", str(fdir), "--n-generate", "30",
+              "--device", "cpu"]
+    gate.main(["run", *common, "--out", str(out), "--nsteps", "4", "--n-perm", "20",
+               "--save-samples"])
+    gate.main(["run", *common, "--out", str(out), "--nsteps", "4"])  # resumable: no rerun
+    gate.main(["summarize", "--out", str(out)])
+    with open(out / "summary.json") as f:
+        summ = json.load(f)
+    assert summ["points"] == 2 and summ["alpha_per_point"] == 0.025
+    assert {t["point_id"] for t in summ["table"]} == {0, 1}
+    with open(out / "point_00000.json") as f:
+        p0 = json.load(f)
+    assert set(p0["relevance_by_n"]) == {"250", "1000"} and p0["n_direct"] == 40
+    with h5py.File(out / "samples_00000.h5") as f:
+        assert f["x"].shape[0] == p0["n_surrogate"]
+    gate.main(["convergence", *common, "--out", str(tmp_path / "conv.json"), "--points", "1",
+               "--steps", "2", "4"])
+    with open(tmp_path / "conv.json") as f:
+        conv = json.load(f)
+    assert "2->4" in conv["points"]["1"]["pairs"]
