@@ -54,7 +54,8 @@ SHARD_SCHEMA = "toy-shard-v1"
 BOX = {"b": (0.0, 11.0), "T_ref": (0.25, 0.55), "tau_init": (0.2, 1.2)}
 GLOBAL_NAMES = ("b", "T_ref", "tau_init", "jet_pt", "jet_eta", "jet_phi", "n_constituents")
 SPLIT_SEED = {"train": "training_seed", "validation": "validation_seed",
-              "development": "validation_seed", "test": "test_seed"}
+              "development": "validation_seed", "test": "test_seed",
+              "fidelity": "validation_seed"}  # direct-toy gate samples at validation points
 X_CHUNK = (2048, 32, 3)
 
 
@@ -313,6 +314,9 @@ def _cli(argv=None):
     g.add_argument("--out-dir", required=True)
     g.add_argument("--config", default=str(V2_CONFIG))
     g.add_argument("--skip-existing", action="store_true")
+    g.add_argument("--split", default=None, choices=sorted(SPLIT_SEED),
+                   help="draw with this split's stream and seed instead of the design's "
+                        "(e.g. fidelity samples at validation points)")
     i = sub.add_parser("index", help="merge shard manifests of a split")
     i.add_argument("--dir", required=True)
     i.add_argument("--split", required=True)
@@ -347,11 +351,12 @@ def _cli(argv=None):
         if ids.size == 0:
             print(f"shard {k}: no points")
             return
-        out = Path(a.out_dir) / f"{des['split']}_{k:05d}.h5"
+        split = a.split or des["split"]
+        out = Path(a.out_dir) / f"{split}_{k:05d}.h5"
         if a.skip_existing and out.with_suffix(".json").exists():
             print(f"shard {k}: exists, skipped")
             return
-        m = generate_shard(out, des["split"], ids, pts[ids], a.jets, a.config)
+        m = generate_shard(out, split, ids, pts[ids], a.jets, a.config)
         print(f"shard {k}: {m['n_jets']} jets, {len(ids)} points, {m['wall_seconds']:.1f}s -> {out}")
     else:
         idx = write_index(a.dir, a.split)
