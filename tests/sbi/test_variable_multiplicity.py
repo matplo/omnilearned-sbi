@@ -259,3 +259,29 @@ def test_sample_sorted_by_length_keeps_draw_order_and_distribution():
     assert np.all(np.abs(a.mean(0) - b.mean(0)) < 4 * se)
     # Clouds of equal N are exchangeable: within each N the sorted run is a valid draw.
     assert not np.allclose(x0, x1)
+
+
+def test_fit_sorted_by_multiplicity_matches_file_order(tmp_path):
+    from omnilearned.sbi.fit import run_fit
+    from omnilearned.sbi.observations import Observations
+
+    sur = _variable_surrogate()
+    x, mask = sur.sample([0.5, 1.0], 40, None, seed=3, nsteps=4)
+    assert len(set(mask.sum(1).tolist())) > 3
+    obs = Observations(x.astype(np.float64), mask, np.arange(40) + 77, None, (), ("eta", "phi", "lpt"),
+                       "sha", "mem")
+    docs = {}
+    for sort in (False, True):
+        cfg = {"schema": "omnilearned-sbi-fit-v1", "device": "cpu",
+               "output_prefix": str(tmp_path / f"s{int(sort)}" / "fit"),
+               "grid": {"a": [0.3, 0.5, 0.7], "b": [1.0, 1.5]},
+               "likelihood": {"solver": "midpoint", "nsteps": 4, "num_probes": 2,
+                              "probe_schedule": "per_step"},
+               "scan": {"event_chunk": 8, "candidate_chunk": 3, "sort_by_multiplicity": sort}}
+        docs[sort] = run_fit(cfg, surrogate=sur, observations=obs, log=lambda m: None)
+    from omnilearned.sbi.scan import ScanResult
+
+    a, b = (ScanResult.load(str(tmp_path / f"s{i}" / "fit")) for i in (0, 1))
+    np.testing.assert_allclose(b.per_event, a.per_event, rtol=0, atol=1e-5)  # file order kept
+    np.testing.assert_allclose(b.loglik, a.loglik, rtol=0, atol=1e-4)
+    assert docs[True]["provenance"]["evaluation_order"] == "sorted by multiplicity"

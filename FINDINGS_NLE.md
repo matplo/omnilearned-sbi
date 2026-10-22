@@ -161,8 +161,8 @@ float32), condition θ in [−1, 1] plus N/100.
 
 ## Open items
 
-- Fit cost: sort observed events by N before chunking in `log_prob`/`make_logp_fn` (as for
-  sampling) before M4/M5.
+- ~~Fit cost: sort observed events by N~~: done, `[scan].sort_by_multiplicity` (default
+  true); per-event outputs stay in file order (test).
 - Trainer: cap CPU threads / draw training noise on the GPU (speed note in M2).
-- The `sbi-fit` measure string still says "fixed multiplicity"; with a multiplicity model the
-  per-event value is log p(N|θ) + log q(x|N,θ). Update the provenance text.
+- ~~`sbi-fit` measure string~~: now states log p(N|θ) + log q(x|N,θ) when the checkpoint has
+  a multiplicity model.

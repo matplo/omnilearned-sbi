@@ -28,6 +28,7 @@ numerical options. It has no truth section. Example (TOML)::
     [scan]
     event_chunk = 256
     candidate_chunk = 8
+    sort_by_multiplicity = true       # default; evaluation order only, outputs in file order
     max_seconds = 900
     refine = {rounds = 1, delta_logpost = 12.0, points = [9, 9]}
     # or, instead of refine: evaluate only the supported region of [grid]
@@ -151,6 +152,21 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
         raise ValueError("observation hash does not match fit configuration")
     options = LikelihoodOptions.from_dict(cfg.get("likelihood", {}))
     scan_cfg = cfg.get("scan", {})
+    # Evaluate events in order of multiplicity: a chunk costs its largest N, so sorted
+    # chunks skip most padded work. Per-event values do not depend on the chunking
+    # (probes are keyed by event id); per-event outputs are put back in file order.
+    inv = None
+    if scan_cfg.get("sort_by_multiplicity", True):
+        order = np.argsort(obs.mask.sum(1), kind="stable")
+        inv = np.empty_like(order)
+        inv[order] = np.arange(order.size)
+        obs = obs.subset(order)
+
+    def file_order(res):
+        if inv is not None and res.per_event is not None:
+            res.per_event = res.per_event[:, inv]
+        return res
+
     mode = cfg.get("mode", "fixed_vector")
     out_prefix = cfg["output_prefix"]
     os.makedirs(os.path.dirname(out_prefix) or ".", exist_ok=True)
@@ -159,10 +175,14 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
         "checkpoint_sha256": surrogate.metadata.get("checkpoint_sha256"),
         "observations_sha256": obs.sha256,
         "n_events": len(obs),
+        "evaluation_order": "sorted by multiplicity" if inv is not None else "file",
         "device": dev.to_dict(),
         "likelihood_options": options.to_dict(),
-        "measure": "physical-coordinate conditional density of the observed "
-                   "constituent features given the selection (fixed multiplicity)",
+        "measure": ("log p(N | theta) + log q(x | N, theta): multiplicity model plus the "
+                    "physical-coordinate density of the observed constituent features, "
+                    "given the selection" if surrogate.multiplicity is not None else
+                    "physical-coordinate conditional density of the observed "
+                    "constituent features given the selection (fixed multiplicity)"),
         "log_norm": None if log_norm_fn is None else getattr(log_norm_fn, "description", "callable"),
     }
     provenance.update(extra_provenance or {})
@@ -183,6 +203,7 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
                            log_prior=_prior(cfg, grid), log_norm_fn=log_norm_fn,
                            keep_per_event=True, progress=progress,
                            max_seconds=scan_cfg.get("max_seconds"))
+        file_order(res)
         res.diagnostics["likelihood"] = diag
         d = res.diagnostics
         log(f"support scan: grid {grid.shape} evaluated {d['evaluated']}/{d['grid_size']} "
@@ -201,6 +222,7 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
                              log_prior=_prior(cfg, grid), log_norm_fn=log_norm_fn,
                              keep_per_event=True, progress=progress,
                              max_seconds=scan_cfg.get("max_seconds"))
+            file_order(res)
             res.diagnostics.update({"likelihood": diag, "round": r})
             prefix = f"{out_prefix}_round{r}"
             res.save(prefix, extra={"provenance": provenance})
@@ -215,7 +237,7 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
         doc = res.save(out_prefix, extra={"provenance": provenance, "rounds": rounds})
     elif mode == "local_variable":
         doc = _run_local(cfg, surrogate, obs, options, scan_cfg, local_log_weight_fn,
-                         log_norm_fn, provenance, out_prefix, progress, log)
+                         log_norm_fn, provenance, out_prefix, progress, log, file_order)
     else:
         raise ValueError(f"unknown fit mode {mode}")
     doc["wall_seconds"] = time.time() - start
@@ -225,7 +247,7 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
 
 
 def _run_local(cfg, surrogate, obs, options, scan_cfg, weight_fn, log_norm_fn,
-               provenance, out_prefix, progress, log):
+               provenance, out_prefix, progress, log, file_order=lambda r: r):
     """Shared parameters on a grid; local variable integrated per event."""
     if weight_fn is None:
         raise ValueError("local_variable mode needs local_log_weight_fn")
@@ -240,6 +262,7 @@ def _run_local(cfg, surrogate, obs, options, scan_cfg, weight_fn, log_norm_fn,
                      candidate_chunk=scan_cfg.get("candidate_chunk", 8),
                      keep_per_event=True, progress=progress,
                      max_seconds=scan_cfg.get("max_seconds"))
+    file_order(res)
     per = res.per_event.reshape(len(nodes), grid.size, len(obs))
     if log_norm_fn is not None:
         ln = np.asarray(log_norm_fn(full.points()), dtype=np.float64)
