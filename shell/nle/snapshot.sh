@@ -11,6 +11,9 @@ if [ ! -f "$DEST/SOURCE_REVISION" ]; then
   mkdir -p "$DEST"
   git -C "$REPO" archive "$REV" | tar -x -C "$DEST"
   echo "$REV" > "$DEST/SOURCE_REVISION"
+  # hatch-vcs writes _version.py at install time; it is not tracked by git.
+  printf 'version = __version__ = "0+snapshot.g%s"\nversion_tuple = __version_tuple__ = (0, "snapshot", "g%s")\n' \
+    "${REV:0:9}" "${REV:0:9}" > "$DEST/src/omnilearned/_version.py"
   chmod -R a-w "$DEST"
 fi
 echo "$DEST"

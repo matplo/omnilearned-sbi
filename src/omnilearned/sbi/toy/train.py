@@ -39,6 +39,7 @@ from omnilearned.sbi.observations import file_sha256
 from omnilearned.sbi.toy.simulator import PARAMETERS
 from omnilearned.sbi.transforms import FeatureTransform
 from omnilearned.sbi.velocity import SetFlowVelocity
+from omnilearned.sbi.velocity_pet import SmoothPETVelocity
 
 FEATURES = ["eta", "phi", "log_pt_over_GeV"]
 
@@ -74,12 +75,16 @@ def build_surrogate(args, train, val, out, log=print):
                                      device=dev.device, log=log)
     mhist["seconds"] = time.time() - t0
 
-    model = SetFlowVelocity(3, layout.dim, dim=args.dim, depth=args.depth, heads=args.heads,
-                            cond_embed=True, cond_to_particles=True)
+    if args.arch == "set":
+        model = SetFlowVelocity(3, layout.dim, dim=args.dim, depth=args.depth, heads=args.heads,
+                                cond_embed=True, cond_to_particles=True)
+    else:
+        model = SmoothPETVelocity(3, layout.dim, dim=args.dim, depth=args.depth, heads=args.heads,
+                                  local_dim=args.local_dim)
     opts = TrainOptions(**{f.name: getattr(args, f.name) for f in fields(TrainOptions)
                            if hasattr(args, f.name)})
     tr, va = prepare(train, transform, layout), prepare(val, transform, layout)
-    meta = {"backend": "toy-quenching-v2", "parameters": list(PARAMETERS), "box": BOX,
+    meta = {"backend": "toy-quenching-v2", "arch": args.arch, "parameters": list(PARAMETERS), "box": BOX,
             "train_options": opts.to_dict(), "tf32_training": bool(args.tf32),
             "n_params": int(sum(p.numel() for p in model.parameters()))}
 
@@ -107,6 +112,10 @@ def main(argv=None):
     ap.add_argument("--data-dir", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--config", default=str(V2_CONFIG))
+    ap.add_argument("--arch", default="set", choices=["set", "pet_smooth"],
+                    help="SetFlowVelocity or SmoothPETVelocity (PET2 with smooth locality)")
+    ap.add_argument("--local-dim", dest="local_dim", type=int, default=64,
+                    help="pet_smooth: width of the pairwise local messages")
     ap.add_argument("--dim", type=int, default=128)
     ap.add_argument("--depth", type=int, default=4)
     ap.add_argument("--heads", type=int, default=4)

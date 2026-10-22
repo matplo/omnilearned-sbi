@@ -170,6 +170,10 @@ def build_velocity(config):
     arch = config.pop("architecture", "set_transformer")
     if arch == "set_transformer":
         return SetFlowVelocity(**config)
+    if arch == "pet_smooth":
+        from omnilearned.sbi.velocity_pet import SmoothPETVelocity
+
+        return SmoothPETVelocity(**config)
     if arch == "pet2":
         from omnilearned.network import PET2
 
