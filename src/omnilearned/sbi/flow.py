@@ -26,7 +26,7 @@ import numpy as np
 import torch
 
 from omnilearned.sbi.base import base_from_dict
-from omnilearned.sbi.device import resolve_device, synchronize
+from omnilearned.sbi.device import ieee_float32, resolve_device, synchronize
 from omnilearned.sbi.likelihood import (
     frozen_for_inference,
     log_prob,
@@ -146,6 +146,7 @@ class FlowSurrogate:
         return np.asarray(x)[:, :w], m[:, :w]
 
     # ---- density --------------------------------------------------------
+    @ieee_float32()
     def log_prob(self, x_phys, mask, candidates, event_ids, options,
                  candidate_names=None, context=None):
         """Per-(event, candidate) physical-coordinate log densities.
@@ -192,6 +193,7 @@ class FlowSurrogate:
             out = out + lm
         return out, diag
 
+    @ieee_float32()
     def log_prob_paired(self, x_phys, mask, rows, event_ids, options,
                         candidate_names=None, context=None):
         """Log density of event i at its own parameter row ``rows[i]`` -> [N]."""
@@ -218,6 +220,7 @@ class FlowSurrogate:
         return out, diag
 
     # ---- generation -----------------------------------------------------
+    @ieee_float32()
     def sample(self, candidate, n, num_particles=None, seed=0, nsteps=64, solver="midpoint",
                candidate_names=None, batch=4096, pad_to=None, return_mask=False):
         """Physical-coordinate samples at one candidate.

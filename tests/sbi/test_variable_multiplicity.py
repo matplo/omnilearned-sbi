@@ -43,13 +43,34 @@ def test_v2_multiplicity_carries_medium_information(v2_jets):
     assert hi["n_constituents"].mean() > lo["n_constituents"].mean() + 8
 
 
+# Reference from the GPU node (2026-10-22). Selection, membership, masks and ids are
+# identical on every host; floats agree to roundoff only, because numpy picks
+# SIMD kernels per CPU (Perlmutter AMD Milan, AVX2, differed from the Intel
+# AVX-512 GPU node in the last bits, <= 1.4e-15 relative). The bitwise hashes
+# are recorded per instruction set.
+V2_DISCRETE = "199d00848e44ebb733f0390e2fceca826a364c39e5b80df86eb8853afb82a961"
+V2_FINGERPRINT = [
+    [-389.8388860008742, -394.51665392117053, -395.8486688738363, -382.6167465668338, 1047.8406948297177],
+    [-266.58037865893857, -251.62678592344065, -256.4102678869091, -260.9618149757064, 1486.7414014208553],
+    [-3364.0737369574185, -3328.951143611859, -3351.972003290646, -3305.8611329840905, 33689.765506368196],
+]
+V2_BITWISE = {
+    "avx512": "b50145838ae3d81b9b562f77715983f7e37fef9e46a2dca1860d122f68b23a8b",  # Intel Xeon 4210R, numpy 2.2.6
+    "avx2": "86870b042a6ab1162471207f56a109c271ad1e5310e708c31c48e8b72e08e2c2",  # Perlmutter Milan; also the GPU node with NPY_DISABLE_CPU_FEATURES=AVX512*
+}
+
+
 def test_v2_cross_host_reproducibility():
-    """Reference from the GPU node (2026-10-22): same arrays on any host."""
-    from omnilearned.sbi.toy.config import V2_CONFIG, array_sha256, sample_setting
+    from omnilearned.sbi.toy.config import (V2_CONFIG, array_sha256, discrete_sha256,
+                                            fingerprint_deviation, sample_setting)
 
     rec, man = sample_setting((6.0, 0.40, 0.65), 300, 424242, path=V2_CONFIG)
     assert man["accepted"] == 300 and man["attempted"] == 2227
-    assert array_sha256(rec) == "b50145838ae3d81b9b562f77715983f7e37fef9e46a2dca1860d122f68b23a8b"
+    assert discrete_sha256(rec) == V2_DISCRETE
+    assert fingerprint_deviation(rec, V2_FINGERPRINT) < 1e-12
+    h = array_sha256(rec)
+    if h not in V2_BITWISE.values():
+        pytest.skip(f"bitwise hash {h} not recorded for this instruction set (tolerance check passed)")
 
 
 def test_training_records_round_trip_and_trim(tmp_path, v2_jets):

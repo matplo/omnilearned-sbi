@@ -20,7 +20,7 @@ from dataclasses import dataclass, asdict
 import numpy as np
 import torch
 
-from omnilearned.sbi.device import synchronize, to_cpu_float64
+from omnilearned.sbi.device import ieee_float32, synchronize, to_cpu_float64
 
 
 FIXED_STEP_SOLVERS = ("euler", "midpoint", "rk4")
@@ -235,6 +235,7 @@ def _adaptive(rhs, x0, options):
     return final[:n].view_as(x0), final[n:]
 
 
+@ieee_float32()
 def log_prob(
     velocity,
     x,
@@ -338,6 +339,7 @@ def log_prob(
     return logp, diagnostics
 
 
+@ieee_float32()
 def sample(velocity, base, shape, mask, cond=None, nsteps=64, solver="midpoint",
            generator=None, device="cpu", noise=None):
     """Generate by integrating from base noise at t=1 to data at t=0."""

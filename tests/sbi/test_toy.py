@@ -7,7 +7,13 @@ import numpy as np
 import pytest
 
 from omnilearned.sbi.toy import simulator as toy
-from omnilearned.sbi.toy.config import array_sha256, load_toy_config, sample_setting
+from omnilearned.sbi.toy.config import (
+    array_sha256,
+    discrete_sha256,
+    fingerprint_deviation,
+    load_toy_config,
+    sample_setting,
+)
 from omnilearned.sbi.toy.design import (
     STREAMS,
     check_reservation,
@@ -136,8 +142,28 @@ def test_streams_distinct():
     assert len(set(STREAMS.values())) == len(STREAMS)
 
 
+# Reference from the GPU node (2026-10-21). Selection, membership, masks and ids are
+# identical on every host; floats agree to roundoff only, because numpy picks
+# SIMD kernels per CPU (Perlmutter AMD Milan, AVX2, differed from the Intel
+# AVX-512 GPU node in the last bits, <= 1.4e-15 relative). The bitwise hashes
+# are recorded per instruction set.
+V1_DISCRETE = "443fec07d8dc3490c1f7a38d6fa79cbca649a8977c606fd64ea401037790d5ab"
+V1_FINGERPRINT = [
+    [-185.05341870206786, -175.39699129478706, -172.92678241770008, -167.0061836101641, 885.8176767572654],
+    [-52.51585872493601, -46.14385327898238, -61.661106028358915, -71.07843031723925, 1326.7171855955053],
+    [1003.854018088133, 911.1579028446133, 899.5678731039002, 988.6587449115063, 26237.604901765564],
+]
+V1_BITWISE = {
+    "avx512": "63a9cf13542863418c643d8c377ee26e617c415bd91efba316f84dc1998d24d4",  # Intel Xeon 4210R, numpy 2.2.6
+    "avx2": "ca4c590c898ad4d1c285a4925fcf4890a32a91ac6ad5f7fc3202b9032afe560d",  # Perlmutter Milan; also the GPU node with NPY_DISABLE_CPU_FEATURES=AVX512*
+}
+
+
 def test_cross_host_reproducibility():
-    """Reference from the GPU node (2026-10-21): same arrays on any host."""
     rec, man = sample_setting((6.0, 0.40, 0.65), 300, 424242)
     assert man["accepted"] == 300 and man["attempted"] == 7760
-    assert array_sha256(rec) == "63a9cf13542863418c643d8c377ee26e617c415bd91efba316f84dc1998d24d4"
+    assert discrete_sha256(rec) == V1_DISCRETE
+    assert fingerprint_deviation(rec, V1_FINGERPRINT) < 1e-12
+    h = array_sha256(rec)
+    if h not in V1_BITWISE.values():
+        pytest.skip(f"bitwise hash {h} not recorded for this instruction set (tolerance check passed)")

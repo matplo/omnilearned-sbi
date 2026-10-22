@@ -76,10 +76,13 @@ conditioning ideas, not its inference.
 - **FastJet:** cppyy's precompiled header must not be rebuilt in a shared environment. Set
   `CLING_STANDARD_PCH=$TMPDIR/cling-$USER/allDict.cxx.pch` per node. Check with
   `python -c "from omnilearned.sbi.toy import reco; print(reco.fastjet_version())"`.
-- **Tests:** `pytest tests/sbi`. The cross-host check is `test_toy.py::test_cross_host_reproducibility`:
-  θ = (6.0, 0.40, 0.65), 300 jets, seed 424242, array sha256 `63a9cf13…d24d4`, 7760 attempts.
-  For v2: `test_variable_multiplicity.py::test_v2_cross_host_reproducibility`, with the same
-  θ, n and seed, sha256 `b5014583…b23a8b` and 2227 attempts.
+- **Tests:** `pytest tests/sbi` (about 2 min on a compute node; slow on login nodes). Run the
+  cross-host checks first: `test_toy.py::test_cross_host_reproducibility` and
+  `test_variable_multiplicity.py::test_v2_cross_host_reproducibility`, both at θ = (6.0, 0.40,
+  0.65), 300 jets, seed 424242 (7760 and 2227 attempts). Each requires the discrete content
+  (selection, masks, ids) to be identical and the float content to agree to roundoff
+  (`fingerprint_deviation < 1e-12`); the bitwise hash is per instruction set (lesson 9).
+  Expected on Perlmutter (AVX2): v1 `ca4c590c…afe560d`, v2 `86870b04…e08e2c2`.
   **If either fails, stop and report**: a non-reproducing toy invalidates everything downstream.
 - **Smoke chain** before scaling up:
   1. tiny data (e.g. 27 settings × 500 jets);
@@ -150,7 +153,8 @@ conditioning ideas, not its inference.
 - `design` (event-id streams, `rng_for(seed, *keys)`, reserved settings, `check_reservation`);
 - `records` (HDF5 writers; `read_training_set(trim=True)` cuts the padded axis to the
   largest real multiplicity);
-- `config.sample_setting` and `config.array_sha256`.
+- `config.sample_setting`; `config.array_sha256` (bitwise, per instruction set),
+  `config.discrete_sha256` and `config.float_fingerprint`/`fingerprint_deviation` (cross-host).
 
 ## 5. The toy and the inference problem
 
@@ -305,6 +309,19 @@ broadening and the soft energy fraction are as in v1. What changes:
    - **Judge closure by coverage and the joint-level distribution, and compare pulls with the
      exact-likelihood control, never with zero.** M5 is written that way.
    - The control is cheap: one extra dev-bias run with pseudo data sampled from the surrogate.
+9. **Perlmutter first day (2026-10-22).**
+   - The toy's bitwise hashes differ between this GPU node (Intel, AVX-512) and Perlmutter
+     (AMD Milan, AVX2): numpy dispatches different SIMD kernels for exp/log/sin. Disabling
+     AVX-512 here (`NPY_DISABLE_CPU_FEATURES="AVX512F AVX512CD AVX512_SKX …"`) reproduces the
+     Perlmutter hashes exactly. Floats differ by ≤ 1.4e-15 relative; selection, membership,
+     masks, multiplicities, ids and attempt counts are identical. The cross-host tests now
+     check exactly that; bitwise hashes are recorded per instruction set.
+   - Upstream `omnilearned/train.py` calls `torch.set_float32_matmul_precision("high")` at
+     import, i.e. TF32 on the A100 (~1e-3 relative). After `test_cli_device` imported it,
+     the CUDA likelihood tests failed at 2e-3. The TITAN RTX has no TF32, so this never showed
+     here. `device.ieee_float32()` now wraps `likelihood.log_prob`/`sample` and
+     `FlowSurrogate.log_prob`/`log_prob_paired`/`sample`; direct model calls in new code that
+     feed a density must use it too. Training may keep TF32 (record it).
 
 ## 7. Work plan
 
@@ -337,8 +354,10 @@ hours) and a commit.
   Readers cut the padded axis to the largest real N (`read_training_set(trim=True)`).
   2 M jets × 70 × 3 float32 is about 1.7 GB in memory. Write a reader that serves batches
   without loading everything if the data exceed host RAM.
-- **Acceptance:** shard hashes reproducible; the reproducibility test passes on several node
-  types; per-point acceptance recorded.
+- **Acceptance:** shard hashes reproducible (all Perlmutter nodes are Milan, so bitwise within
+  Perlmutter); record `discrete_sha256` and `float_fingerprint` per shard as well, for
+  comparisons across instruction sets; the reproducibility tests pass on login, CPU and GPU
+  nodes; per-point acceptance recorded.
 
 ### M2: Generators (GPU)
 Train **both** backbones at equal data and compute budget; the fidelity gate (M3) decides.
@@ -354,6 +373,7 @@ Train **both** backbones at equal data and compute budget; the fidelity gate (M3
 Common to both:
 - DDP across GPUs;
 - bf16 only if the likelihood check in M4 passes at float32 evaluation (train mixed, evaluate fp32);
+- evaluation is IEEE float32 (`device.ieee_float32`, lesson 9), whatever the training precision;
 - EMA, cosine schedule, checkpoint by validation flow-matching loss of the EMA weights;
 - log GPU hours.
 

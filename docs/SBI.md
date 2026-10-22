@@ -98,8 +98,10 @@ relevant supported region.
 application): `simulator.sample_toy`, FastJet reconstruction (`reco`, through hepyy/cppyy),
 the selection for generated clouds (`selection.select_clouds`), jet observables, seeded
 streams (`design.rng_for`) and record writers. Constants: `configs/toy-quenching-v1.toml`.
-`config.array_sha256` gives a platform-independent hash of drawn records
-(`tests/sbi/test_toy.py::test_cross_host_reproducibility`). Plan: `PLAN_NLE_PERLMUTTER.md`.
+`config.array_sha256` hashes drawn records bitwise; it is stable per CPU instruction set
+(numpy's SIMD kernels differ in the last bits between AVX-512 and AVX2). Across hosts,
+`config.discrete_sha256` must match exactly and `config.fingerprint_deviation` must be at
+roundoff (`tests/sbi/test_toy.py::test_cross_host_reproducibility`). Plan: `PLAN_NLE_PERLMUTTER.md`.
 
 `toy-quenching-v2` (`simulator_v2`, `configs/toy-quenching-v2.toml`) has variable
 multiplicity. Core and medium-induced soft particle counts are Poisson, and the observed

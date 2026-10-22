@@ -8,9 +8,9 @@ import pytest
 import torch
 
 from omnilearned.sbi.base import GaussianBase
-from omnilearned.sbi.device import resolve_device, mps_available
+from omnilearned.sbi.device import ieee_float32, resolve_device, mps_available
 from omnilearned.sbi.flow import TrainOptions, flow_matching_loss, train_flow
-from omnilearned.sbi.likelihood import LikelihoodOptions, log_prob
+from omnilearned.sbi.likelihood import LikelihoodOptions, log_prob, sample
 from omnilearned.sbi.velocity import SetFlowVelocity
 
 needs_mps = pytest.mark.skipif(not mps_available(), reason="MPS not available")
@@ -58,6 +58,32 @@ def test_mps_to_cpu_float64_conversion():
         print(f"fused MPS->CPU float64 conversion is broken in torch {torch.__version__}")
 
 
+
+def test_density_and_sampling_ignore_global_tf32():
+    """omnilearned.train enables TF32 at import (Perlmutter A100: CUDA tests failed
+    at 2e-3 after test_cli_device imported it); log_prob and sample must not see it."""
+    seen = []
+
+    def velocity(x, t, cond, mask):
+        seen.append((torch.get_float32_matmul_precision(), torch.backends.cudnn.allow_tf32))
+        return -x
+
+    x = torch.randn(4, 5, 3)
+    mask = torch.ones(4, 5, dtype=torch.bool)
+    base = GaussianBase.standard(3)
+    o = LikelihoodOptions(solver="midpoint", nsteps=2, divergence="exact")
+    before = (torch.get_float32_matmul_precision(), torch.backends.cudnn.allow_tf32)
+    try:
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cudnn.allow_tf32 = True
+        log_prob(velocity, x, mask, base, options=o)
+        sample(velocity, base, (4, 5, 3), mask, nsteps=2)
+        assert seen and set(seen) == {("highest", False)}
+        assert torch.get_float32_matmul_precision() == "high" and torch.backends.cudnn.allow_tf32
+    finally:
+        torch.set_float32_matmul_precision(before[0])
+        torch.backends.cudnn.allow_tf32 = before[1]
+
 @accelerators
 @pytest.mark.parametrize("schedule", ["per_event", "per_step"])
 def test_likelihood_matches_cpu(dev, schedule):
@@ -97,12 +123,13 @@ def test_input_derivatives_match_cpu(dev):
     cond = torch.randn(8, 2)
     eps = torch.randn(8, 16, 3)
     grads = []
-    for d in ["cpu", dev]:
-        m = model.to(d)
-        xi = x.to(d).requires_grad_(True)
-        v = m(xi, t.to(d), cond.to(d), mask.to(d))
-        (g,) = torch.autograd.grad(v, xi, grad_outputs=eps.to(d))
-        grads.append(g.cpu())
+    with ieee_float32():  # a direct model call; log_prob and sample set this themselves
+        for d in ["cpu", dev]:
+            m = model.to(d)
+            xi = x.to(d).requires_grad_(True)
+            v = m(xi, t.to(d), cond.to(d), mask.to(d))
+            (g,) = torch.autograd.grad(v, xi, grad_outputs=eps.to(d))
+            grads.append(g.cpu())
     np.testing.assert_allclose(grads[1].numpy(), grads[0].numpy(), atol=1e-4)
 
 

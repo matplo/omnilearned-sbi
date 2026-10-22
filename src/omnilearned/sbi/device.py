@@ -6,6 +6,7 @@ selected silently here: callers ask for a device and receive a record of what
 was actually used, including any explicitly permitted fallback.
 """
 
+import contextlib
 from dataclasses import dataclass, asdict
 
 import torch
@@ -102,3 +103,23 @@ def synchronize(device):
         torch.cuda.synchronize(device)
     elif device.type == "mps":
         torch.mps.synchronize()
+
+
+@contextlib.contextmanager
+def ieee_float32():
+    """Full IEEE float32 matmuls and convolutions (no TF32) inside the block.
+
+    ``omnilearned.train`` calls ``torch.set_float32_matmul_precision("high")``
+    at import, which turns on TF32 on Ampere and newer GPUs (A100: inputs
+    rounded to ~1e-3 relative). Densities, divergences and generated samples
+    must not depend on what else was imported. Previous settings are restored
+    on exit; usable as a decorator.
+    """
+    matmul, cudnn = torch.get_float32_matmul_precision(), torch.backends.cudnn.allow_tf32
+    torch.set_float32_matmul_precision("highest")
+    torch.backends.cudnn.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.set_float32_matmul_precision(matmul)
+        torch.backends.cudnn.allow_tf32 = cudnn
