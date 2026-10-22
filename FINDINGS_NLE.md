@@ -3,19 +3,23 @@
 Brief: `PLAN_NLE_PERLMUTTER.md`. Newest entries at the bottom of each section. Every result
 records source revision, dirty status and device.
 
-## Resume here (state for picking up after an interrupted job)
+## Resume here (state at the end of interactive job 60098593, 2026-10-22 ~05:15 PDT)
 
-- Done: §3 first day (all checks pass), M1 data, M2 trainings started (see M2 below).
-- In flight at the time of writing (interactive job 60098593, ends ~05:21 PDT 2026-10-22):
-  three trainings on nid003988 GPUs 0–2 (`$JEST_NLE_ROOT/runs/m2/*`). Each `checkpoint.pt`
-  holds the best EMA state so far (written at every validation improvement after step 10k),
-  `run.json` appears only at the end, `command.txt` has the exact command.
-- Next: M3 gate of each finished checkpoint (`shell/nle/gate_gpu.sbatch`, resumable per
-  point), sampler convergence on the final checkpoints, then M4/M5 on the chosen generator.
-- Detailed step status: `$JEST_NLE_ROOT/manifests/first_day/STATUS.md`.
+- Done: §3 first day (all checks pass); M1 (data, fidelity samples, development scans,
+  CPU-node reproducibility); M2 first round (SetFlow 100k, SmoothPET 66k and 100k, trained);
+  M3 drivers (gate, shift, convergence, multiplicity check) and **interim M3 results: the
+  first-round generators do not pass the gate** (details in "M3 interim results").
+- Pending batch jobs (resumable, they skip finished points): 60101552 gate `set_d256_L6`,
+  60101555 gate `pet_d256_L6_66k` (regular GPU, ≤ 2 h each; queue estimate was days).
+  No batch gate submitted for `pet_d256_L6_100k` (its post_train was cut by the job end;
+  rerun `shell/nle/post_train.sh` or `gate_gpu.sbatch` if needed).
+- After they finish: `python -m omnilearned.sbi.toy.gate summarize --out runs/m3/<run>/gate
+  --n-settings 128`.
+- **Decisions needed from the user** are listed under "Open items" (top three).
+- Detailed step log: `$JEST_NLE_ROOT/manifests/first_day/STATUS.md`.
 - Batch jobs run from read-only source snapshots (`shell/nle/snapshot.sh` →
   `$JEST_NLE_ROOT/src_snapshots/<rev>`, `PYTHONPATH=<snapshot>/src`), so editing or switching
-  this checkout cannot reach them.
+  this checkout cannot reach them. Submit from inside an allocation with `SLURM_*` unset.
 
 ## Environment (Perlmutter)
 
@@ -220,7 +224,74 @@ float32), condition θ in [−1, 1] plus N/100.
   v1 (1.0 M = 3.3 M); a smaller model, fewer probes or fewer steps must pass M4 numerics
   first. Decision point after the gate results.
 
+## M3 interim results (2026-10-22, in-session, partial)
+
+All gate numbers: 22 000 generated clouds per point (N from p(N|θ), midpoint-128, IEEE
+float32, sorted by N), selected with the toy's v2 selection (≥ 20 000 kept), against 20 000
+direct `fidelity` jets; 200 permutations; relevance at N = 1000. Source snapshot 86941c9.
+
+- **`set_d256_L6` gate, 24 of 128 points** (`runs/m3/set_d256_L6/gate`, summary with
+  `--n-settings 128`, α/S = 3.9e-4): **4 FAIL** (points 5, 7, 25, 31), 8 significant;
+  **20 of 24 family-wise p-values < 0.01** (KS against uniform p = 7e-20). Relevant
+  observables (2-se lower bound > 0.5 se at N = 1000): multiplicity N at 8 points, width at
+  5, jet pT at 3, soft-8 at 3. Max relevance 3.98 (point 5, τ_init = 0.20 edge: N +12.5 se,
+  soft-8 −5.7 se). Typical relevance of the jet-pT and width offsets 1.0–1.5 at N = 1000.
+  Surrogate selection acceptance 0.90–0.96.
+- **Multiplicity model is the largest single defect** (`multiplicity_check check`, all 128
+  validation points, 20 000 direct jets each, `runs/m3/mult`): the trained p(N|θ)
+  (128 × 3 SiLU, 4000 steps) has rms z 3.48, max |z| 17, binned χ² p < 0.01 at 40/128 points,
+  max relevance 3.9 at N = 1000 (mean N off by +0.73 at point 5, +0.46 at points 69 and 72;
+  worst near τ_init = 0.2). PET's independently trained p(N|θ) is the same (rms z 4.1).
+  The gate's N offsets equal the p(N|θ) offsets (point 5: +0.726 vs +0.746 after
+  selection), so the flow and the selection are not the cause.
+  - Retrained (256 × 4, 30k steps, batch 8192, `multiplicity_check retrain`, 357 s on
+    GPU; `runs/m3/mult/set_d256_L6_mult256x4.pt`, same flow): rms z 2.10, max relevance
+    1.46, but χ² p < 0.01 at 75/128; validation NLL unchanged (3.4484 → 3.4486), i.e. the
+    validation NLL cannot see these errors.
+  - Passing relevance at N = 1000 needs |Δ mean N| ≲ 0.1 (σ_N ≈ 7), while the training
+    data have 2000 jets per point (se of mean N ≈ 0.16). p(N|θ) needs far more (θ, N)
+    pairs; they are cheap to make (the same toy run; ~1600 CPU-s per 2 M jets, minutes on
+    one node; only N and θ need storing) — or a smoother parametrization.
+- **Sampler convergence** (64 / 128 / 256 midpoint steps, 8192 paired clouds, points 0 and
+  64): `set` max shift 0.11 → 0.02 se; `pet_66k` 0.23 → 0.03 se; `pet_100k` 0.06 → 0.01 se.
+  128 steps are converged for all three.
+- **Equivalent parameter shift** (`runs/m3/<run>/shift.json`; G from the development lines,
+  development point and 10 tube points at τ_init 0.95):
+  - `set`: development point δθ = (+1.72 ± 0.91 fm, +0.040 ± 0.022 GeV, −0.12 ± 0.07 fm/c),
+    (+0.59, +0.55, −0.56) marginal σ at N = 1000; along the tube 0.0–0.8 marginal σ.
+    Each component is within 2 se of 0, but **the se is 6.5 conditional σ along the
+    tube**, so the per-parameter test has no power there. In the constrained direction,
+    √(N δθᵀFδθ) at N = 1000 is 1.10 at the development point and 0.32–1.95 along the tube
+    (noise level ≈ 0.55): a bias of ≈ 1 posterior σ of the best-measured combination at
+    N = 1000. The plan requires ≤ 0.2 σ, so on the strict reading **this fails**.
+  - `pet_66k`: development δθ = (+2.45 ± 0.91, +0.054 ± 0.022, −0.14 ± 0.07), (+0.84, +0.75,
+    −0.67) marginal σ; tube 0.0–0.4 marginal σ (b = 1–6). Acceptance 0.87–0.92 (lowest).
+  - `pet_100k`: development δθ = (+1.38 ± 0.90, +0.031 ± 0.022, −0.078 ± 0.067), (+0.47,
+    +0.43, −0.36) marginal σ; acceptance 0.945. The best of the three at the development
+    point (tube not finished before the job ended).
+  - Proposed for the M3 report: quote the constrained-direction statistic
+    √(N δθᵀFδθ) with its null level next to the per-parameter δθ, because the
+    per-parameter criterion is uninformative along the degeneracy. (Not a re-definition of
+    a criterion: no M3 verdict has been declared; both are recorded.)
+- Interim conclusion (development and validation data only): **the first-round v2
+  generators do not pass M3**. The largest defect is p(N|θ). The flow itself also shows
+  relevant width and jet-pT offsets at several points (relevance 1.0–1.5 at N = 1000), as
+  in lesson 5 before the data scale-up. The PET backbone at equal steps (100k) looks at
+  least as good as SetFlow at the development point; at equal GPU time (66k) it is worse.
+  Backbone choice waits for the complete gates.
+
 ## Open items
+
+- **Decision (user): M5 compute.** With the scaled models a fit candidate costs 8.4 s
+  (SetFlow) / 11 s (SmoothPET) at N = 250 on an A100 in IEEE float32. M5 as written is several
+  hundred GPU-hours; M6 more. Options: accept the budget, or test smaller models / cheaper
+  numerics under M4 first (lesson 7: capacity did not matter for v1).
+- **Next technical step (no decision needed unless the user objects):** p(N|θ) data. Generate
+  N-only training data (≥ 20 k jets per training point, ~20 M jets, one CPU node for a few
+  minutes) and retrain p(N|θ); re-check with `multiplicity_check`. Then a second-round flow
+  training with more data per point (e.g. 1024 × 6000) and the gate again.
+- **M3 criterion reading:** the δθ ≤ 0.2 σ requirement on per-parameter σ is not informative
+  along the tube; see the proposal above (both numbers recorded).
 
 - ~~Fit cost: sort observed events by N~~: done, `[scan].sort_by_multiplicity` (default
   true); per-event outputs stay in file order (test).
