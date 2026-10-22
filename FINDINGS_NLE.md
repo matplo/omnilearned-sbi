@@ -360,6 +360,31 @@ stream number changed.
   16, TF32 training, val every 2000 × 16 batches). 200k × 512 = 17 epochs of `v2_m2` (round
   1: 25 epochs of `v2_m1`). Their own p(N|θ) (4000 steps) will be replaced by
   `set_d256_L6_multC64` via `attach` before the gate.
+- **Shifts with the new p(N|θ)** (`gate shift`, 22 000 clouds, midpoint-128; development
+  point and 10 tube points). Constrained-direction statistic √(N δθᵀFδθ) at N = 1000
+  (null level ≈ 0.55):
+
+  | run | development | tube b = 1…10 | max |
+  |---|---|---|---|
+  | `set` old p(N) | 1.10 | 1.95 1.84 0.99 0.90 0.35 0.32 0.95 0.76 1.37 0.96 | 1.95 |
+  | `set_multC64` | 1.32 | 0.78 1.01 0.30 0.58 0.60 0.60 1.18 0.79 0.66 0.79 | 1.32 |
+  | `pet100k` old p(N) | 1.01 | 1.81 1.94 1.12 0.98 0.31 0.26 0.86 0.73 1.28 0.82 | 1.94 |
+  | `pet100k_multC64` | 1.27 | 0.71 0.99 0.25 0.46 0.40 0.43 0.97 0.86 0.60 0.77 | 1.27 |
+
+  The tube improves (worst 1.9 → 1.0–1.2); the development point does not. Per-parameter δθ
+  at the development point: `set` (+2.05 ± 0.91 fm, +0.047 ± 0.022 GeV, −0.099 ± 0.067),
+  `pet100k` (+1.86, +0.042, −0.078), i.e. 0.6–0.7 marginal σ in b and T_ref; the shifts are
+  now coherent along the tube (+b, +T_ref, −τ_init at every point). Still a fail on the
+  strict 0.2 σ reading.
+- **What is left at the development point is the flow, not p(N|θ).** Mean offsets of the
+  selected surrogate jets there: jet pT **+0.52 GeV** (`set`) / +0.21 (`pet100k`), N −0.18 /
+  −0.21. p(N|θ) itself at that point is right: `multiplicity_check check` against the
+  development scans (`runs/m3/mult/check_set_d256_L6_multC64_devscan.json`, 46 points ×
+  20 000 jets): ΔN −0.03 ± 0.05 at (7.5, 0.30, 0.95); all 46: rms z 1.56, χ² p < 0.01 at 1,
+  worst at the b = 11 box edge (+0.24, z 6.8). The N deficit after selection comes from
+  the surrogate's own selection losses (acceptance 0.94: 874 `not_one_jet`, 464 `jet_pt`
+  of 22 000), which remove high-N clouds preferentially. Both defects belong to the flow:
+  round 2 (`v2_m2`) is the fix to test; the surrogate acceptance is the quick indicator.
 
 ## M5 tooling: closure campaigns (2026-10-22, login node; code be669bd + fixed-axis fix)
 
