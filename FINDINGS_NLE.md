@@ -388,7 +388,9 @@ stream number changed.
   round 2 (`v2_m2`) is the fix to test; the surrogate acceptance is the quick indicator.
 
 - **End of session 2 (19:58, job 60132411 reached its 4 h limit):** `set_d256_L6_multC64` gate
-  complete (128/128, `runs/m3/set_d256_L6_multC64/gate`; summarize pending). `pet100k_multC64`
+  complete: **128/128, 9 FAIL, 22 significant, 104/128 p < 0.01 → M3 fails** (`summary.txt`).
+  FAILs on width/outer fraction and jet pT (points 13 27 37 44 50 56 84 98 117; max relevance
+  2.6 at point 84); N relevant only at the box corner 98. The flow, not p(N|θ), now fails. `pet100k_multC64`
   84/128; the rest submitted as **60141872** (`gate_gpu.sbatch`, regular, 4 GPUs, 1.5 h,
   snapshot d13fd04; resumable, skips finished points). The closure concurrency test was
   prepared but not run (`runs/m5/conc/{spec.toml,run.sh,per1,per2}`; `run.sh 1` then
