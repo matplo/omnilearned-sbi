@@ -56,9 +56,10 @@ inside an allocation with `SLURM_*` unset. On a login node run tests with
 | 2026-10-22 | M1 acceptance | 60101162 (cpu, debug) | 1 × 0.04 | shard regeneration on nid006833 + cross-host tests |
 | 2026-10-22 | M3 | 60101552 (gpu, regular) | 0 (cancelled while pending) | gate of `set_d256_L6` with the old p(N\|θ) |
 | 2026-10-22 | M3 | 60101555 (gpu, regular) | 0 (cancelled while pending) | gate of `pet_d256_L6_66k` with the old p(N\|θ) |
-| 2026-10-22 | M3, M2 round 2 | 60132411 (interactive, urgent_gpu_ss11, nid003940) | 1 × 4 | p(N\|θ) on all counts, gates of `set` / `pet100k` with it, `v2_m2` data |
+| 2026-10-22 | M3, M2 round 2 | 60132411 (interactive, urgent_gpu_ss11, nid003940, ran to the 4 h limit) | 1 × 4 | p(N\|θ) on all counts, gates of `set` / `pet100k` with it, `v2_m2` data |
 | 2026-10-22 | M2 round 2 | 60133655 (gpu, shared, 1 GPU, 3.5 h limit) | pending | `set_d256_L6_200k` on `v2_m2` |
 | 2026-10-22 | M2 round 2 | 60133656 (gpu, shared, 1 GPU, 5 h limit) | pending | `pet_d256_L6_200k` on `v2_m2` |
+| 2026-10-22 | M3 | 60141872 (gpu, regular, 4 GPUs, 1.5 h limit) | pending | rest of the `pet100k_multC64` gate |
 
 Interactive job 60098593 used: 4 GPUs × ~4 h (3 trainings ≈ 1.3, 1.3, 1.6 GPU-h; M3
 sampling, shifts, gate points and fit timing on the rest) and the node's CPUs for all toy
@@ -385,6 +386,13 @@ stream number changed.
   the surrogate's own selection losses (acceptance 0.94: 874 `not_one_jet`, 464 `jet_pt`
   of 22 000), which remove high-N clouds preferentially. Both defects belong to the flow:
   round 2 (`v2_m2`) is the fix to test; the surrogate acceptance is the quick indicator.
+
+- **End of session 2 (19:58, job 60132411 reached its 4 h limit):** `set_d256_L6_multC64` gate
+  complete (128/128, `runs/m3/set_d256_L6_multC64/gate`; summarize pending). `pet100k_multC64`
+  84/128; the rest submitted as **60141872** (`gate_gpu.sbatch`, regular, 4 GPUs, 1.5 h,
+  snapshot d13fd04; resumable, skips finished points). The closure concurrency test was
+  prepared but not run (`runs/m5/conc/{spec.toml,run.sh,per1,per2}`; `run.sh 1` then
+  `run.sh 2` on GPUs 0–1, compare seal timestamps per worker).
 
 ## M5 tooling: closure campaigns (2026-10-22, login node; code be669bd + fixed-axis fix)
 
