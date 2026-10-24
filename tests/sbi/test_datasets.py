@@ -359,10 +359,11 @@ def test_closure_claims_and_interleaved_workers(tiny_run, tmp_path):
     closure.prepare(spec, d2, log=lambda m: None)
     assert closure.claim(d1, 0) and not closure.claim(d1, 0)  # held by this live process
     lock = d1 / "fits" / "fit_0000" / "claim.lock"
-    lock.write_text(json.dumps({"job": None, "host": socket.gethostname(), "pid": 2 ** 22 + 12345, "time": time.time()}))
-    assert closure.claim(d1, 0)  # dead local process: stale
-    lock.write_text(json.dumps({"job": None, "host": "elsewhere", "pid": 1, "time": time.time() - 6 * 3600}))
-    assert closure.claim(d1, 0)  # too old: stale
+    for stale in ({"job": None, "host": socket.gethostname(), "pid": 2 ** 22 + 12345, "time": time.time()},
+                  {"job": None, "host": "elsewhere", "pid": 1, "time": time.time() - 6 * 3600}):
+        lock.write_text(json.dumps(stale))  # dead local process / too old
+        assert not closure.claim(d1, 0)  # workers never reclaim
+        assert closure.unlock_stale([d1], log=lambda m: None) == 1 and closure.claim(d1, 0)
     closure.release(d1, 0)
     os.environ.pop("SLURM_JOB_ID", None)
     assert closure.run_claiming([d1, d2], log=lambda m: None) == 4
@@ -395,3 +396,54 @@ def test_chunked_transform_fit_and_prepare_match_one_shot():
     assert a["u"].dtype == torch.float32 and torch.equal(a["u"], b["u"]) and torch.equal(a["cond"], b["cond"])
     ref = one.forward(torch.as_tensor(x, dtype=torch.float64), torch.as_tensor(mask))[0].float()
     assert torch.equal(a["u"], ref)
+
+
+def _claim_racer(args):
+    import time
+
+    from omnilearned.sbi.toy import closure
+
+    d, start = args
+    while time.time() < start:
+        pass
+    return closure.claim(d, 0)
+
+
+def test_concurrent_stale_reclaim_has_one_winner(tmp_path):
+    import multiprocessing as mp
+    import time
+
+    from omnilearned.sbi.toy import closure
+
+    stale = {"job": None, "host": "elsewhere", "pid": 1, "time": time.time() - 6 * 3600}
+    ctx = mp.get_context("fork")
+    for rep in range(20):
+        d = tmp_path / f"c{rep}"
+        lock = d / "fits" / "fit_0000" / "claim.lock"
+        lock.parent.mkdir(parents=True)
+        lock.write_text(json.dumps(stale))
+        with ctx.Pool(8) as pool:  # stale lock in place: nobody claims (no worker reclaim)
+            assert sum(pool.map(_claim_racer, [(d, time.time() + 0.3)] * 8)) == 0
+        closure.unlock_stale([d], log=lambda m: None)
+        with ctx.Pool(8) as pool:  # after the single cleanup: exactly one winner
+            wins = pool.map(_claim_racer, [(d, time.time() + 0.3)] * 8)
+        assert sum(wins) == 1, (rep, wins)
+        assert json.loads(lock.read_text())["host"] != "elsewhere"
+        assert not list(lock.parent.glob("claim.lock.stale.*"))
+
+
+def test_unlock_stale_keeps_live_locks(tmp_path):
+    import os
+    import socket
+    import time
+
+    from omnilearned.sbi.toy import closure
+
+    for k, info in enumerate([{"job": None, "host": "x", "pid": 1, "time": time.time() - 6 * 3600},
+                              {"job": None, "host": socket.gethostname(), "pid": os.getpid(), "time": time.time()}]):
+        p = tmp_path / "fits" / f"fit_{k:04d}" / "claim.lock"
+        p.parent.mkdir(parents=True)
+        p.write_text(json.dumps(info))
+    assert closure.unlock_stale([tmp_path], log=lambda m: None) == 1
+    assert not (tmp_path / "fits" / "fit_0000" / "claim.lock").exists()
+    assert (tmp_path / "fits" / "fit_0001" / "claim.lock").exists()

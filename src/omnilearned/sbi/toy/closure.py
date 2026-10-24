@@ -277,30 +277,56 @@ def lock_is_stale(info, max_age=5 * 3600.0):
 
 
 def claim(out, k):
-    """Atomically claim fit k (lock file); reclaims stale claims. Returns True if ours."""
+    """Atomically claim fit k with an exclusive lock file. Returns True if ours.
+
+    Workers never reclaim stale locks themselves (concurrent reclaimers race);
+    ``unlock_stale`` removes them, run once by a single process before workers start.
+    """
     import socket
 
     lock = Path(out) / "fits" / f"fit_{k:04d}" / "claim.lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
     info = {"job": os.environ.get("SLURM_JOB_ID"), "host": socket.gethostname(), "pid": os.getpid(),
             "time": time.time(), "gpu": os.environ.get("CUDA_VISIBLE_DEVICES")}
-    for _ in range(2):
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            try:
-                with open(lock) as f:
-                    old = json.load(f)
-            except (OSError, ValueError):
-                old = {"time": 0}
-            if not lock_is_stale(old):
-                return False
-            lock.unlink(missing_ok=True)
-            continue
-        with os.fdopen(fd, "w") as f:
-            json.dump(info, f)
-        return True
-    return False
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w") as f:
+        json.dump(info, f)
+    return True
+
+
+def _read_lock(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {"time": 0}  # unreadable or half-written: treat as old
+
+
+def unlock_stale(dirs, log=print):
+    """Remove stale claim locks of the given campaigns (run once, before workers start)."""
+    n = 0
+    for d in dirs:
+        for lock in sorted(Path(d).glob("fits/fit_*/claim.lock")):
+            info = _read_lock(lock)
+            if info is not None and lock_is_stale(info):
+                # rename first, so a lock re-created meanwhile is never deleted by mistake
+                grave = lock.with_name(f"claim.lock.stale.{os.getpid()}.{time.time_ns()}")
+                try:
+                    os.rename(lock, grave)
+                except FileNotFoundError:
+                    continue
+                if _read_lock(grave) != info:
+                    os.rename(grave, lock)
+                    continue
+                grave.unlink(missing_ok=True)
+                n += 1
+    log(f"removed {n} stale claim locks")
+    return n
 
 
 def release(out, k):
@@ -569,6 +595,8 @@ def main(argv=None):
     f.add_argument("--worker", type=int, default=None, help="default: from SLURM_PROCID or 0")
     f.add_argument("--num-workers", type=int, default=1)
     f.add_argument("--tasks", type=int, nargs="*", default=None)
+    u = sub.add_parser("unlock-stale", help="remove stale claim locks (before starting workers)")
+    u.add_argument("--dir", required=True, action="append")
     r = sub.add_parser("report")
     r.add_argument("--dir", required=True)
     r.add_argument("--device", default="cpu")
@@ -604,6 +632,8 @@ def main(argv=None):
         w = a.worker if a.worker is not None else int(os.environ.get("SLURM_PROCID", 0))
         for k in (a.tasks if a.tasks else worker_tasks(n, w, a.num_workers)):
             fit_task(a.dir[0], k)
+    elif a.cmd == "unlock-stale":
+        unlock_stale(a.dir)
     elif a.cmd == "report":
         doc = report(a.dir, a.device, a.control)
         agg = doc["aggregate"]

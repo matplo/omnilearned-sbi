@@ -156,7 +156,7 @@ class LogpCache:
             return
         keys = np.array(list(self.data.keys()), dtype=np.float64)
         vals = list(self.data.values())
-        tmp = self.path + ".tmp.npz"
+        tmp = f"{self.path}.tmp.{os.getpid()}.npz"  # per process: concurrent writers never share it
         np.savez(tmp, identity=json.dumps(self.identity), keys=keys,
                  lens=np.array([len(v) for v in vals], dtype=np.int64),
                  vals=np.concatenate(vals))

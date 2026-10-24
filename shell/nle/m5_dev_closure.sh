@@ -62,6 +62,8 @@ if [ "$(nseal)" -gt 0 ] && [ "$(nseal)" -lt "$TOTAL" ]; then log "phase 2: inter
 
 # 3. fits
 if [ "$(nseal)" -lt "$TOTAL" ]; then
+  # stale claims of earlier allocations are removed once here, never by the workers (race)
+  $CL unlock-stale --dir "$BASE/toy" --dir "$BASE/control" 2>&1 | tail -1 | tee -a "$BASE/logs/progress.log"
   log "phase 3: fits, 4 GPUs x ${PER} workers ($(nseal)/$TOTAL sealed)"
   for g in 0 1 2 3; do
     for p in $(seq 1 "$PER"); do

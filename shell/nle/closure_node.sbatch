@@ -13,6 +13,8 @@ PY=${PY:-$VIRTUAL_ENV/bin/python}
 NODE=${SLURM_ARRAY_TASK_ID:-0}; NODES=${SLURM_ARRAY_TASK_COUNT:-1}
 W=$((NODES * 4 * PER))
 mkdir -p "$DIR/logs"
+# stale claims (ended jobs) are removed by this one process, before any worker starts
+[ "$NODE" -eq 0 ] && "$PY" -m omnilearned.sbi.toy.closure unlock-stale --dir "$DIR"
 echo "job ${SLURM_JOB_ID:-local} node $(hostname) index $NODE/$NODES per_gpu $PER snapshot $(cat "$SNAP/SOURCE_REVISION") start $(date -Is)" >> "$DIR/logs/jobs.log"
 for g in 0 1 2 3; do
   for p in $(seq 0 $((PER - 1))); do
