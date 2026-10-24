@@ -1,0 +1,62 @@
+# JEWEL 2.6.0-custom samples for the NLE, recoils on, constituent subtraction at analysis level.
+# Settings fixed by the user (2026-10-23): Pb-Pb 5.02 TeV, pT-hat 50-400 GeV, recoils on;
+# theta = (b via fixed centrality, TI, TAUI); box b 0-11 fm, TI 0.1-0.9 GeV, TAUI 0.2-1.0 fm/c;
+# jet selection as toy v2. Changing [jewel], [subtraction] or [selection] defines a new backend id.
+# Production needs a budget approved by the user (plan rule 8).
+backend = "jewel-2.6.0-cs-v1"
+
+[jewel]
+prefix = "/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv/hepyy_packages/jewel/2.6.0-custom"
+lhapdf_data = "/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv/hepyy_packages/lhapdf/6.5.5/share/LHAPDF"
+launcher = ["henv", "-n", "omni-sbi", "-x"]   # environment for the binary (LHAPDF libraries and data)
+variant = "custom-perf-simple"   # partons-v1 + perf-v1: same events as custom-simple, faster
+sqrts_GeV = 5020.0
+ptmin_GeV = 50.0                 # hard-process pT-hat range
+ptmax_GeV = 400.0
+etamax = 3.1
+pdfset = 904400                  # LHAPDF id; JEWEL reads PDFSET as an integer (a set name is silently ignored)
+pdfset_name = "EPPS21nlo_CT18Anlo_Pb208"  # bound-proton nPDF; JEWEL builds n from p by isospin over its pp/pn/np/nn channels
+weighted = false                 # unweighted events
+keeprecoils = true               # recoils on: medium response, subtracted below
+writescatcen = true              # thermal momenta (status 3) for the subtraction
+writedummies = false             # dummies only serve 4MomSub at jet level; not used
+mass_number = 208
+proton_number = 82
+
+[subtraction]
+method = "constituent"           # Milhano & Zapp 2022 (Rivet SubtractedJewelEvent), omnilearned.sbi.jewel.cs
+dRmax = 0.5
+thermal_pid = "reference"
+leftovers = "keep"               # reference convention (tag 2 added); per-jet leftover pT is recorded
+
+[selection]                      # as toy v2, applied to the subtracted final state
+jet_algorithm = "antikt"
+jet_radius = 0.4
+jet_pt_range_GeV = [60.0, 200.0]
+jet_abs_eta_max = 1.0
+constituent_abs_eta_max = 2.5
+constituent_abs_phi_max_rad = 1.2  # after rotating each jet's axis to phi = 0
+constituent_pt_min_GeV = 0.0
+min_constituents = 2
+max_constituents = 256
+exclude_neutrinos = true
+rotate_to_jet_axis = true
+
+[design]                         # training grid; parameter order (b, T_ref = TI, tau_init = TAUI)
+b = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
+T_ref = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+tau_init = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+box = { b = [0.0, 11.0], T_ref = [0.1, 0.9], tau_init = [0.2, 1.0] }
+events_per_task = 1000
+validation_points = 128          # scrambled Sobol in the box, reservation margin 0.02
+
+[holdout]                        # at half steps on every axis: strictly between grid nodes (rule 2)
+development_validation = [7.5, 0.35, 0.85]
+primary_test = [4.5, 0.45, 0.65]
+additional_test_settings = [[1.5, 0.65, 0.35], [9.5, 0.25, 0.45]]
+truth_manifest_access = "report_only_after_fit"
+
+[randomness]                     # PYTHIA MRPY(1) = NJOB * 1000; NJOB = base + chunks_per_point * point + chunk
+design_seed = 20931
+chunks_per_point = 100
+njob_base = { train = 100000, validation = 300000, test = 500000, probe = 800000 }

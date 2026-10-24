@@ -248,89 +248,38 @@ def worker_tasks(n_tasks, worker, n_workers):
     return list(range(worker, n_tasks, n_workers))
 
 
-def _job_alive(job):
-    import subprocess
-
-    try:
-        r = subprocess.run(["squeue", "-h", "-j", str(job), "-o", "%T"], capture_output=True,
-                           text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return True  # cannot tell: treat as alive
-    return r.returncode == 0 and r.stdout.strip() in ("RUNNING", "COMPLETING", "PENDING", "CONFIGURING")
+def _lock(out, k):
+    return Path(out) / "fits" / f"fit_{k:04d}" / "claim.lock"
 
 
 def lock_is_stale(info, max_age=5 * 3600.0):
-    """A claim is stale when its Slurm job is gone, its local process is gone, or it is too old."""
-    import socket
+    from omnilearned.sbi import tasks
 
-    if time.time() - info.get("time", 0) > max_age:
-        return True
-    if info.get("job"):
-        return not _job_alive(info["job"])
-    if info.get("host") == socket.gethostname():
-        try:
-            os.kill(int(info["pid"]), 0)
-            return False
-        except (OSError, ValueError):
-            return True
-    return False
+    return tasks.lock_is_stale(info, max_age)
 
 
 def claim(out, k):
-    """Atomically claim fit k with an exclusive lock file. Returns True if ours.
+    """Atomically claim fit k (exclusive lock file, ``omnilearned.sbi.tasks``). True if ours.
 
-    Workers never reclaim stale locks themselves (concurrent reclaimers race);
-    ``unlock_stale`` removes them, run once by a single process before workers start.
+    Workers never reclaim stale locks themselves; ``unlock_stale`` does, once, before
+    workers start.
     """
-    import socket
+    from omnilearned.sbi import tasks
 
-    lock = Path(out) / "fits" / f"fit_{k:04d}" / "claim.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    info = {"job": os.environ.get("SLURM_JOB_ID"), "host": socket.gethostname(), "pid": os.getpid(),
-            "time": time.time(), "gpu": os.environ.get("CUDA_VISIBLE_DEVICES")}
-    try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        return False
-    with os.fdopen(fd, "w") as f:
-        json.dump(info, f)
-    return True
+    return tasks.claim(_lock(out, k))
 
 
-def _read_lock(path):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError):
-        return {"time": 0}  # unreadable or half-written: treat as old
+def release(out, k):
+    from omnilearned.sbi import tasks
+
+    tasks.release(_lock(out, k))
 
 
 def unlock_stale(dirs, log=print):
     """Remove stale claim locks of the given campaigns (run once, before workers start)."""
-    n = 0
-    for d in dirs:
-        for lock in sorted(Path(d).glob("fits/fit_*/claim.lock")):
-            info = _read_lock(lock)
-            if info is not None and lock_is_stale(info):
-                # rename first, so a lock re-created meanwhile is never deleted by mistake
-                grave = lock.with_name(f"claim.lock.stale.{os.getpid()}.{time.time_ns()}")
-                try:
-                    os.rename(lock, grave)
-                except FileNotFoundError:
-                    continue
-                if _read_lock(grave) != info:
-                    os.rename(grave, lock)
-                    continue
-                grave.unlink(missing_ok=True)
-                n += 1
-    log(f"removed {n} stale claim locks")
-    return n
+    from omnilearned.sbi import tasks
 
-
-def release(out, k):
-    (Path(out) / "fits" / f"fit_{k:04d}" / "claim.lock").unlink(missing_ok=True)
+    return tasks.unlock_stale([p for d in dirs for p in sorted(Path(d).glob("fits/fit_*/claim.lock"))], log=log)
 
 
 def run_claiming(dirs, log=print):
