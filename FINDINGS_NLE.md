@@ -458,6 +458,12 @@ inference. Development data only (rule 4); the generator has **not** passed M3.
   ≈ 07:25 (2026-10-24) after ≈ 31 h in the queue and passed data preparation (6.14 M jets
   × 83 slots; the memory fix works): set ≈ 29.5 ms/step (200k ≈ 1.6 h), PET ≈ 46 ms/step
   (≈ 2.6 h). Set EMA val 1.05364 at 10k (round 1: 1.05362 at 10k).
+- **Round-2 trainings done:** set 1 h 45 min, best EMA val **1.05223** at 156k (round 1:
+  1.05229), checkpoint sha 72d3198c1dec; PET 2 h 39 min, best 1.05228 at 162k, sha
+  1e921f103ec3. The all-counts p(N|θ) attached (`runs/m3/mult/{set,pet}_d256_L6_200k_multC64.pt`,
+  sha 1d587f3962eb / 7a3f7b5e66bd). **Round-2 gate** (convergence, shift, all 128 points, both
+  models) driven by `shell/nle/gate_drive.sh` (logs `runs/m3/r2_gate`), chunk 1 = job
+  60219376 from 10:16, snapshot ecab59b.
 - Prediction from the gate's parameter shift: constrained-direction bias ≈ 0.6 posterior σ
   at N = 250.
 - **Chunk 1 (60183215) ended at its limit (22:48, rc 143) with 4/20 sealed** (toy 0–1, control
