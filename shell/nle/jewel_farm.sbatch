@@ -21,6 +21,10 @@ for i in $(seq 1 "$W"); do
     > "$DIR/logs/worker_${SLURM_JOB_ID:-local}_$i.log" 2>&1 &
 done
 wait
-$RUN -m omnilearned.sbi.jewel.generate index --dir "$DIR" | tee -a "$DIR/logs/jobs.log"
+# The index hashes every shard (28 k files: ~30 min on CFS, CPU idle); by default run it once
+# afterwards from a login node (generate index --dir DIR). INDEX=1 makes array element 0 do it.
+if [ "${INDEX:-0}" = 1 ] && [ "${SLURM_ARRAY_TASK_ID:-0}" -eq 0 ]; then
+  $RUN -m omnilearned.sbi.jewel.generate index --dir "$DIR" | tee -a "$DIR/logs/jobs.log"
+fi
 echo "end $(hostname) $(date -Is)" >> "$DIR/logs/jobs.log"
 rm -rf "$SCR"

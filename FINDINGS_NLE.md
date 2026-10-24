@@ -576,10 +576,12 @@ public repository approved. Production still needs an approved budget (rule 8).
   **2 199 271 selected jets**, 2356 JEWEL core-hours; per grid point 1891–2943 jets (median
   2167; 53 of 972 points slightly below 2000 from acceptance noise). Jet shards 1.33 GB,
   **raw event stores 601 GB** (above the 0.4 TB guess; CFS project `alice`, shared space).
-  No task failed. CPU node-hours: main array 21.5, top-up array ≈ 12.5, validation 1.1 +
-  0.9; **≈ 36 in total** (estimate ≤ 52). Not yet done: p(N|θ) and gate-style checks on
-  JEWEL; a training run needs `toy.train` to take the JEWEL box (it uses the toy BOX for the
-  condition normalization) and both splits in one data directory.
+  No task failed. CPU node-hours: main array 21.5, top-up array 4 × 3.13 = 12.5 (of which
+  ≈ 4 × 0.45 h only re-ran the final index: every array element hashed all 28 k shards on CFS;
+  cancelled at 04:08, index intact; the farm now indexes only on request), validation 1.1 +
+  0.9; **≈ 36 in total** (estimate ≤ 52). `toy.train` now takes the JEWEL box and selection
+  from `--config configs/jewel-2.6.0-cs-v1.toml` and validation from `--val-dir` (e6153d0).
+  Not yet done: p(N|θ) and gate-style checks on JEWEL; a JEWEL training run.
 - **Top-up (00:58, `generate topup`, code 148d29e):** per-point chunks from the measured
   acceptance to reach ≥ 2000 jets (training, +5% margin; +7950 tasks, 28362 in total) and
   ≥ 1000 (validation, +501 tasks, 1909 in total); new NJOB streams continue each point's
