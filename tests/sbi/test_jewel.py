@@ -7,6 +7,7 @@ import sys
 import textwrap
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pytest
 
@@ -272,3 +273,42 @@ def test_toy_train_runs_on_jewel_shards(fake_cfg, tmp_path):
     assert re.metadata["multiplicity_retrained"]["val_dir"] == str(tmp_path / "validation")
     for k, v in sur.model.state_dict().items():
         assert torch.equal(re.model.state_dict()[k], v)
+
+
+def test_merge_keeps_every_jet_point_major(fake_cfg, tmp_path):
+    pytest.importorskip("hepyy")
+    from omnilearned.sbi.jewel import generate
+    from omnilearned.sbi.toy.datasets import read_shards, shard_paths
+
+    d = tmp_path / "train"
+    doc = generate.plan(fake_cfg, "probe", d, chunks=2, theta=[[4.5, 0.45, 0.65], [8.0, 0.8, 0.3], [2.0, 0.2, 0.9]],
+                        nevent=20)
+    doc["split"] = "train"
+    for t in doc["tasks"]:
+        t["split"] = "train"
+        t["name"] = t["name"].replace("probe", "train")
+    (d / "tasks.json").write_text(json.dumps(doc))
+    generate.work(d, scratch=str(tmp_path), log=lambda m: None)
+    src_index = generate.write_index(d)
+    out = tmp_path / "merged"
+    for workers in (1, 2):
+        idx = generate.merge(d, out, shards=2, workers=workers, log=lambda m: None)
+        assert idx["n_jets"] == src_index["n_jets"] and idx["n_tasks"] == 6 and len(idx["shards"]) == 2
+        assert [s["point_ids"] for s in idx["shards"]] == [[0, 1], [2]]
+        m = read_shards(shard_paths(out, "train"))
+        # the sources in point-major, chunk order
+        order = sorted(src_index["shards"], key=lambda s: (s["point_id"], s["chunk"]))
+        s = read_shards([d / q["file"] for q in order])
+        for k in ("x", "mask", "n_constituents", "global", "event_id", "point_id"):
+            assert np.array_equal(m[k], s[k]), k
+        man = json.loads((out / "train_00000.json").read_text())
+        assert [q["file"] for q in man["sources"]] == [q["file"] for q in order[:4]]
+        with h5py.File(out / "train_00000.diag.h5") as f:
+            assert np.array_equal(f["event_id"][...], m["event_id"][m["point_id"] <= 1])
+    # a corrupted source is refused
+    first = d / order[0]["file"]
+    raw = bytearray(first.read_bytes())
+    raw[len(raw) // 2] ^= 0xFF
+    first.write_bytes(bytes(raw))
+    with pytest.raises(ValueError, match="does not match"):
+        generate.merge(d, tmp_path / "bad", shards=2, log=lambda m: None)

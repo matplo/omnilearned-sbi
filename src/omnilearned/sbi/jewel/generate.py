@@ -21,6 +21,13 @@ number of workers on any number of nodes can share one directory, and reruns res
 
     python -m omnilearned.sbi.jewel.generate plan --split train --out DIR [--chunks 3]
     python -m omnilearned.sbi.jewel.generate work --dir DIR
+    python -m omnilearned.sbi.jewel.generate merge --dir DIR --out MERGED --shards 64
+
+``merge`` concatenates the per-task jet shards of a split (tens of thousands of small files,
+slow to open on CFS) into a few point-major shards with the same layout, plus diagnostics, a
+manifest per merged shard listing its source tasks with their hashes, and an
+``index_<split>.json`` that ``toy.datasets.shard_paths`` reads; train and validation can share
+one merged directory. The event stores stay with the tasks.
 """
 
 import argparse
@@ -42,11 +49,12 @@ from omnilearned.sbi import tasks as tasklocks
 from omnilearned.sbi.jewel import BACKEND, cards, hepmc, jets
 from omnilearned.sbi.jewel.geometry import JewelGeometry
 from omnilearned.sbi.observations import file_sha256
-from omnilearned.sbi.toy.datasets import host_info, make_design, write_shard
+from omnilearned.sbi.toy.datasets import GLOBAL_NAMES, X_CHUNK, _dataset, host_info, make_design, write_shard
 from omnilearned.sbi.toy.design import STREAMS
 from omnilearned.sbi.toy.simulator import PARAMETERS
 
 EVENTS_SCHEMA = "jewel-events-v1"
+MERGED_SCHEMA = "jewel-merged-v1"
 TASKS_SCHEMA = "jewel-tasks-v1"
 
 
@@ -383,6 +391,107 @@ def write_index(directory):
     return index
 
 
+def _merge_one(job):
+    """Write one merged shard from its source task shards (worker of ``merge``)."""
+    src_dir, out, sources = Path(job["src"]), Path(job["out"]), job["sources"]
+    parts, diags, attrs = [], [], None
+    for s in sources:
+        path = src_dir / s["file"]
+        if file_sha256(path) != s["sha256"]:
+            raise ValueError(f"{path} does not match the source index")
+        with h5py.File(path, "r") as f:
+            a = {k: f.attrs[k] for k in ("schema", "backend", "split", "toy_config_sha256")}
+            a = {k: (v.item() if hasattr(v, "item") else v) for k, v in a.items()}
+            if attrs is None:
+                attrs = a
+                feat, width = list(f.attrs["feature_names"]), int(f.attrs["max_constituents"])
+            elif a != attrs or int(f.attrs["max_constituents"]) != width:
+                raise ValueError(f"{path}: attributes differ from the first source")
+            parts.append({k: f[k][...] for k in ("data/x", "data/mask", "data/n_constituents", "global",
+                                                 "event_id", "point_id")})
+        with h5py.File(path.with_name(path.name[:-3] + ".diag.h5"), "r") as f:
+            diags.append({k: f[k][...] for k in f.keys()})
+    cat = lambda k: np.concatenate([q[k] for q in parts])  # noqa: E731
+    x = cat("data/x")
+    n = x.shape[0]
+    chunk = lambda c: tuple(min(a, b) for a, b in zip(c, x.shape)) if n else None  # noqa: E731
+    with h5py.File(out, "w", track_order=False) as f:
+        _dataset(f, "data/x", x, compression="gzip", chunks=chunk(X_CHUNK))
+        _dataset(f, "data/mask", cat("data/mask"), compression="gzip", chunks=chunk(X_CHUNK)[:2] if n else None)
+        _dataset(f, "data/n_constituents", cat("data/n_constituents"))
+        g = _dataset(f, "global", cat("global"))
+        g.attrs["global_names"] = list(GLOBAL_NAMES)
+        _dataset(f, "event_id", cat("event_id"))
+        _dataset(f, "point_id", cat("point_id"))
+        for k, v in attrs.items():
+            f.attrs[k] = v
+        f.attrs["feature_names"] = feat
+        f.attrs["parameter_names"] = list(PARAMETERS)
+        f.attrs["max_constituents"] = width
+        f.attrs["merged_from"] = MERGED_SCHEMA
+    dpath = out.with_suffix(".diag.h5")
+    with h5py.File(dpath, "w") as f:
+        for k in diags[0]:
+            _dataset(f, k, np.concatenate([d[k] for d in diags]))
+        f.attrs["access"] = "diagnostic only; never an input to training or fitting"
+    pid = cat("point_id")
+    theta = cat("global")[:, :len(PARAMETERS)]
+    points = [{"point_id": int(p), "theta": theta[pid == p][0].tolist(), "n_jets": int((pid == p).sum()),
+               "n_tasks": sum(1 for s in sources if s["point_id"] == p)} for p in sorted({s["point_id"] for s in sources})]
+    man = {"schema": MERGED_SCHEMA, "file": out.name, "sha256": file_sha256(out), "diag_file": dpath.name,
+           "diag_sha256": file_sha256(dpath), "split": attrs["split"], "backend": attrs["backend"],
+           "toy_config_sha256": attrs["toy_config_sha256"], "n_jets": int(n), "points": points,
+           "sources": sources, "host": host_info()}
+    with open(out.with_suffix(".json"), "w") as f:
+        json.dump(man, f, indent=1)
+    return man
+
+
+def merge(directory, out, shards, workers=1, log=print):
+    """Merge the task shards of a split into ``shards`` point-major files under ``out``.
+
+    Points are kept whole and in order (all chunks of a point in one file, chunk order),
+    split into ``shards`` contiguous blocks of points. Every source is hash-checked against
+    the split's ``index_<split>.json``. Returns the merged index.
+    """
+    directory, out = Path(directory), Path(out)
+    src_index = next(directory.glob("index_*.json"))
+    with open(src_index) as f:
+        idx = json.load(f)
+    split = idx["split"]
+    by_point = {}
+    for s in idx["shards"]:
+        by_point.setdefault(s["point_id"], []).append(s)
+    pids = sorted(by_point)
+    blocks = [b for b in np.array_split(np.array(pids), min(shards, len(pids))) if b.size]
+    out.mkdir(parents=True, exist_ok=True)
+    jobs = [{"src": str(directory), "out": str(out / f"{split}_{k:05d}.h5"),
+             "sources": [s for p in b for s in sorted(by_point[int(p)], key=lambda s: s["chunk"])]}
+            for k, b in enumerate(blocks)]
+    t0 = time.time()
+    if workers > 1:
+        import multiprocessing as mp
+
+        with mp.get_context("spawn").Pool(workers) as pool:
+            mans = pool.map(_merge_one, jobs, chunksize=1)
+    else:
+        mans = [_merge_one(j) for j in jobs]
+    index = {"schema": MERGED_SCHEMA + "-index", "split": split, "backend": idx["backend"],
+             "source_dir": str(directory), "source_index": src_index.name,
+             "source_index_sha256": file_sha256(src_index),
+             "shards": [{"file": m["file"], "sha256": m["sha256"], "n_jets": m["n_jets"],
+                         "point_ids": [q["point_id"] for q in m["points"]]} for m in mans],
+             "n_points": len(pids), "n_jets": int(sum(m["n_jets"] for m in mans)),
+             "n_tasks": len(idx["shards"]), "events": idx.get("events"), "host": host_info()}
+    if index["n_jets"] != idx["n_jets"]:
+        raise ValueError(f"merged {index['n_jets']} jets, source index has {idx['n_jets']}")
+    with open(out / f"index_{split}.json", "w") as f:
+        json.dump(index, f, indent=1)
+    log(f"merged {len(idx['shards'])} {split} tasks -> {len(mans)} shards, {index['n_jets']} jets, "
+        f"{time.time() - t0:.0f}s")
+    return index
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -409,6 +518,11 @@ def main(argv=None):
     t.add_argument("--margin", type=float, default=1.05)
     i = sub.add_parser("index")
     i.add_argument("--dir", required=True)
+    m = sub.add_parser("merge", help="merge a split's task shards into a few point-major shards")
+    m.add_argument("--dir", required=True, help="split directory with index_<split>.json")
+    m.add_argument("--out", required=True, help="merged directory (may hold several splits)")
+    m.add_argument("--shards", type=int, default=64)
+    m.add_argument("--workers", type=int, default=1)
     s = sub.add_parser("inspect")
     s.add_argument("--config", default=str(cards.CONFIG))
     a = ap.parse_args(argv)
@@ -424,6 +538,8 @@ def main(argv=None):
         tasklocks.unlock_stale(sorted(Path(a.dir).glob("claims/*.lock")))
     elif a.cmd == "topup":
         topup(a.dir, a.target_jets, a.margin)
+    elif a.cmd == "merge":
+        merge(a.dir, a.out, a.shards, a.workers)
     elif a.cmd == "index":
         idx = write_index(a.dir)
         print(f"{idx['tasks_done']}/{idx['tasks_total']} tasks, {idx['n_jets']} jets, {idx['events']} events")

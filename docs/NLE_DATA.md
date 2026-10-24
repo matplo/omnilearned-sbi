@@ -70,8 +70,16 @@ One task is 1000 JEWEL events at one point. The files per task
 The `.events.h5` store keeps:
 - per event (`events/`): id, number, centrality, scale = pT-hat, weight, cross section;
 - flat particle arrays (`particles/`, float32 px, py, pz, E, pid, status) with per-event
-  `offsets`. Statuses: 1 and 4 (final state, dummies dropped), 3 (thermal momenta for the
-  subtraction), 23 (the two hard partons).
+  `offsets`; event i owns `particles/*[offsets[i]:offsets[i+1]]`. Statuses:
+  - 1: final state, dummies dropped;
+  - 3: thermal momenta of the scattering centres (empty at TI = 0.1, i.e. no medium);
+  - 4: the two beam protons, E = 2510 GeV and pT = 0;
+  - 23: the two outgoing hard partons.
+
+  The subtraction follows the reference convention: its "final state" is status 1 or 4. The
+  beam protons have pT = 0, so they change no jet: re-deriving three tasks with and without
+  them gives identical jets (2026-10-24). Re-deriving from the float32 store reproduces the
+  stored jets to ≤ 6.4e-6 in (η, φ, log pT).
 
 With the raw events, the subtraction and the jet selection can be redone without rerunning
 JEWEL. Read them with `omnilearned.sbi.jewel.generate.read_events_store`.
@@ -90,7 +98,52 @@ Probe outputs from before production, kept separately: `runs/jewel/probe1/`:
 - `main`: custom-perf-simple at 8 settings;
 - `custom_simple` and `jewel_cs`: the event-identity checks.
 
-## Reading
+## Reading in an independent Python session (numpy + h5py only)
+
+No omnilearned import is needed. Any Python with numpy and h5py works, e.g.
+`henv -n omni-sbi -x python -I` or NERSC's `python3`. A tested, runnable version with more
+cases (counts shards, sha256 checks, φ un-rotation, event lookup) is
+`data/read_examples.py` in the reports repository `matplo/omni-sbi-nle-jet-dev-reports`.
+
+```python
+import json, h5py, numpy as np
+ROOT = "/global/cfs/cdirs/alice/ploskon/jest-nle/data"
+
+# 1. the shard list of a split (toy or JEWEL), with sha256 per file
+d = f"{ROOT}/jewel_v1/train"                       # or f"{ROOT}/v2_m2", split "train"
+index = json.load(open(f"{d}/index_train.json"))
+files = [f"{d}/{s['file']}" for s in index["shards"]]
+
+# 2. jets of one shard
+with h5py.File(files[0]) as f:
+    n = f["data/n_constituents"][...]              # [n_jets]
+    x = f["data/x"][:, :n.max()]                   # [n_jets, N, 3] = (eta, phi, log pT/GeV), zero-padded
+    mask = f["data/mask"][:, :n.max()]
+    g = f["global"][...]                           # columns: list(f["global"].attrs["global_names"])
+    theta, jet_pt = g[:, :3], g[:, 3]              # theta = (b, T_ref, tau_init); JEWEL: (b, TI, TAUI)
+    event_id, point_id = f["event_id"][...], f["point_id"][...]
+pt = np.where(mask, np.exp(x[..., 2]), 0.0)
+eta, phi = x[..., 0], x[..., 1]                    # JEWEL: phi relative to the jet axis
+
+# 3. JEWEL only: diagnostics (same rows, same order) and the raw events of the same task
+base = files[0][:-3]
+with h5py.File(base + ".diag.h5") as f:
+    phi_rotation = f["phi_rotation"][...]          # original phi = phi + phi_rotation
+    pthat, unsub_pt = f["pthat"][...], f["unsubtracted_jet_pt"][...]
+with h5py.File(base + ".events.h5") as f:
+    off = f["offsets"][...]
+    ev_id = f["events/event_id"][...]
+    status, px, py = f["particles/status"][...], f["particles/px"][...], f["particles/py"][...]
+i = int(np.flatnonzero(ev_id == event_id[0])[0])  # the event of the first jet
+sl = slice(off[i], off[i + 1])
+final = status[sl] == 1                            # 3 = thermal, 4 = beam protons, 23 = hard partons
+```
+
+The toy shards store absolute φ (the toy jet axis is not rotated); JEWEL shards store φ
+relative to the jet axis. Rows of the toy counts shards (`v2_m1_counts/train_counts_*.h5`)
+are `n_constituents`, `theta [n, 3]`, `point_id`, `event_id`.
+
+## Reading with omnilearned
 
 ```python
 from omnilearned.sbi.toy.datasets import shard_paths, read_shards
