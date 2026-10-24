@@ -54,7 +54,7 @@ inside an allocation with `SLURM_*` unset. On a login node run tests with
 |---|---|---|---|---|
 | 2026-10-22 | first day, M1, M2, M3 prep | 60098593 (interactive, urgent_gpu, TIMEOUT at 4 h) | 1 × 4 | checks, smoke chain, M1 data (CPU of this node), 3 trainings, sampler timing |
 | 2026-10-22 | M1 acceptance | 60101162 (cpu, debug) | 1 × 0.04 | shard regeneration on nid006833 + cross-host tests |
-| 2026-10-23 | M5 diagnostic | 60183215 (interactive, chunk 1 of the driver) | 1 × 4 | acceptance table, prepare, fits |
+| 2026-10-23/24 | M5 diagnostic | 60183215, 60190975, 60203872, 60212077 (interactive chunks 1–4) | 1 × 4 + 1 × 4 + 1 × 4 + 1 × 1.35 ≈ 13.4 | acceptance table, 20 fits, reports |
 | 2026-10-24 | M8 JEWEL probe | 60194817 (failed, rc 127), 60195690 | 1 × 0.2, 1 × 0.25 | debug CPU |
 | 2026-10-24 | M8 JEWEL production | 60196918 (array 0–11), 60196919, top-ups 60199888 (array 0–3), 60199889 | ≈ 36 (12 × 1.8 + 4 × 3.1 + 1.1 + 0.9) | training grid (2.20 M jets) + validation (146 k jets) |
 | 2026-10-23 | M2 round 2 | 60183701 / 60183702 (gpu shared, 1 GPU, 3.5 / 5 h, pending) | ≤ 0.25 × 3.5, 0.25 × 5 | set / PET 200k on `v2_m2`, memory fix |
@@ -596,6 +596,38 @@ public repository approved. Production still needs an approved budget (rule 8).
   ≥ 1000 (validation, +501 tasks, 1909 in total); new NJOB streams continue each point's
   chunk numbering. Jobs **60199888** (`jewel-train-topup`, array 0–3, 4 h) and **60199889** (`jewel-val-topup`,
   2 h). Revised total for the JEWEL training sample ≈ 18 CPU node-hours.
+
+### M5 development closure result (DONE 2026-10-24 08:14; diagnostic, round-1 generator)
+
+Campaign `runs/m5/dev_N250_setC64`, checkpoint `set_d256_L6_multC64`, N = 250 at the
+development setting (7.5, 0.30, 0.95); 4 interactive chunks (60183215, 60190975, 60203872,
+60212077); all 20 seals verified, none refused. Criteria as fixed in the plan (M5):
+
+| criterion | toy (10 fits) | verdict |
+|---|---|---|
+| joint levels uniform, KS p > 0.01 | levels 0.16–1.00, **KS p 0.45** | pass |
+| joint 68 / 95% coverage inside Clopper–Pearson 95% | 5/10 [0.19, 0.81]; 9/10 [0.55, 1.00] | pass |
+| marginal 68 / 95%, b | 8/10; 10/10 | pass |
+| marginal 68 / 95%, T_ref | 8/10; 10/10 | pass |
+| marginal 68 / 95%, τ_init | **10/10** (CP [0.69, 1.00] excludes 0.68); 10/10 | **fail (over-coverage)** |
+| toy − control mean pulls within 2 combined se | b −0.36 ± 0.28, T_ref −0.33 ± 0.18, τ_init +0.07 ± 0.21 | pass |
+
+- Mean pulls, toy: b −0.36 ± 0.26, T_ref +0.07 ± 0.17, τ_init −0.17 ± 0.12; control: b
+  −0.00 ± 0.11, T_ref +0.41 ± 0.07, τ_init −0.24 ± 0.17 (the tube/box pattern of lesson 8).
+- Control (exact likelihood, 10 fits): levels KS p 0.88; joint 7/10, 10/10; marginal 68%
+  b **10/10**, T_ref **10/10**, τ_init 9/10. The exact likelihood also over-covers the
+  marginals, so the τ_init failure reflects the tube posterior filling the prior box
+  (conservative marginals at this truth) rather than surrogate fidelity. Per rule 5 the
+  failed criterion stays failed; whether marginal coverage at one truth is the right
+  criterion for this problem is a decision for the user.
+- MLE on a grid edge on some axis: 7/10 toy, 9/10 control fits (the tube reaches the box).
+- Power: with 10 + 10 ensembles the pull differences resolve ≈ 0.2–0.3σ; the gate's
+  prediction (≈ 0.6σ in the constrained direction at N = 250) is neither confirmed nor
+  excluded by the marginal pulls (largest difference T_ref, 1.8σ). N = 1000 would test it
+  about twice as sharply. Grid: lesson 2's v1 grid without a v2 nested check.
+- **Reading: the round-1 generator's 1–3% residuals (9/128 gate FAILs) produce no
+  detectable inference bias at N = 250 with this statistics;** joint coverage and the
+  joint-level distribution are as calibrated as the exact-likelihood control's.
 
 ## Open items
 
