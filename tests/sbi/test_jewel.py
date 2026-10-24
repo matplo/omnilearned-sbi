@@ -205,3 +205,11 @@ def test_jewel_command_sources_env_scripts():
     assert cmd[0] == "bash" and cmd[-2:] == ["/x/jewel", "params.dat"]
     assert all(f'source "{s}"' in cmd[2] for s in CFG["jewel"]["env_scripts"])
     assert "LHAPDF_DATA_PATH" in cmd[2]
+
+
+def test_plan_is_chunk_major(tmp_path):
+    from omnilearned.sbi.jewel import generate
+
+    doc = generate.plan(CFG, "probe", tmp_path, chunks=2, theta=[[1, 0.2, 0.3], [2, 0.3, 0.4]], nevent=5)
+    assert [(t["chunk"], t["point_id"]) for t in doc["tasks"]] == [(0, 0), (0, 1), (1, 0), (1, 1)]
+    assert len({t["njob"] for t in doc["tasks"]}) == 4

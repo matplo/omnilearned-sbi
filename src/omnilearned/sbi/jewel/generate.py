@@ -71,15 +71,17 @@ def design_points(cfg, split):
 
 def plan(cfg, split, out, chunks=1, points=None, theta=None, keep_hepmc=(), extra=None,
          nevent=None):
-    """Write ``tasks.json``: every (point, chunk) of the split (or explicit ``theta`` rows)."""
+    """Write ``tasks.json``: every (point, chunk) of the split (or explicit ``theta`` rows),
+    chunk-major."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     pts = np.atleast_2d(np.asarray(theta, float)) if theta is not None else design_points(cfg, split)
     ids = list(range(len(pts))) if points is None else list(points)
     nev = int(nevent or cfg["design"]["events_per_task"])
     tl = []
-    for pid in ids:
-        for c in range(int(chunks)):
+    # chunk-major: every point's chunk 0 first, so a partial run covers the design evenly
+    for c in range(int(chunks)):
+        for pid in ids:
             tl.append({"name": task_name(split, pid, c), "split": split, "point_id": int(pid),
                        "chunk": c, "theta": [float(v) for v in pts[pid]], "nevent": nev,
                        "njob": cards.njob(cfg, split, pid, c),
