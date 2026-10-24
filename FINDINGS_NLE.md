@@ -688,6 +688,37 @@ public repository approved. Production still needs an approved budget (rule 8).
   feature normalisation and multiplicities). The p(N|θ) retrain on all JEWEL counts follows
   in the same job.
 
+- **JEWEL surrogates, round 1, done (14:50; job 60220855 ended).** Snapshot 7d28866 (clean),
+  4 × A100-SXM4-80GB on nid200452, `runs/jewel_r1b/`, data `data/jewel_v1/merged` (2.20 M
+  training jets, at most 175 constituents; 146 k validation jets).
+
+  | run | best EMA val | at step | wall | sha |
+  |---|---|---|---|---|
+  | `set_d256_L6_s0` (5.87 M parameters) | 1.19415 | 178k | 1.72 h | 3932a3053e22 |
+  | `set_d256_L6_s1` | 1.19412 | 200k | 1.72 h | e60d5b8216fc |
+  | `pet_d256_L6_s0` (3.56 M, smooth PET) | 1.19428 | 178k | 2.52 h | 9c766f562517 |
+  | `pet_d256_L6_s1` | 1.19427 | 194k | 2.54 h | 84db799b24cf |
+
+  - **Seeds:** the two seeds of each architecture agree to 3e-5. Set and PET differ by
+    1.4e-4, i.e. 5× the seed spread, which favours set slightly.
+  - **Step times:** 30 ms (set) and 44 ms (PET).
+  - **Memory:** a few allocator OOM warnings at the first validations (8 GB requests at width
+    175) were recovered by cache release, and training carried on.
+  - **p(N|θ):**
+    - Retrained on all JEWEL training counts (256 × 4, 30k steps): best val NLL 3.78095 at
+      15k, against 3.7807 for each run's own p(N|θ) (128 × 3, 4000 steps).
+    - The validation check (128 points, 947–1557 jets each) nevertheless prefers the
+      retrained model: rms z **1.14**, max |z| 3.3, χ² p < 0.01 at 1 point, against 1.36,
+      4.9 and 2 for the built-in one.
+    - The retrained p(N|θ) is attached to all four flows as `runs/jewel_r1b/mult/<run>_multJ.pt`
+      (sha set_s0 db4702cdc6fc, pet_s0 537d7ba628da, set_s1 2997d2d5a0d1, pet_s1
+      9b1eb8da1179). These are the JEWEL checkpoints to use.
+  - **Not yet done:** an M3-style gate on JEWEL needs fidelity samples (≈ 20 000 jets at the
+    validation points; a JEWEL budget decision for the user) or a reduced gate on the 1000-jet
+    validation split.
+  - **Clean-up:** the old paused step of the first attempt (bash and the 4 stopped trainings)
+    was killed at 14:55, after the new step had ended; the allocation was released.
+
 ### M5 development closure result (DONE 2026-10-24 08:14; diagnostic, round-1 generator)
 
 Campaign `runs/m5/dev_N250_setC64`, checkpoint `set_d256_L6_multC64`, N = 250 at the
