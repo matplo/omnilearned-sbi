@@ -547,6 +547,25 @@ public repository approved. Production still needs an approved budget (rule 8).
   Sobol points × 11 tasks (1.4 M events) in `data/jewel_v1/validation`. Jobs **60196918**
   (array 0–11, regular CPU, 4 h each, 128 workers per node, 1 h task timeout) and **60196919**
   (1 node). Expected ≈ 40 CPU node-hours (request ≤ 52) and ≈ 0.4 TB of event stores.
+- **Production measurements (chunk 0 of all 972 points, 1000 events per task):** the probe's
+  s/event was dominated by the ≈ 25 s table setup; real cost and acceptance by TI:
+
+  | TI [GeV] | JEWEL s/task (median / max) | acceptance (median / min) | max N | MB/task |
+  |---|---|---|---|---|
+  | 0.1 | 29 / 31 | 13.4% / 11.2% | 66 | 2.7 |
+  | 0.3 | 176 / 210 | 9.3% / 6.4% | 72 | 8.4 |
+  | 0.5 | 282 / 348 | 7.2% / 4.4% | 101 | 19.7 |
+  | 0.7 | 377 / 468 | 6.5% / 3.9% | 120 | 27.9 |
+  | 0.9 | 474 / 616 | 5.5% / 3.3% | 146 | 35.1 |
+
+  Acceptance falls with TI (more jets quenched below 60 GeV); at TI 0.9 central b slightly
+  lower than peripheral (4.7% vs 6.3%). Max N 146, well below 256. 21 tasks per point give
+  ≈ 2800 jets at TI 0.1 but ≈ 1150 at TI 0.9.
+- **Top-up (00:58, `generate topup`, code 148d29e):** per-point chunks from the measured
+  acceptance to reach ≥ 2000 jets (training, +5% margin; +7950 tasks, 28362 in total) and
+  ≥ 1000 (validation, +501 tasks, 1909 in total); new NJOB streams continue each point's
+  chunk numbering. Jobs 60198xxx (`jewel-train-topup`, array 0–3, 4 h; `jewel-val-topup`,
+  2 h). Revised total for the JEWEL training sample ≈ 18 CPU node-hours.
 
 ## Open items
 
