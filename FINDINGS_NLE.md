@@ -564,7 +564,7 @@ public repository approved. Production still needs an approved budget (rule 8).
 - **Top-up (00:58, `generate topup`, code 148d29e):** per-point chunks from the measured
   acceptance to reach ≥ 2000 jets (training, +5% margin; +7950 tasks, 28362 in total) and
   ≥ 1000 (validation, +501 tasks, 1909 in total); new NJOB streams continue each point's
-  chunk numbering. Jobs 60198xxx (`jewel-train-topup`, array 0–3, 4 h; `jewel-val-topup`,
+  chunk numbering. Jobs **60199888** (`jewel-train-topup`, array 0–3, 4 h) and **60199889** (`jewel-val-topup`,
   2 h). Revised total for the JEWEL training sample ≈ 18 CPU node-hours.
 
 ## Open items
