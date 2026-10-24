@@ -582,6 +582,12 @@ public repository approved. Production still needs an approved budget (rule 8).
   0.9; **≈ 36 in total** (estimate ≤ 52). `toy.train` now takes the JEWEL box and selection
   from `--config configs/jewel-2.6.0-cs-v1.toml` and validation from `--val-dir` (e6153d0).
   Not yet done: p(N|θ) and gate-style checks on JEWEL; a JEWEL training run.
+- **Sanity of the JEWEL response (3 of 21 tasks per point, 243 k jets, ≈ 150–400 jets per
+  point, noisy):** ⟨N⟩ 19.8 → 41.3 for TI 0.1 → 0.9 (b = 0, TAUI 0.6), width 0.089 → 0.100,
+  soft-8 fraction 0.14 → 0.03 (more constituents share the pT); ⟨N⟩ 31.8 → 27.0 for b 0 → 11
+  (TI 0.5); ⟨N⟩ 27.0 → 35.7 for TAUI 0.2 → 1.0 (later TAUI = longer hot phase in JEWEL's
+  profile). The multiplicity (recoil medium response surviving the subtraction) is the
+  strongest single response; unlike the toy, b and TAUI move it in different directions.
 - **Top-up (00:58, `generate topup`, code 148d29e):** per-point chunks from the measured
   acceptance to reach ≥ 2000 jets (training, +5% margin; +7950 tasks, 28362 in total) and
   ≥ 1000 (validation, +501 tasks, 1909 in total); new NJOB streams continue each point's
