@@ -330,3 +330,32 @@ def test_multiplicity_attach_keeps_flow_and_swaps_pn(tmp_path):
         assert torch.equal(ab.multiplicity.state_dict()[k], v)
     assert ab.metadata["multiplicity_attached"]["multiplicity_from_sha256"] == \
         FlowSurrogate.load(tmp_path / "b.pt").metadata["checkpoint_sha256"]
+
+
+def test_logp_cache_resumes_fit_without_recomputation(tmp_path):
+    from omnilearned.sbi.fit import LogpCache, run_fit
+    from omnilearned.sbi.observations import Observations
+    from omnilearned.sbi.scan import ScanResult
+
+    sur = _variable_surrogate()
+    x, mask = sur.sample([0.5, 1.0], 24, None, seed=5, nsteps=4)
+    obs = Observations(x.astype(np.float64), mask, np.arange(24) + 11, None, (), ("eta", "phi", "lpt"), "sha", "mem")
+    cfg = {"schema": "omnilearned-sbi-fit-v1", "device": "cpu", "output_prefix": str(tmp_path / "a" / "fit"),
+           "grid": {"a": [0.3, 0.5, 0.7], "b": [1.0, 1.5]},
+           "likelihood": {"solver": "midpoint", "nsteps": 4, "num_probes": 2, "probe_schedule": "per_step"},
+           "scan": {"event_chunk": 8, "candidate_chunk": 4}}
+    ident = {"fit": "unit"}
+    cache = LogpCache(tmp_path / "c.npz", ident, every=0.0)
+    run_fit(cfg, surrogate=sur, observations=obs, log=lambda m: None, logp_cache=cache)
+    cache.flush()
+    calls = []
+    real = sur.log_prob
+    sur.log_prob = lambda *a, **k: calls.append(1) or real(*a, **k)
+    cfg["output_prefix"] = str(tmp_path / "b" / "fit")
+    run_fit(cfg, surrogate=sur, observations=obs, log=lambda m: None,
+            logp_cache=LogpCache(tmp_path / "c.npz", ident))
+    assert calls == []  # every (candidate, event chunk) came from the cache
+    a, b = (ScanResult.load(str(tmp_path / d / "fit")) for d in ("a", "b"))
+    np.testing.assert_array_equal(a.loglik, b.loglik)
+    with pytest.raises(ValueError, match="another fit"):
+        LogpCache(tmp_path / "c.npz", {"fit": "other"})

@@ -343,3 +343,29 @@ def test_acceptance_shards_merge(tiny_run, tmp_path):
     assert acc.shape == (2, 2, 2) and np.all((acc >= 0) & (acc <= 1))
     with open(tmp_path / "t.json") as f:
         assert json.load(f)["common_random_numbers"] is True
+
+
+def test_closure_claims_and_interleaved_workers(tiny_run, tmp_path):
+    import os
+    import socket
+    import time
+
+    from omnilearned.sbi.toy import closure
+
+    d1, d2 = tmp_path / "toy", tmp_path / "ctl"
+    closure.prepare(_campaign_spec(tiny_run / "checkpoint.pt", k=2), d1, log=lambda m: None)
+    spec = _campaign_spec(tiny_run / "checkpoint.pt", k=2)
+    spec["index_offset"] = 950
+    closure.prepare(spec, d2, log=lambda m: None)
+    assert closure.claim(d1, 0) and not closure.claim(d1, 0)  # held by this live process
+    lock = d1 / "fits" / "fit_0000" / "claim.lock"
+    lock.write_text(json.dumps({"job": None, "host": socket.gethostname(), "pid": 2 ** 22 + 12345, "time": time.time()}))
+    assert closure.claim(d1, 0)  # dead local process: stale
+    lock.write_text(json.dumps({"job": None, "host": "elsewhere", "pid": 1, "time": time.time() - 6 * 3600}))
+    assert closure.claim(d1, 0)  # too old: stale
+    closure.release(d1, 0)
+    os.environ.pop("SLURM_JOB_ID", None)
+    assert closure.run_claiming([d1, d2], log=lambda m: None) == 4
+    assert not list(tmp_path.glob("*/fits/*/claim.lock"))
+    assert all((d / "fits" / f"fit_{k:04d}" / "logp_cache.npz").exists() for d in (d1, d2) for k in (0, 1))
+    assert closure.run_claiming([d1, d2], log=lambda m: None) == 0  # all sealed

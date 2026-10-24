@@ -193,17 +193,41 @@ def _seal_files(prefix):
     return [Path(f"{prefix}.json"), Path(f"{prefix}.npz")]
 
 
-def fit_task(out, k, surrogate=None, log=print):
-    """Run and seal fit ``k`` of a campaign (skipped when already sealed)."""
-    from omnilearned.sbi.fit import load_fit_config, run_fit
+def fit_task(out, k, surrogate=None, log=print, cache_every=300.0):
+    """Run and seal fit ``k`` of a campaign (skipped when already sealed).
+
+    Per-event log densities are cached in ``fits/fit_KKKK/logp_cache.npz``
+    (flushed every ``cache_every`` s, on SIGTERM and at the end), so a fit cut by
+    the end of an allocation resumes where it stopped.
+    """
+    import signal
+
+    from omnilearned.sbi.fit import LogpCache, load_fit_config, run_fit
 
     out = Path(out)
     seal = out / "fits" / f"fit_{k:04d}" / "seal.json"
     if seal.exists():
         return None
     cfg = load_fit_config(out / "fits" / f"fit_{k:04d}.toml")
+    seal.parent.mkdir(parents=True, exist_ok=True)
+    cache = LogpCache(seal.parent / "logp_cache.npz",
+                      {"fit_config_sha256": cfg["_config_sha256"],
+                       "observations_sha256": cfg["observations_sha256"],
+                       "checkpoint_sha256": cfg["checkpoint_sha256"]}, every=cache_every)
+    if cache.data:
+        log(f"fit {k}: resuming with {len(cache.data)} cached (candidate, event chunk) entries")
+
+    def on_term(signum, frame):  # end of allocation: keep what was computed
+        raise SystemExit(f"fit {k}: signal {signum}")
+
+    prev = signal.signal(signal.SIGTERM, on_term)
     t0 = time.time()
-    doc = run_fit(cfg, log_norm_fn=_log_norm(cfg), log=log, surrogate=surrogate)
+    try:
+        doc = run_fit(cfg, log_norm_fn=_log_norm(cfg), log=log, surrogate=surrogate,
+                      logp_cache=cache)
+    finally:
+        cache.flush()
+        signal.signal(signal.SIGTERM, prev)
     files = _seal_files(cfg["output_prefix"])
     rec = {"schema": SEAL_SCHEMA, "task": k, "fit_config_sha256": cfg["_config_sha256"],
            "observations_sha256": cfg["observations_sha256"],
@@ -222,6 +246,88 @@ def fit_task(out, k, surrogate=None, log=print):
 
 def worker_tasks(n_tasks, worker, n_workers):
     return list(range(worker, n_tasks, n_workers))
+
+
+def _job_alive(job):
+    import subprocess
+
+    try:
+        r = subprocess.run(["squeue", "-h", "-j", str(job), "-o", "%T"], capture_output=True,
+                           text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return True  # cannot tell: treat as alive
+    return r.returncode == 0 and r.stdout.strip() in ("RUNNING", "COMPLETING", "PENDING", "CONFIGURING")
+
+
+def lock_is_stale(info, max_age=5 * 3600.0):
+    """A claim is stale when its Slurm job is gone, its local process is gone, or it is too old."""
+    import socket
+
+    if time.time() - info.get("time", 0) > max_age:
+        return True
+    if info.get("job"):
+        return not _job_alive(info["job"])
+    if info.get("host") == socket.gethostname():
+        try:
+            os.kill(int(info["pid"]), 0)
+            return False
+        except (OSError, ValueError):
+            return True
+    return False
+
+
+def claim(out, k):
+    """Atomically claim fit k (lock file); reclaims stale claims. Returns True if ours."""
+    import socket
+
+    lock = Path(out) / "fits" / f"fit_{k:04d}" / "claim.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    info = {"job": os.environ.get("SLURM_JOB_ID"), "host": socket.gethostname(), "pid": os.getpid(),
+            "time": time.time(), "gpu": os.environ.get("CUDA_VISIBLE_DEVICES")}
+    for _ in range(2):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                with open(lock) as f:
+                    old = json.load(f)
+            except (OSError, ValueError):
+                old = {"time": 0}
+            if not lock_is_stale(old):
+                return False
+            lock.unlink(missing_ok=True)
+            continue
+        with os.fdopen(fd, "w") as f:
+            json.dump(info, f)
+        return True
+    return False
+
+
+def release(out, k):
+    (Path(out) / "fits" / f"fit_{k:04d}" / "claim.lock").unlink(missing_ok=True)
+
+
+def run_claiming(dirs, log=print):
+    """Fit unsealed tasks of one or more campaigns, interleaved, claiming each first.
+
+    Returns the number of fits sealed by this worker. Stops when nothing is left to
+    claim (other workers may still be running theirs).
+    """
+    queue = []
+    for d in dirs:
+        with open(Path(d) / "campaign.json") as f:
+            queue.append([(d, t["task"]) for t in json.load(f)["tasks"]])
+    order = [x for grp in zip(*queue) for x in grp] + [x for grp in queue for x in grp[min(map(len, queue)):]]
+    done = 0
+    for d, k in order:
+        if (Path(d) / "fits" / f"fit_{k:04d}" / "seal.json").exists() or not claim(d, k):
+            continue
+        try:
+            if fit_task(d, k, log=log) is not None:
+                done += 1
+        finally:
+            release(d, k)
+    return done
 
 
 # ---------------------------------------------------------------------------
@@ -456,7 +562,10 @@ def main(argv=None):
     p.add_argument("--spec", required=True, help="campaign TOML (see module docstring)")
     p.add_argument("--out", required=True)
     f = sub.add_parser("fit")
-    f.add_argument("--dir", required=True)
+    f.add_argument("--dir", required=True, action="append",
+                   help="campaign directory; repeat with --claim to interleave campaigns")
+    f.add_argument("--claim", action="store_true",
+                   help="claim unsealed fits dynamically (lock files) instead of a static split")
     f.add_argument("--worker", type=int, default=None, help="default: from SLURM_PROCID or 0")
     f.add_argument("--num-workers", type=int, default=1)
     f.add_argument("--tasks", type=int, nargs="*", default=None)
@@ -485,11 +594,16 @@ def main(argv=None):
         m = prepare(spec, a.out)
         print(f"campaign {spec.get('name')}: {m['n_ensembles']} x {m['n_events']} events ({m['source']}) -> {a.out}")
     elif a.cmd == "fit":
-        with open(Path(a.dir) / "campaign.json") as fh:
+        if a.claim:
+            print(f"worker sealed {run_claiming(a.dir)} fits")
+            return
+        if len(a.dir) != 1:
+            raise SystemExit("several --dir need --claim")
+        with open(Path(a.dir[0]) / "campaign.json") as fh:
             n = len(json.load(fh)["tasks"])
         w = a.worker if a.worker is not None else int(os.environ.get("SLURM_PROCID", 0))
         for k in (a.tasks if a.tasks else worker_tasks(n, w, a.num_workers)):
-            fit_task(a.dir, k)
+            fit_task(a.dir[0], k)
     elif a.cmd == "report":
         doc = report(a.dir, a.device, a.control)
         agg = doc["aggregate"]

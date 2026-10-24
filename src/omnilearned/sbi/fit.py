@@ -110,16 +110,70 @@ def _prior(cfg, grid):
     return uniform_log_prior(grid, bounds)
 
 
-def make_logp_fn(surrogate, obs, options, names, fixed=None):
+class LogpCache:
+    """Disk cache of per-event log densities, so an interrupted fit resumes.
+
+    Entries are keyed by (candidate row, event slice). Values do not depend on
+    the evaluation order (probes are keyed by event id), so a resumed fit equals
+    an uninterrupted one up to float32 batching roundoff. ``identity`` (hashes of
+    the fit config, observations and checkpoint) must match the stored one, or
+    the cache is refused. Saved atomically at most every ``every`` seconds and on
+    ``flush``.
+    """
+
+    def __init__(self, path, identity, every=300.0):
+        self.path, self.identity, self.every = str(path), dict(identity), float(every)
+        self.data, self.hits, self.misses, self._last = {}, 0, 0, time.time()
+        if os.path.exists(self.path):
+            with np.load(self.path, allow_pickle=False) as z:
+                stored = json.loads(str(z["identity"]))
+                if stored != self.identity:
+                    raise ValueError(f"cache {self.path} belongs to another fit: {stored}")
+                keys, lens, vals = z["keys"], z["lens"], z["vals"]
+            off = np.concatenate([[0], np.cumsum(lens)])
+            for i, k in enumerate(keys):
+                self.data[tuple(k.tolist())] = vals[off[i]:off[i + 1]]
+
+    @staticmethod
+    def key(row, sl):
+        return tuple(float(v) for v in row) + (float(sl.start), float(sl.stop))
+
+    def get(self, row, sl):
+        v = self.data.get(self.key(row, sl))
+        if v is None:
+            self.misses += 1
+        else:
+            self.hits += 1
+        return v
+
+    def put(self, row, sl, values):
+        self.data[self.key(row, sl)] = np.asarray(values, dtype=np.float64)
+        if time.time() - self._last > self.every:
+            self.flush()
+
+    def flush(self):
+        if not self.data:
+            return
+        keys = np.array(list(self.data.keys()), dtype=np.float64)
+        vals = list(self.data.values())
+        tmp = self.path + ".tmp.npz"
+        np.savez(tmp, identity=json.dumps(self.identity), keys=keys,
+                 lens=np.array([len(v) for v in vals], dtype=np.int64),
+                 vals=np.concatenate(vals))
+        os.replace(tmp, self.path)
+        self._last = time.time()
+
+
+def make_logp_fn(surrogate, obs, options, names, fixed=None, cache=None):
     """(event_slice, candidates) -> [m, n] per-event log densities.
 
     ``fixed`` maps parameter names held fixed (e.g. a local node value) when
-    ``names`` covers only part of the condition layout.
+    ``names`` covers only part of the condition layout. ``cache`` (a
+    :class:`LogpCache`) reuses values computed before an interruption.
     """
-    diag = {"seconds": 0.0, "nfe": 0, "rows": 0, "nonfinite": 0}
+    diag = {"seconds": 0.0, "nfe": 0, "rows": 0, "nonfinite": 0, "cached_rows": 0}
 
-    def fn(sl, cand):
-        cand = np.atleast_2d(cand)
+    def compute(sl, cand):
         full_names = list(names)
         if fixed:
             extra = np.array([[fixed[k] for k in fixed]] * cand.shape[0])
@@ -134,12 +188,29 @@ def make_logp_fn(surrogate, obs, options, names, fixed=None):
         diag["nonfinite"] += d["nonfinite"]
         return lp
 
+    def fn(sl, cand):
+        cand = np.atleast_2d(cand)
+        if cache is None:
+            return compute(sl, cand)
+        got = [cache.get(row, sl) for row in cand]
+        todo = [i for i, v in enumerate(got) if v is None]
+        diag["cached_rows"] += len(cand) - len(todo)
+        if todo:
+            lp = compute(sl, cand[todo])
+            for j, i in enumerate(todo):
+                got[i] = lp[j]
+                cache.put(cand[i], sl, lp[j])
+        return np.stack(got)
+
     return fn, diag
 
 
 def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
-            surrogate=None, observations=None, extra_provenance=None):
-    """Execute a fit configuration; returns the result document."""
+            surrogate=None, observations=None, extra_provenance=None, logp_cache=None):
+    """Execute a fit configuration; returns the result document.
+
+    ``logp_cache`` (:class:`LogpCache`) makes the fit resumable after an interruption.
+    """
     check_fit_config(cfg)
     start = time.time()
     dev = resolve_device(cfg.get("device", "auto"), cfg.get("allow_device_fallback", False))
@@ -195,7 +266,7 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
             raise ValueError("scan.support and scan.refine are exclusive")
         sup = scan_cfg["support"]
         grid = _grid(cfg["grid"])
-        fn, diag = make_logp_fn(surrogate, obs, options, grid.names)
+        fn, diag = make_logp_fn(surrogate, obs, options, grid.names, cache=logp_cache)
         res = support_scan(fn, len(obs), grid, sup["seed_stride"],
                            delta_logpost=sup.get("delta_logpost", 10.0),
                            event_chunk=scan_cfg.get("event_chunk", 256),
@@ -215,7 +286,7 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
         rounds = []
         refine = scan_cfg.get("refine", {})
         for r in range(1 + int(refine.get("rounds", 0))):
-            fn, diag = make_logp_fn(surrogate, obs, options, grid.names)
+            fn, diag = make_logp_fn(surrogate, obs, options, grid.names, cache=logp_cache)
             res = joint_scan(fn, len(obs), grid,
                              event_chunk=scan_cfg.get("event_chunk", 256),
                              candidate_chunk=scan_cfg.get("candidate_chunk", 8),
@@ -237,7 +308,8 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
         doc = res.save(out_prefix, extra={"provenance": provenance, "rounds": rounds})
     elif mode == "local_variable":
         doc = _run_local(cfg, surrogate, obs, options, scan_cfg, local_log_weight_fn,
-                         log_norm_fn, provenance, out_prefix, progress, log, file_order)
+                         log_norm_fn, provenance, out_prefix, progress, log, file_order,
+                         logp_cache)
     else:
         raise ValueError(f"unknown fit mode {mode}")
     doc["wall_seconds"] = time.time() - start
@@ -247,7 +319,7 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
 
 
 def _run_local(cfg, surrogate, obs, options, scan_cfg, weight_fn, log_norm_fn,
-               provenance, out_prefix, progress, log, file_order=lambda r: r):
+               provenance, out_prefix, progress, log, file_order=lambda r: r, logp_cache=None):
     """Shared parameters on a grid; local variable integrated per event."""
     if weight_fn is None:
         raise ValueError("local_variable mode needs local_log_weight_fn")
@@ -256,7 +328,7 @@ def _run_local(cfg, surrogate, obs, options, scan_cfg, weight_fn, log_norm_fn,
     nodes = np.linspace(loc["nodes"]["min"], loc["nodes"]["max"], int(loc["nodes"]["n"]))
     grid = _grid(cfg["grid"])  # shared parameters only
     full = Grid([name] + grid.names, [nodes] + grid.axes)
-    fn, diag = make_logp_fn(surrogate, obs, options, full.names)
+    fn, diag = make_logp_fn(surrogate, obs, options, full.names, cache=logp_cache)
     # log_norm_fn (if any) acts per (local, shared) node and per event.
     res = joint_scan(fn, len(obs), full, event_chunk=scan_cfg.get("event_chunk", 256),
                      candidate_chunk=scan_cfg.get("candidate_chunk", 8),
