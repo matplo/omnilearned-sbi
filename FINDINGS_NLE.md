@@ -41,6 +41,11 @@ inside an allocation with `SLURM_*` unset. On a login node run tests with
 ## Environment (Perlmutter)
 
 - **Data locations** (toy and JEWEL samples, sizes, file layout, readers): `docs/NLE_DATA.md`.
+- **Reports archive** (private): `matplo/omni-sbi-nle-jet-dev-reports`, clone at
+  `/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/omni-sbi-nle-jet-dev-reports`. HTML reports with
+  their sources and inputs by topic and time stamp, findings snapshots (one per commit of this
+  file), docs, all small run records of `$JEST_NLE_ROOT/runs`, data metadata and a standalone
+  reading guide. Refresh with `python3 tools/sync.py --push` there after updating this log.
 - Python: `$VIRTUAL_ENV/bin/python` (henv `omni-sbi`, `/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv`).
   Caution: in this shell the NERSC conda `python` comes first on `PATH`, so a bare `python`
   is **not** the henv interpreter. Always call `$VIRTUAL_ENV/bin/python` (or fix PATH order
@@ -625,6 +630,28 @@ public repository approved. Production still needs an approved budget (rule 8).
   validation split. Not resumable across allocations; expected 2–3 h (set 1.7 h, PET 2.7 h in
   round 2). Still missing for an M3-style JEWEL gate: fidelity samples (≈ 20 000 jets per
   point; the validation split has 950–1560).
+
+- **JEWEL training restart (12:03):** in 60220855 the four trainings spent 22 min opening
+  5400 of the 28 362 per-task shards each. Opening files on CFS ran at about 4 per second per
+  process, with CPUs idle and GPUs empty; loading alone (two read passes plus hashing) would
+  have taken more than the 4 h allocation.
+  - **Merge:** new `jewel.generate merge` (7d28866, tested) merges each split into point-major
+    shards with the same layout: 64 for train and 8 for validation, in `data/jewel_v1/merged`.
+    Every source is hash-checked against the split index, and each merged manifest lists its
+    sources.
+  - **Restart:** the old trainings were stopped with SIGSTOP; they hold the allocation's first
+    job step. The new run is an overlap step from snapshot 7d28866, output `runs/jewel_r1b/`:
+    merge with 32 workers, then the same four trainings. `runs/jewel_r1/` holds only the
+    aborted attempt's logs.
+  - **Clean-up at the end:** SIGKILL the old step's bash (pid 1433624) first, then the stopped
+    trainings. The checkout copy of `jewel_train_chunk.sh` that bash is executing has changed
+    since, and it must not resume reading it.
+- **Event-store status 4 = the two beam protons** (pid 2212, E = 2510 GeV, pT = 0).
+  - The subtraction's "final state" is status 1 or 4, the reference convention.
+  - Re-deriving three tasks with and without status 4 gives identical jets.
+  - Re-deriving from the float32 event store reproduces the stored jets to ≤ 6.4e-6 in
+    (η, φ, log pT).
+  - `docs/NLE_DATA.md` is corrected, and now has a numpy + h5py reading section.
 
 ### M5 development closure result (DONE 2026-10-24 08:14; diagnostic, round-1 generator)
 
