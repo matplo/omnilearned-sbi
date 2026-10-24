@@ -467,6 +467,10 @@ inference. Development data only (rule 4); the generator has **not** passed M3.
   concurrency test with 8 claimers), used from chunk 3 via `m5.env` (`SNAP`). Chunks 1–2 ran
   76c2c4e; the likelihood code is identical.
 - Interim (2 + 2 fits, no conclusions): control levels 0.04, 0.47; toy levels 0.60, 0.36.
+- **Concurrency test (chunk 2, A100-SXM4-80GB), from cache growth 23:01–23:58:** one fit
+  alone on a GPU ≈ 6.7–7 candidates/min (toy fits 2 and 4); two fits sharing a GPU ≈ 2.8/min
+  each, **5.6/min per GPU, i.e. 0.8× of one fit per GPU** (as lesson 4 on the TITAN RTX).
+  Chunks ≥ 3 run 1 fit per GPU (`PER=1`).
 - Also: the round-2 PET training 60133656 ran out of host memory (like 60133655). Fixed in
   b4e4c64 (chunked standardization and float32 preparation; peak host memory ≈ data size).
 
