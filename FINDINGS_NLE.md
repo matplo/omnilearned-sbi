@@ -473,6 +473,13 @@ inference. Development data only (rule 4); the generator has **not** passed M3.
   alone on a GPU ≈ 6.7–7 candidates/min (toy fits 2 and 4); two fits sharing a GPU ≈ 2.8/min
   each, **5.6/min per GPU, i.e. 0.8× of one fit per GPU** (as lesson 4 on the TITAN RTX).
   Chunks ≥ 3 run 1 fit per GPU (`PER=1`).
+- Chunk 2 (60190975) ended at its limit 02:50 with 10/20 sealed; chunk 3 (60203872, nid001480,
+  4 × A100-SXM4-40GB) started 02:51 with the claim fix: "removed 6 stale claim locks" once, 4
+  workers, 4 distinct claims.
+- **Interim at 10/20 (6 toy, 4 control; too few for conclusions, criteria apply to 10 + 10):**
+  toy: joint 68/95% 4/6, 6/6, levels KS p 0.96, mean pulls b −0.47 ± 0.27, T_ref −0.04 ± 0.22,
+  τ_init −0.03 ± 0.10; control: joint 4/4, 4/4, KS p 0.14, pulls b −0.10 ± 0.09, T_ref
+  +0.38 ± 0.05, τ_init −0.31 ± 0.06 (the tube/box pattern of lesson 8's v1 control).
 - Also: the round-2 PET training 60133656 ran out of host memory (like 60133655). Fixed in
   b4e4c64 (chunked standardization and float32 preparation; peak host memory ≈ data size).
 
@@ -561,6 +568,10 @@ public repository approved. Production still needs an approved budget (rule 8).
   Acceptance falls with TI (more jets quenched below 60 GeV); at TI 0.9 central b slightly
   lower than peripheral (4.7% vs 6.3%). Max N 146, well below 256. 21 tasks per point give
   ≈ 2800 jets at TI 0.1 but ≈ 1150 at TI 0.9.
+- **Validation sample complete (01:56):** 1909 tasks, 1.90 M events, **146 016 jets**, 128
+  points with 947–1557 jets (median 1104; 10 points just below 1000 from acceptance noise),
+  157 JEWEL core-hours. Main training array 60196918 completed (12 × 1 h 47 min = 21.5 node-h);
+  validation 60196919 1 × 1 h 06 min.
 - **Top-up (00:58, `generate topup`, code 148d29e):** per-point chunks from the measured
   acceptance to reach ≥ 2000 jets (training, +5% margin; +7950 tasks, 28362 in total) and
   ≥ 1000 (validation, +501 tasks, 1909 in total); new NJOB streams continue each point's
