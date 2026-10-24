@@ -258,3 +258,17 @@ def test_toy_train_runs_on_jewel_shards(fake_cfg, tmp_path):
     assert run["meta"]["backend"] == "jewel-2.6.0-cs-v1" and run["meta"]["box"]["T_ref"] == [0.1, 0.9]
     sur = FlowSurrogate.load(out / "checkpoint.pt")
     assert sur.layout.center["T_ref"] == pytest.approx(0.5) and sur.layout.scale["T_ref"] == pytest.approx(0.4)
+
+    # p(N|theta) retrain with the validation split in its own directory (JEWEL layout)
+    import torch
+
+    from omnilearned.sbi.toy import multiplicity_check
+
+    multiplicity_check.main(["retrain", "--checkpoint", str(out / "checkpoint.pt"), "--train-dir",
+                             str(tmp_path / "train"), "--val-dir", str(tmp_path / "validation"), "--out",
+                             str(tmp_path / "mult.pt"), "--hidden", "8", "--depth", "1", "--steps", "4",
+                             "--batch-size", "16"])
+    re = FlowSurrogate.load(tmp_path / "mult.pt")
+    assert re.metadata["multiplicity_retrained"]["val_dir"] == str(tmp_path / "validation")
+    for k, v in sur.model.state_dict().items():
+        assert torch.equal(re.model.state_dict()[k], v)

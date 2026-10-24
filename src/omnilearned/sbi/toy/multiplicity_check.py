@@ -115,6 +115,8 @@ def main(argv=None):
     r.add_argument("--train-dir", required=True)
     r.add_argument("--counts-dir", default=None,
                    help="train p(N|theta) on counts shards (train_counts_*.h5) from this directory")
+    r.add_argument("--val-dir", default=None,
+                   help="directory of the validation split (default: --train-dir; JEWEL keeps it apart)")
     r.add_argument("--out", required=True, help="new checkpoint path")
     r.add_argument("--hidden", type=int, default=256)
     r.add_argument("--depth", type=int, default=4)
@@ -164,7 +166,7 @@ def main(argv=None):
         n, th, _ = read_counts(sorted(Path(a.counts_dir).glob("train_counts_*.h5")))
     else:
         n, th, _ = _counts(a.train_dir, "train")
-    vn, vth, _ = _counts(a.train_dir, "validation")
+    vn, vth, _ = _counts(a.val_dir or a.train_dir, "validation")
     lay = sur.multiplicity.layout
     cond = lambda t: torch.from_numpy(lay.assemble(t, list(PARAMETERS)))  # noqa: E731
     model = MultiplicityModel(len(PARAMETERS), sur.multiplicity.max_n, hidden=a.hidden, depth=a.depth)
@@ -175,7 +177,8 @@ def main(argv=None):
     meta = dict(sur.metadata)
     parent = meta.pop("checkpoint_sha256")
     meta.update({"multiplicity_retrained": {"parent_checkpoint": a.checkpoint, "parent_sha256": parent,
-                                            "train_counts": a.counts_dir, "n_train": int(n.size),
+                                            "train_counts": a.counts_dir, "train_dir": a.train_dir,
+                                            "val_dir": a.val_dir or a.train_dir, "n_train": int(n.size),
                                             "hidden": a.hidden, "depth": a.depth, "steps": a.steps,
                                             "batch_size": a.batch_size, "lr": a.lr, "seed": a.seed,
                                             "best_val_nll": hist["best_val_nll"],
