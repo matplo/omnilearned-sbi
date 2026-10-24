@@ -40,6 +40,7 @@ inside an allocation with `SLURM_*` unset. On a login node run tests with
 
 ## Environment (Perlmutter)
 
+- **Data locations** (toy and JEWEL samples, sizes, file layout, readers): `docs/NLE_DATA.md`.
 - Python: `$VIRTUAL_ENV/bin/python` (henv `omni-sbi`, `/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv`).
   Caution: in this shell the NERSC conda `python` comes first on `PATH`, so a bare `python`
   is **not** the henv interpreter. Always call `$VIRTUAL_ENV/bin/python` (or fix PATH order
