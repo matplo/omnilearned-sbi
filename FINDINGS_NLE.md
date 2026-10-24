@@ -470,6 +470,38 @@ inference. Development data only (rule 4); the generator has **not** passed M3.
 - Also: the round-2 PET training 60133656 ran out of host memory (like 60133655). Fixed in
   b4e4c64 (chunked standardization and float32 preparation; peak host memory ≈ data size).
 
+## M8 preparation: JEWEL worker (2026-10-23/24, login node; code 27f28f0)
+
+User decisions (2026-10-23): Pb–Pb 5.02 TeV, pT-hat 50–400 GeV, **recoils on**, θ = (b via fixed
+centrality, TI, TAUI), box b 0–11 fm, TI 0.1–0.9 GeV, TAUI 0.2–1.0 fm/c, toy-v2 jet selection;
+PDF **EPPS21nlo_CT18Anlo_Pb208** (LHAPDF 904400; the user installed the PDF sets); no HepMC
+kept, jets + full events stored; porting the private adapter and subtraction kernel into this
+public repository approved. Production still needs an approved budget (rule 8).
+- Installation (henv, inspected only): JEWEL 2.6.0-custom, patches partons-v1 (status-23 hard
+  partons, PARI(17) as event scale) + perf-v1 (speed only). Neither touches subtraction.
+  JEWEL 2.6.0 itself has an in-generator constituent subtraction (`DOSUBTRACTION`, `RSUB`
+  default 1.0, `PUTONSHELL`); with it on, JEWEL writes no scattering centres. We subtract at
+  analysis level instead (Rivet `SubtractedJewelEvent` port, ΔR_max 0.5), keeping the raw
+  record re-subtractable.
+- Card checks against the installed source: medium labels are TI, TAUI, TC, WOODSSAXON,
+  CENTRMIN, CENTRMAX, NF, N0, D, SIGMANN, MDFACTOR, MDSCALEFAC; the nucleus is `MASS`/`NPROTON`
+  in the main card; `PDFSET` is read as an integer (a set name is silently ignored). A setup
+  suggested by another model used PROJ, TAR, BEAMENERGY, CENTRALITY, RECOIL and a PDF name:
+  none of those is a JEWEL 2.6.0 key.
+- EPPS21 with JEWEL: JEWEL generates pp, pn, np and nn channels (weights from NPROTON/MASS) with
+  neutrons from isospin-swapped proton PDFs; consistent with bound-proton nPDFs (the EPPS
+  convention). To be confirmed in the JEWEL log (set loaded, cross sections).
+- Code `omnilearned.sbi.jewel` (geometry, cards, hepmc, cs, jets, generate), config
+  `configs/jewel-2.6.0-cs-v1.toml`, farm `shell/nle/jewel_farm.sbatch`, probe
+  `shell/nle/jewel_probe.sbatch`, tests `tests/sbi/test_jewel.py` (7, incl. the worker end to
+  end with a fake JEWEL and the event-store round trip). Grid 12 × 9 × 9 = 972 training
+  points; holdouts at half steps: development (7.5, 0.35, 0.85), primary test (4.5, 0.45,
+  0.65), additional (1.5, 0.65, 0.35), (9.5, 0.25, 0.45); 128 Sobol validation points.
+- **Probe submitted: job 60194817** (1 CPU node, debug, 30 min): `runs/jewel/probe1/main`
+  (10 settings × 50 events: TI/TAUI corners at b = 0 and 11, centre (5.5, 0.5, 0.6), the
+  setting that stalled before (4.5, 0.45, 0.70)), `custom_simple` (identity check at the
+  centre, same NJOB) and `jewel_cs` (JEWEL's own subtraction, RSUB 0.5, same NJOB).
+
 ## Open items
 
 - **Decision (user): M5 compute.** With the scaled models a fit candidate costs 8.4 s
