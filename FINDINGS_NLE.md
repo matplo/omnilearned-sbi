@@ -58,6 +58,8 @@ inside an allocation with `SLURM_*` unset. On a login node run tests with
 | 2026-10-24 | M8 JEWEL probe | 60194817 (failed, rc 127), 60195690 | 1 × 0.2, 1 × 0.25 | debug CPU |
 | 2026-10-24 | M8 JEWEL production | 60196918 (array 0–11), 60196919, top-ups 60199888 (array 0–3), 60199889 | ≈ 36 (12 × 1.8 + 4 × 3.1 + 1.1 + 0.9) | training grid (2.20 M jets) + validation (146 k jets) |
 | 2026-10-23 | M2 round 2 | 60183701 / 60183702 (gpu shared, 1 GPU, 3.5 / 5 h, pending) | ≤ 0.25 × 3.5, 0.25 × 5 | set / PET 200k on `v2_m2`, memory fix |
+| 2026-10-24 | M3 round-2 gate | 60219376 (interactive chunk 1; `gate_drive.sh`, up to 3 chunks) | running | set + PET 200k, 128 points each |
+| 2026-10-24 | M8 JEWEL surrogates | 60220855 (interactive, 4 × A100-SXM4-80GB, nid200452) | running (≤ 4) | 4 trainings on `jewel_v1` |
 | 2026-10-22 | M3 | 60101552 (gpu, regular) | 0 (cancelled while pending) | gate of `set_d256_L6` with the old p(N\|θ) |
 | 2026-10-22 | M3 | 60101555 (gpu, regular) | 0 (cancelled while pending) | gate of `pet_d256_L6_66k` with the old p(N\|θ) |
 | 2026-10-22 | M3, M2 round 2 | 60132411 (interactive, urgent_gpu_ss11, nid003940, ran to the 4 h limit) | 1 × 4 | p(N\|θ) on all counts, gates of `set` / `pet100k` with it, `v2_m2` data |
@@ -607,6 +609,21 @@ public repository approved. Production still needs an approved budget (rule 8).
   ≥ 1000 (validation, +501 tasks, 1909 in total); new NJOB streams continue each point's
   chunk numbering. Jobs **60199888** (`jewel-train-topup`, array 0–3, 4 h) and **60199889** (`jewel-val-topup`,
   2 h). Revised total for the JEWEL training sample ≈ 18 CPU node-hours.
+
+- **JEWEL surrogate trainings, round 1 (started 2026-10-24 11:35, user request):** job
+  **60220855** (interactive, nid200452, 4 × A100-SXM4-80GB), `shell/nle/jewel_train_chunk.sh`
+  from snapshot bfdf3d5 (clean), output `runs/jewel_r1/`. One training per GPU on
+  `data/jewel_v1/train` (2.20 M jets, 972 points), validation `data/jewel_v1/validation`
+  (146 k jets, 128 points), toy round-2 settings (d256 L6 h8, 200k steps × batch 512 ≈ 47
+  epochs of the JEWEL sample, lr 3e-4, warmup 1000, cosine, EMA 0.9995, length buckets 16,
+  TF32, best EMA val checkpoint from 10k): `set_d256_L6_s0`, `pet_d256_L6_s0` (smooth PET,
+  local dim 64), and the same two with seed 1 (the seed pair gives the training-to-training
+  spread to judge later gate and shift differences against). Then p(N|θ) on all JEWEL
+  training counts (256 × 4, 30k steps, `multiplicity_check retrain --val-dir`, new option),
+  attached to each flow (`runs/jewel_r1/mult/<run>_multJ.pt`) and checked against the
+  validation split. Not resumable across allocations; expected 2–3 h (set 1.7 h, PET 2.7 h in
+  round 2). Still missing for an M3-style JEWEL gate: fidelity samples (≈ 20 000 jets per
+  point; the validation split has 950–1560).
 
 ### M5 development closure result (DONE 2026-10-24 08:14; diagnostic, round-1 generator)
 
