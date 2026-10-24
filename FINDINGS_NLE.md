@@ -455,6 +455,18 @@ inference. Development data only (rule 4); the generator has **not** passed M3.
   **60183702** (PET, 5 h), shared GPU QOS, same settings as 60133655/60133656.
 - Prediction from the gate's parameter shift: constrained-direction bias ≈ 0.6 posterior σ
   at N = 250.
+- **Chunk 1 (60183215) ended at its limit (22:48, rc 143) with 4/20 sealed** (toy 0–1, control
+  0–1). Fits are cheaper than estimated: 824–939 of 3542 grid nodes evaluated (support
+  closed after 8–9 passes), **6700–7500 s per fit** (≈ 8 s per candidate). Toy 2–3 and
+  control 2–3 were 40–55% done and resumed from their caches in chunk 2 (60190975, 22:50).
+  Revised total ≈ 20 × 2 h / 4 GPUs ≈ 10–11 node-hours.
+- **Claim race at the start of chunk 2:** with 8 workers, several reclaimed the same stale
+  chunk-1 locks at once, so toy fit 2 and control fit 2 each ran twice (cost only; the
+  duplicates compute identical values). One of each pair was killed (SIGKILL, lock kept).
+  Fixed in eacdb33 (workers no longer reclaim; one `unlock-stale` step before workers;
+  concurrency test with 8 claimers), used from chunk 3 via `m5.env` (`SNAP`). Chunks 1–2 ran
+  76c2c4e; the likelihood code is identical.
+- Interim (2 + 2 fits, no conclusions): control levels 0.04, 0.47; toy levels 0.60, 0.36.
 - Also: the round-2 PET training 60133656 ran out of host memory (like 60133655). Fixed in
   b4e4c64 (chunked standardization and float32 preparation; peak host memory ≈ data size).
 
