@@ -369,3 +369,29 @@ def test_closure_claims_and_interleaved_workers(tiny_run, tmp_path):
     assert not list(tmp_path.glob("*/fits/*/claim.lock"))
     assert all((d / "fits" / f"fit_{k:04d}" / "logp_cache.npz").exists() for d in (d1, d2) for k in (0, 1))
     assert closure.run_claiming([d1, d2], log=lambda m: None) == 0  # all sealed
+
+
+def test_chunked_transform_fit_and_prepare_match_one_shot():
+    import torch
+
+    from omnilearned.sbi.multiplicity import layout_with_multiplicity
+    from omnilearned.sbi.toy.train import prepare
+    from omnilearned.sbi.transforms import FeatureTransform
+
+    rng = np.random.default_rng(2)
+    n, w = 1037, 9
+    cnt = rng.integers(2, w + 1, n)
+    mask = np.arange(w)[None, :] < cnt[:, None]
+    x = np.stack([rng.uniform(-2.4, 2.4, (n, w)), rng.uniform(-1.1, 1.1, (n, w)), rng.normal(1, 1, (n, w))], -1)
+    x = np.where(mask[..., None], x, 0.0).astype(np.float32)
+    one = FeatureTransform.fit(["eta", "phi", "lpt"], [2.5, 1.2, None], x, mask)
+    chk = FeatureTransform.fit(["eta", "phi", "lpt"], [2.5, 1.2, None], x, mask, chunk=100)
+    np.testing.assert_allclose(chk.shift, one.shift, rtol=1e-12, atol=1e-13)
+    np.testing.assert_allclose(chk.scale, one.scale, rtol=1e-12)
+    data = {"x": x, "mask": mask, "theta": rng.uniform([0, 0.25, 0.2], [11, 0.55, 1.2], (n, 3)),
+            "n_constituents": cnt}
+    lay = layout_with_multiplicity(["b", "T_ref", "tau_init"], [0, 0.25, 0.2], [11, 0.55, 1.2])
+    a, b = prepare(data, one, lay, chunk=100), prepare(data, one, lay, chunk=10 ** 6)
+    assert a["u"].dtype == torch.float32 and torch.equal(a["u"], b["u"]) and torch.equal(a["cond"], b["cond"])
+    ref = one.forward(torch.as_tensor(x, dtype=torch.float64), torch.as_tensor(mask))[0].float()
+    assert torch.equal(a["u"], ref)

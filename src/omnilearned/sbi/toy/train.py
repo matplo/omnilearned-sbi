@@ -44,14 +44,21 @@ from omnilearned.sbi.velocity_pet import SmoothPETVelocity
 FEATURES = ["eta", "phi", "log_pt_over_GeV"]
 
 
-def prepare(data, transform, layout):
-    """Model-coordinate tensors for ``train_flow``: u, mask, cond."""
-    x = torch.as_tensor(data["x"], dtype=torch.float64)
+def prepare(data, transform, layout, chunk=200_000):
+    """Model-coordinate tensors for ``train_flow``: u, mask, cond.
+
+    The transform runs in float64 on chunks of ``chunk`` events into a preallocated
+    float32 array, so host memory stays near the size of the data (6 M jets × 81 slots
+    would otherwise need several 12 GB float64 temporaries).
+    """
     mask = torch.as_tensor(data["mask"], dtype=torch.bool)
-    u, _ = transform.forward(x, mask)
+    u = torch.empty(data["x"].shape, dtype=torch.float32)
+    for s in range(0, len(u), chunk):
+        x = torch.as_tensor(np.asarray(data["x"][s:s + chunk]), dtype=torch.float64)
+        u[s:s + chunk] = transform.forward(x, mask[s:s + chunk])[0].float()
     cond = layout.assemble(data["theta"], list(PARAMETERS),
                            context=data["n_constituents"][:, None].astype(np.float64))
-    return {"u": u.float(), "mask": mask, "cond": torch.from_numpy(cond)}
+    return {"u": u, "mask": mask, "cond": torch.from_numpy(cond)}
 
 
 def build_surrogate(args, train, val, out, log=print):
@@ -59,7 +66,7 @@ def build_surrogate(args, train, val, out, log=print):
     lo, hi = box_arrays(BOX)
     transform = FeatureTransform.fit(
         FEATURES, [sel.constituent_abs_eta_max, sel.constituent_abs_phi_max_rad, None],
-        train["x"], train["mask"])
+        train["x"], train["mask"], chunk=200_000)
     base = GaussianBase.standard(3)
     layout = layout_with_multiplicity(list(PARAMETERS), lo, hi)
     mlayout = ConditionLayout.from_bounds(list(PARAMETERS), lo, hi)
@@ -84,6 +91,8 @@ def build_surrogate(args, train, val, out, log=print):
     opts = TrainOptions(**{f.name: getattr(args, f.name) for f in fields(TrainOptions)
                            if hasattr(args, f.name)})
     tr, va = prepare(train, transform, layout), prepare(val, transform, layout)
+    train.pop("x", None)  # the float32 model coordinates replace the physical ones
+    val.pop("x", None)
     meta = {"backend": "toy-quenching-v2", "arch": args.arch, "parameters": list(PARAMETERS), "box": BOX,
             "train_options": opts.to_dict(), "tf32_training": bool(args.tf32),
             "n_params": int(sum(p.numel() for p in model.parameters()))}

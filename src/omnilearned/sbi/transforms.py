@@ -22,14 +22,24 @@ class FeatureTransform:
             raise ValueError("names, bounds, shift and scale must align")
 
     @classmethod
-    def fit(cls, names, bounds, x, mask):
-        """Fit the affine standardization on (training) data only."""
-        x = np.asarray(x, dtype=np.float64)
+    def fit(cls, names, bounds, x, mask, chunk=None):
+        """Fit the affine standardization on (training) data only.
+
+        ``chunk`` (events per pass) bounds the memory: two passes over chunks give the
+        same mean and (population) standard deviation as the one-shot computation.
+        """
         mask = np.asarray(mask, dtype=bool)
-        raw = _bounded_forward(x, bounds)
-        sel = raw[mask]
-        shift = sel.mean(0)
-        scale = sel.std(0)
+        n = len(mask)
+        chunk = int(chunk or max(n, 1))
+
+        def parts():
+            for s in range(0, n, chunk):
+                raw = _bounded_forward(np.asarray(x[s:s + chunk], dtype=np.float64), bounds)
+                yield raw[mask[s:s + chunk]]
+
+        count = int(mask.sum())
+        shift = sum(p.sum(0) for p in parts()) / count
+        scale = np.sqrt(sum(((p - shift) ** 2).sum(0) for p in parts()) / count)
         scale[scale <= 0] = 1.0
         return cls(names, bounds, shift, scale)
 
