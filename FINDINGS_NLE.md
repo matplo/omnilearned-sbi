@@ -54,6 +54,8 @@ inside an allocation with `SLURM_*` unset. On a login node run tests with
 |---|---|---|---|---|
 | 2026-10-22 | first day, M1, M2, M3 prep | 60098593 (interactive, urgent_gpu, TIMEOUT at 4 h) | 1 × 4 | checks, smoke chain, M1 data (CPU of this node), 3 trainings, sampler timing |
 | 2026-10-22 | M1 acceptance | 60101162 (cpu, debug) | 1 × 0.04 | shard regeneration on nid006833 + cross-host tests |
+| 2026-10-23 | M5 diagnostic | 60183215 (interactive, chunk 1 of the driver) | 1 × 4 | acceptance table, prepare, fits |
+| 2026-10-23 | M2 round 2 | 60183701 / 60183702 (gpu shared, 1 GPU, 3.5 / 5 h, pending) | ≤ 0.25 × 3.5, 0.25 × 5 | set / PET 200k on `v2_m2`, memory fix |
 | 2026-10-22 | M3 | 60101552 (gpu, regular) | 0 (cancelled while pending) | gate of `set_d256_L6` with the old p(N\|θ) |
 | 2026-10-22 | M3 | 60101555 (gpu, regular) | 0 (cancelled while pending) | gate of `pet_d256_L6_66k` with the old p(N\|θ) |
 | 2026-10-22 | M3, M2 round 2 | 60132411 (interactive, urgent_gpu_ss11, nid003940, ran to the 4 h limit) | 1 × 4 | p(N\|θ) on all counts, gates of `set` / `pet100k` with it, `v2_m2` data |
@@ -440,10 +442,21 @@ inference. Development data only (rule 4); the generator has **not** passed M3.
 - Driven unattended from login34 (screen) by `shell/nle/m5_drive.sh`, which requests 4 h
   interactive GPU nodes back to back (max 8). Chunk 1 = job **60183215** (nid200416,
   4 × A100-SXM4-80GB), started 18:48.
+- Chunk 1: PCH build 5 min; acceptance table 18:53–19:35 (96 points × 8192 clouds on 4 GPUs;
+  Pr_q(S|θ) 0.890–0.969); toy and control prepared by 19:46; fits from 19:46, workers claim
+  interleaved (toy 0, control 0, toy 1, control 1). First cache flushes: ≈ 9 s per candidate
+  per GPU (A100-SXM4-80GB, 10 GB used), i.e. ≈ 3.5–4 h per fit; fits cross chunk boundaries
+  via `logp_cache.npz`. Estimate ≈ 18–19 node-hours in total, 5–6 chunks.
+- Concurrency test (plan item): chunk 1 runs 1 fit per GPU, chunks ≥ 2 run 2 per GPU
+  (`PER=2` in `m5.env`); compare candidates per hour from the cache growth.
+- `PYTHONUNBUFFERED=1` added to `m5.env` after chunk 1 started (worker logs of chunk 1 are
+  block-buffered).
+- Round-2 trainings resubmitted with the memory fix (b4e4c64): **60183701** (set, 3.5 h) and
+  **60183702** (PET, 5 h), shared GPU QOS, same settings as 60133655/60133656.
 - Prediction from the gate's parameter shift: constrained-direction bias ≈ 0.6 posterior σ
   at N = 250.
-- Also: the round-2 PET training 60133656 ran out of host memory (like 60133655); both
-  round-2 trainings need the chunked data preparation before resubmission.
+- Also: the round-2 PET training 60133656 ran out of host memory (like 60133655). Fixed in
+  b4e4c64 (chunked standardization and float32 preparation; peak host memory ≈ data size).
 
 ## Open items
 
