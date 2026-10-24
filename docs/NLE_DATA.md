@@ -57,6 +57,17 @@ The held-out settings lie on half steps of the grid (`[holdout]` in the config).
 | `data/jewel_v1/train` | train | 972 | 1891–2943 (median 2167) | 2 199 271 | 28.30 M | 28 362 | 1.33 GB (+ 0.65 GB diag) | 601 GB |
 | `data/jewel_v1/validation` | validation | 128 | 947–1557 | 146 016 | 1.90 M | 1 909 | 0.09 GB (+ 0.04 GB diag) | 40 GB |
 
+`data/jewel_v1/merged` holds the same jets as these two splits, merged on 2026-10-24 by
+`generate merge`. CFS opens only about 4 files/s per process, so reading 28 k task files took
+hours; the merged files load in under a minute.
+- **Layout:** 64 training and 8 validation shards in the same layout (`train_NNNNN.h5`,
+  `validation_NNNNN.h5`, each with `.diag.h5` and a `.json` manifest), point-major: all
+  chunks of a point sit in one file, in chunk order.
+- **Index:** `index_train.json` and `index_validation.json` (schema `jewel-merged-v1-index`)
+  sit side by side, so `--data-dir` and `--val-dir` can both point there.
+- **Provenance:** each manifest's `sources` lists the task shards and their sha256.
+- **Event stores:** stay with the tasks; a merged jet's `event_id` finds its event.
+
 One task is 1000 JEWEL events at one point. The files per task
 (`<split>_p<point>_c<chunk>`) are:
 
