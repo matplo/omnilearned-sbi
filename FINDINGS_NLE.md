@@ -55,6 +55,8 @@ inside an allocation with `SLURM_*` unset. On a login node run tests with
 | 2026-10-22 | first day, M1, M2, M3 prep | 60098593 (interactive, urgent_gpu, TIMEOUT at 4 h) | 1 × 4 | checks, smoke chain, M1 data (CPU of this node), 3 trainings, sampler timing |
 | 2026-10-22 | M1 acceptance | 60101162 (cpu, debug) | 1 × 0.04 | shard regeneration on nid006833 + cross-host tests |
 | 2026-10-23 | M5 diagnostic | 60183215 (interactive, chunk 1 of the driver) | 1 × 4 | acceptance table, prepare, fits |
+| 2026-10-24 | M8 JEWEL probe | 60194817 (failed, rc 127), 60195690 | 1 × 0.2, 1 × 0.25 | debug CPU |
+| 2026-10-24 | M8 JEWEL production | 60196918 (array 0–11), 60196919 | ≤ 13 × 4 | training grid + validation |
 | 2026-10-23 | M2 round 2 | 60183701 / 60183702 (gpu shared, 1 GPU, 3.5 / 5 h, pending) | ≤ 0.25 × 3.5, 0.25 × 5 | set / PET 200k on `v2_m2`, memory fix |
 | 2026-10-22 | M3 | 60101552 (gpu, regular) | 0 (cancelled while pending) | gate of `set_d256_L6` with the old p(N\|θ) |
 | 2026-10-22 | M3 | 60101555 (gpu, regular) | 0 (cancelled while pending) | gate of `pet_d256_L6_66k` with the old p(N\|θ) |
@@ -505,6 +507,46 @@ public repository approved. Production still needs an approved budget (rule 8).
   (10 settings × 50 events: TI/TAUI corners at b = 0 and 11, centre (5.5, 0.5, 0.6), the
   setting that stalled before (4.5, 0.45, 0.70)), `custom_simple` (identity check at the
   centre, same NJOB) and `jewel_cs` (JEWEL's own subtraction, RSUB 0.5, same NJOB).
+
+- **Probe attempt 1 (60194817) failed** every task with rc 127: the nested `henv` launcher was
+  not on PATH, and inside henv the JEWEL binary did not find `libLHAPDF.so`. Fixed (f54a334):
+  the JEWEL subprocess sources the installed `lhapdf` and `jewel` `env.sh` (nothing modified).
+- **Probe (60195690, nid004171, ≈ 15 min of a debug CPU node), 50 requested events per task
+  (JEWEL's pp/pn/np/nn split delivers 47–49):**
+
+  | (b, TI, TAUI) | centrality % | s/event | selected | N range | event store kB/event |
+  |---|---|---|---|---|---|
+  | (0, 0.1, 0.2) | 0.0 | 0.57 | 19% | 11–34 | 3.4 |
+  | (0, 0.1, 1.0) | 0.0 | 0.59 | 9% | 10–23 | 3.2 |
+  | (0, 0.9, 0.2) | 0.0 | 0.91 | 10% | 26–48 | 36.1 |
+  | (0, 0.9, 1.0) | 0.0 | 1.18 | 8% | 27–45 | 44.8 |
+  | (11, 0.1, 0.2) | 51.1 | 0.57 | 12% | 11–26 | 3.3 |
+  | (11, 0.1, 1.0) | 51.1 | 0.59 | 6% | 7–24 | 3.3 |
+  | (11, 0.9, 0.2) | 51.1 | 0.82 | 13% | 17–54 | 17.2 |
+  | (11, 0.9, 1.0) | 51.1 | 0.88 | 4% | 13–21 | 26.4 |
+  | (5.5, 0.5, 0.6) | 13.0 | 0.86 | 12% | 17–56 | 23.7 |
+  | (4.5, 0.45, 0.70) | 8.8 | 0.75 | 2% | 9 | 21.2 |
+
+  - **No stall** at any setting, including (4.5, 0.45, 0.70), which stalled on the old GPU node.
+  - Seconds per event include the one-off table setup (≈ 20–25 s per task).
+  - Selected fraction over all 478 events: **9.6%**. Rejections re-derived from the event
+    stores: jet pT outside 60–200 (239; median leading-jet pT 43 GeV), constituent
+    fiducial (101; forward jets, median |η_jet| 2.7, ETAMAX 3.1 partons), not one jet
+    (62; soft, median 47 GeV), jet η (30). The low fraction is the steep pT-hat spectrum.
+  - Multiplicities well below the 256 cap (max 56).
+  - **Subtraction validated on real 2.6.0 output:** custom-simple + our Python port
+    (ΔR_max 0.5) and custom-perf-simple + JEWEL's built-in subtraction (RSUB 0.5), same
+    NJOB, give **identical selected jets** (same event ids and multiplicities, jet pT
+    equal, constituents within 5e-7 = float32 rounding). This also confirms that
+    custom-perf generates the same events as custom.
+  - CFS project `alice`: 738 TB of 1.9 PB used, so a few hundred GB of event stores is fine.
+    **Home is 97.3% full** (38.9/40 GiB); nothing of this work writes there.
+- **Production (user: "generate the jewel on CPU alloc", 2026-10-24), started from snapshot
+  c4cf179:** training grid 972 points × 21 tasks × 1000 events (20.4 M events, target ≈ 2000
+  jets per point at 9.6%) in `data/jewel_v1/train`, chunk-major task order; validation 128
+  Sobol points × 11 tasks (1.4 M events) in `data/jewel_v1/validation`. Jobs **60196918**
+  (array 0–11, regular CPU, 4 h each, 128 workers per node, 1 h task timeout) and **60196919**
+  (1 node). Expected ≈ 40 CPU node-hours (request ≤ 52) and ≈ 0.4 TB of event stores.
 
 ## Open items
 
