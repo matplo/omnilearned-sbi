@@ -587,7 +587,7 @@ public repository approved. Production still needs an approved budget (rule 8).
   soft-8 fraction 0.14 → 0.03 (more constituents share the pT); ⟨N⟩ 31.8 → 27.0 for b 0 → 11
   (TI 0.5); ⟨N⟩ 27.0 → 35.7 for TAUI 0.2 → 1.0 (later TAUI = longer hot phase in JEWEL's
   profile). The multiplicity (recoil medium response surviving the subtraction) is the
-  strongest single response; unlike the toy, b and TAUI move it in different directions.
+  strongest single response.
 - **Top-up (00:58, `generate topup`, code 148d29e):** per-point chunks from the measured
   acceptance to reach ≥ 2000 jets (training, +5% margin; +7950 tasks, 28362 in total) and
   ≥ 1000 (validation, +501 tasks, 1909 in total); new NJOB streams continue each point's
