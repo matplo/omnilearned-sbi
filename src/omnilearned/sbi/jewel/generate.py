@@ -94,6 +94,50 @@ def plan(cfg, split, out, chunks=1, points=None, theta=None, keep_hepmc=(), extr
     return doc
 
 
+def topup(directory, target_jets, margin=1.05, max_chunks=None, log=print):
+    """Append tasks so that every point reaches ``target_jets`` selected jets.
+
+    The chunks a point needs follow from its measured acceptance (finished tasks of the
+    point); points without a finished task are skipped. Chunk indices continue after the
+    existing ones (new NJOB streams), chunk-major. Rewrites ``tasks.json`` atomically;
+    running workers keep their own list and claims prevent double work.
+    """
+    directory = Path(directory)
+    doc = load(directory)
+    cfg = doc["config"]
+    cap = int(max_chunks or cfg["randomness"]["chunks_per_point"])
+    by_point, done = {}, {}
+    for t in doc["tasks"]:
+        by_point.setdefault(t["point_id"], []).append(t)
+        p = directory / f"{t['name']}.json"
+        if p.exists():
+            with open(p) as f:
+                m = json.load(f)
+            done.setdefault(t["point_id"], []).append((m["jets_selected"], m["events_generated"]))
+    new = []
+    for pid, tl in by_point.items():
+        if pid not in done:
+            continue
+        jets_, ev = (sum(v) for v in zip(*done[pid]))
+        acc = jets_ / max(1, ev)
+        want = min(cap, int(np.ceil(target_jets * margin / max(acc * tl[0]["nevent"], 1e-9))))
+        have = max(t["chunk"] for t in tl) + 1
+        for c in range(have, want):
+            t0 = tl[0]
+            new.append({**t0, "name": task_name(doc["split"], pid, c), "chunk": c,
+                        "njob": cards.njob(cfg, doc["split"], pid, c), "keep_hepmc": False})
+    new.sort(key=lambda t: (t["chunk"], t["point_id"]))
+    doc["tasks"] = doc["tasks"] + new
+    doc.setdefault("topups", []).append({"target_jets": target_jets, "margin": margin,
+                                         "added": len(new), "time": time.time()})
+    tmp = directory / f"tasks.json.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(doc, f, indent=1)
+    os.replace(tmp, directory / "tasks.json")
+    log(f"top-up to {target_jets} jets: {len(new)} tasks added ({len(doc['tasks'])} in total)")
+    return new
+
+
 # ---------------------------------------------------------------------------
 # one task
 # ---------------------------------------------------------------------------
@@ -359,6 +403,10 @@ def main(argv=None):
     w.add_argument("--max-tasks", type=int, default=None)
     u = sub.add_parser("unlock-stale")
     u.add_argument("--dir", required=True)
+    t = sub.add_parser("topup", help="add tasks so every point reaches a jet target")
+    t.add_argument("--dir", required=True)
+    t.add_argument("--target-jets", type=int, required=True)
+    t.add_argument("--margin", type=float, default=1.05)
     i = sub.add_parser("index")
     i.add_argument("--dir", required=True)
     s = sub.add_parser("inspect")
@@ -374,6 +422,8 @@ def main(argv=None):
         print(f"worker ran {work(a.dir, a.scratch, a.timeout, max_tasks=a.max_tasks)} tasks")
     elif a.cmd == "unlock-stale":
         tasklocks.unlock_stale(sorted(Path(a.dir).glob("claims/*.lock")))
+    elif a.cmd == "topup":
+        topup(a.dir, a.target_jets, a.margin)
     elif a.cmd == "index":
         idx = write_index(a.dir)
         print(f"{idx['tasks_done']}/{idx['tasks_total']} tasks, {idx['n_jets']} jets, {idx['events']} events")

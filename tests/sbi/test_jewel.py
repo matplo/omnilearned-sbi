@@ -213,3 +213,21 @@ def test_plan_is_chunk_major(tmp_path):
     doc = generate.plan(CFG, "probe", tmp_path, chunks=2, theta=[[1, 0.2, 0.3], [2, 0.3, 0.4]], nevent=5)
     assert [(t["chunk"], t["point_id"]) for t in doc["tasks"]] == [(0, 0), (0, 1), (1, 0), (1, 1)]
     assert len({t["njob"] for t in doc["tasks"]}) == 4
+
+
+def test_topup_adds_chunks_from_measured_acceptance(fake_cfg, tmp_path):
+    pytest.importorskip("hepyy")
+    from omnilearned.sbi.jewel import generate
+
+    d = tmp_path / "farm"
+    generate.plan(fake_cfg, "probe", d, chunks=1, theta=[[4.5, 0.45, 0.65], [1.5, 0.3, 0.5]], nevent=20)
+    generate.work(d, scratch=str(tmp_path), log=lambda m: None, max_tasks=1)  # only point 0 done
+    with open(d / "probe_p00000_c000.json") as f:
+        m = json.load(f)
+    acc = m["jets_selected"] / m["events_generated"]
+    new = generate.topup(d, target_jets=30, margin=1.0, log=lambda msg: None)
+    want = int(np.ceil(30 / (acc * 20)))
+    assert len(new) == max(0, want - 1) and all(t["point_id"] == 0 for t in new)
+    assert [t["chunk"] for t in new] == list(range(1, want))
+    doc = generate.load(d)
+    assert len({t["njob"] for t in doc["tasks"]}) == len(doc["tasks"]) and doc["topups"][0]["added"] == len(new)
