@@ -56,7 +56,7 @@ inside an allocation with `SLURM_*` unset. On a login node run tests with
 | 2026-10-22 | M1 acceptance | 60101162 (cpu, debug) | 1 × 0.04 | shard regeneration on nid006833 + cross-host tests |
 | 2026-10-23 | M5 diagnostic | 60183215 (interactive, chunk 1 of the driver) | 1 × 4 | acceptance table, prepare, fits |
 | 2026-10-24 | M8 JEWEL probe | 60194817 (failed, rc 127), 60195690 | 1 × 0.2, 1 × 0.25 | debug CPU |
-| 2026-10-24 | M8 JEWEL production | 60196918 (array 0–11), 60196919 | ≤ 13 × 4 | training grid + validation |
+| 2026-10-24 | M8 JEWEL production | 60196918 (array 0–11), 60196919, top-ups 60199888 (array 0–3), 60199889 | ≈ 36 (12 × 1.8 + 4 × 3.1 + 1.1 + 0.9) | training grid (2.20 M jets) + validation (146 k jets) |
 | 2026-10-23 | M2 round 2 | 60183701 / 60183702 (gpu shared, 1 GPU, 3.5 / 5 h, pending) | ≤ 0.25 × 3.5, 0.25 × 5 | set / PET 200k on `v2_m2`, memory fix |
 | 2026-10-22 | M3 | 60101552 (gpu, regular) | 0 (cancelled while pending) | gate of `set_d256_L6` with the old p(N\|θ) |
 | 2026-10-22 | M3 | 60101555 (gpu, regular) | 0 (cancelled while pending) | gate of `pet_d256_L6_66k` with the old p(N\|θ) |
@@ -572,6 +572,14 @@ public repository approved. Production still needs an approved budget (rule 8).
   points with 947–1557 jets (median 1104; 10 points just below 1000 from acceptance noise),
   157 JEWEL core-hours. Main training array 60196918 completed (12 × 1 h 47 min = 21.5 node-h);
   validation 60196919 1 × 1 h 06 min.
+- **Training sample complete (03:40):** `data/jewel_v1/train`, 28 362 tasks, 28.30 M events,
+  **2 199 271 selected jets**, 2356 JEWEL core-hours; per grid point 1891–2943 jets (median
+  2167; 53 of 972 points slightly below 2000 from acceptance noise). Jet shards 1.33 GB,
+  **raw event stores 601 GB** (above the 0.4 TB guess; CFS project `alice`, shared space).
+  No task failed. CPU node-hours: main array 21.5, top-up array ≈ 12.5, validation 1.1 +
+  0.9; **≈ 36 in total** (estimate ≤ 52). Not yet done: p(N|θ) and gate-style checks on
+  JEWEL; a training run needs `toy.train` to take the JEWEL box (it uses the toy BOX for the
+  condition normalization) and both splits in one data directory.
 - **Top-up (00:58, `generate topup`, code 148d29e):** per-point chunks from the measured
   acceptance to reach ≥ 2000 jets (training, +5% margin; +7950 tasks, 28362 in total) and
   ≥ 1000 (validation, +501 tasks, 1909 in total); new NJOB streams continue each point's
