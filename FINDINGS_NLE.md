@@ -653,6 +653,41 @@ public repository approved. Production still needs an approved budget (rule 8).
     (η, φ, log pT).
   - `docs/NLE_DATA.md` is corrected, and now has a numpy + h5py reading section.
 
+- **Round-2 gate, set model, complete (14:00).** `set_d256_L6_200k_multC64` at all 128
+  validation points; `gate summarize --n-settings 128` from snapshot ecab59b; job 60219376,
+  A100. Compared with round 1 (`set_d256_L6_multC64`, the same points):
+
+  | | round 1 | round 2 |
+  |---|---|---|
+  | FAIL (significant at α/128 and relevant) | 9 | **1** |
+  | significant at α/128 = 3.9e-4 | 22 | 1 |
+  | p < 0.01 (1.3 expected) | 104 | 23 |
+  | uniformity KS p of the 128 p-values | 1e-103 | 7e-49 |
+  | mean largest relevance at N = 1000 | 1.05 | 0.91 |
+  | settings where width / outer fraction / jet pT is relevant | 35 / 23 / 11 | 22 / 15 / 6 |
+  | surrogate acceptance | 0.90–0.96 | 0.92–0.97 |
+
+  - **The one FAIL is point 50**, (9.77, 0.527, 1.16), a box corner (large b, high T_ref,
+    late τ_init). Its p = 3.90e-4 sits just below the threshold 3.906e-4; width, outer
+    fraction and jet pT are relevant there (largest 1.55). By rule 5 it stays a FAIL, so
+    **the round-2 set model does not formally pass M3**.
+  - **The residual is collective.** p-values are still not uniform (23 below 0.01).
+  - **Same pattern as round 1:** the generated jets are slightly too narrow at high T_ref,
+    and the effect is weaker.
+  - **Equivalent shift at the development point** (computed earlier): constrained direction
+    1.17 (round 1 ≈ 1.3; noise ≈ 0.55); marginal shifts at N = 1000 b +0.53σ, T_ref +0.48σ,
+    τ_init −0.30σ.
+- **PET gate** is at 88 of 128 points (14:00). Extra PET workers now also run on the set
+  model's GPUs (`runs/m3/r2_gate/extra_gpus.sh`, an overlap step in 60219376 from 13:41;
+  explicit `--points` blocks 103–127 odd on GPU 1 and 104–126 even on GPU 0, same snapshot
+  and seeds). The rest goes to driver chunk 2.
+- **JEWEL set trainings done (13:59).** `set_d256_L6_s0`: best EMA val 1.19415 at 178k, sha
+  3932a3053e22. `set_d256_L6_s1`: 1.19412 at 200k, sha e60d5b8216fc. Each took 1.72 h on an
+  A100-80GB, 30 ms/step. The seed pair agrees to 3e-5 in validation loss, and the curves are
+  flat from about 120k (1.1943). The JEWEL flow NLL is not comparable to the toy's (different
+  feature normalisation and multiplicities). The p(N|θ) retrain on all JEWEL counts follows
+  in the same job.
+
 ### M5 development closure result (DONE 2026-10-24 08:14; diagnostic, round-1 generator)
 
 Campaign `runs/m5/dev_N250_setC64`, checkpoint `set_d256_L6_multC64`, N = 250 at the
