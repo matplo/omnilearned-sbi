@@ -425,6 +425,26 @@ stream number changed.
 - Not in the driver yet: the M5 grid choice (nested subsample against a finer reference,
   lesson 2) — a template grid is given; M4 numerics for the chosen generator.
 
+## M5 development closure, diagnostic (started 2026-10-23 18:48 PDT)
+
+User decision (2026-10-23): run the development closure now with the round-1 generator, as
+the end-to-end test of whether the gate's residuals (9/128 FAIL, 1–3% mean offsets) bias
+inference. Development data only (rule 4); the generator has **not** passed M3.
+- Campaign `runs/m5/dev_N250_setC64` (runbook `docs/M5_DEV_CLOSURE.md`): checkpoint
+  `runs/m3/mult/set_d256_L6_multC64.pt`; 10 toy ensembles (development stream, indices
+  1000–1009) and 10 self-closure control ensembles (stream 11, 2000–2009), N = 250;
+  lesson 2's v1 support grid (23 × 14 × 11, stride 6/3/4, Δ 10; **no v2 nested-grid check**);
+  midpoint-64, 8 per-step probes; selection normalization from a 6 × 4 × 4 acceptance table
+  (8192 clouds per point). Code f3544f2/76c2c4e (snapshot 76c2c4e): resumable fits
+  (`fit.LogpCache`), dynamic claiming across allocations.
+- Driven unattended from login34 (screen) by `shell/nle/m5_drive.sh`, which requests 4 h
+  interactive GPU nodes back to back (max 8). Chunk 1 = job **60183215** (nid200416,
+  4 × A100-SXM4-80GB), started 18:48.
+- Prediction from the gate's parameter shift: constrained-direction bias ≈ 0.6 posterior σ
+  at N = 250.
+- Also: the round-2 PET training 60133656 ran out of host memory (like 60133655); both
+  round-2 trainings need the chunked data preparation before resubmission.
+
 ## Open items
 
 - **Decision (user): M5 compute.** With the scaled models a fit candidate costs 8.4 s
