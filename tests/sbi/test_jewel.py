@@ -131,6 +131,7 @@ def fake_cfg(tmp_path):
     cfg = json.loads(json.dumps(CFG))
     cfg["jewel"]["executable"] = str(exe)
     cfg["jewel"]["launcher"] = []
+    cfg["jewel"]["env_scripts"] = []
     return cfg
 
 
@@ -182,7 +183,8 @@ def test_worker_records_timeouts_and_continues(fake_cfg, tmp_path):
     d = tmp_path / "farm"
     generate.plan(fake_cfg, "probe", d, chunks=1, theta=[[4.5, 0.45, 0.65]], nevent=5,
                   extra={"SLEEP": 30})
-    assert generate.work(d, scratch=str(tmp_path), timeout=2, log=lambda m: None) == 0
+    assert generate.work(d, scratch=str(tmp_path), timeout=2, log=lambda m: None) == 1  # attempted
+    assert not (d / "probe_p00000_c000.json").exists()
     fails = [json.loads(line) for line in open(d / "failures.log")]
     assert fails[0]["task"] == "probe_p00000_c000" and "timeout" in fails[0]["error"]
     assert not list((d / "claims").glob("*.lock"))
@@ -194,3 +196,12 @@ def test_reader_ignores_truncated_last_line(tmp_path):
                  "E 2 -1 95.0 0 0 0 0 1 1 2 0 1 1\nP 2 211 2.0 0.0 0.0 2.0 0.0 1 0 0 0 0\nP 3 21 1.5e+00 0.0")
     evs = list(hepmc.read_events(p))
     assert [e["number"] for e in evs] == [1, 2] and len(evs[1]["pid"]) == 1
+
+
+def test_jewel_command_sources_env_scripts():
+    from omnilearned.sbi.jewel.generate import jewel_command
+
+    cmd = jewel_command(CFG, "/x/jewel")
+    assert cmd[0] == "bash" and cmd[-2:] == ["/x/jewel", "params.dat"]
+    assert all(f'source "{s}"' in cmd[2] for s in CFG["jewel"]["env_scripts"])
+    assert "LHAPDF_DATA_PATH" in cmd[2]

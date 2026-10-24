@@ -8,7 +8,10 @@ backend = "jewel-2.6.0-cs-v1"
 [jewel]
 prefix = "/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv/hepyy_packages/jewel/2.6.0-custom"
 lhapdf_data = "/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv/hepyy_packages/lhapdf/6.5.5/share/LHAPDF"
-launcher = ["henv", "-n", "omni-sbi", "-x"]   # environment for the binary (LHAPDF libraries and data)
+# environment of the binary: the installed packages' own env scripts (LHAPDF library, JEWEL);
+# sourced for the JEWEL subprocess only, nothing is modified
+env_scripts = ["/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv/hepyy_packages/lhapdf/6.5.5/env.sh",
+               "/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv/hepyy_packages/jewel/2.6.0-custom/env.sh"]
 variant = "custom-perf-simple"   # partons-v1 + perf-v1: same events as custom-simple, faster
 sqrts_GeV = 5020.0
 ptmin_GeV = 50.0                 # hard-process pT-hat range

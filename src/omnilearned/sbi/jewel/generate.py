@@ -144,6 +144,27 @@ def read_events_store(path):
     return out
 
 
+def jewel_command(cfg, exe):
+    """argv that runs ``exe params.dat`` with the package env scripts sourced (if any)."""
+    j = cfg["jewel"]
+    scripts = j.get("env_scripts", [])
+    launcher = list(j.get("launcher", []))
+    if not scripts:
+        return launcher + [exe, "params.dat"]
+    src = "; ".join(f'source "{s}"' for s in scripts)
+    data = j.get("lhapdf_data")
+    exp = f'; export LHAPDF_DATA_PATH="{data}"' if data else ""
+    return launcher + ["bash", "-c", f'{src}{exp}; exec "$0" "$@"', exe, "params.dat"]
+
+
+def _keep_failure(work, out_dir, name):
+    d = Path(out_dir) / "failed" / name
+    d.mkdir(parents=True, exist_ok=True)
+    for f in ("stdout.txt", "jewel.log", "params.dat", "medium.dat"):
+        if (work / f).exists():
+            shutil.copy(work / f, d / f)
+
+
 def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
     """Run one task; returns its manifest (written to ``<task>.json``)."""
     out_dir = Path(out_dir)
@@ -160,7 +181,7 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
         (work / "medium.dat").write_text(medium)
         exe = cards.inspect_installation(cfg)["executable"] if not cfg["jewel"].get("executable") \
             else cfg["jewel"]["executable"]
-        cmd = list(cfg["jewel"].get("launcher", [])) + [exe, "params.dat"]
+        cmd = jewel_command(cfg, exe)
         with open(work / "stdout.txt", "w") as so:
             proc = subprocess.Popen(cmd, cwd=work, stdout=so, stderr=subprocess.STDOUT,
                                     start_new_session=True)
@@ -175,6 +196,7 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
         logtail = (work / "jewel.log").read_text(errors="replace").splitlines()[-40:] \
             if (work / "jewel.log").exists() else []
         if rc != 0 and (not hep.exists() or hep.stat().st_size == 0):
+            _keep_failure(work, out_dir, name)
             raise RuntimeError(f"JEWEL {name}: rc={rc}, no HepMC; log tail: {logtail[-5:]}")
         sel = jets.selection_from_config(cfg)
         t1 = time.time()
@@ -258,7 +280,8 @@ def load(directory):
 
 
 def work(directory, scratch=None, timeout=None, log=print, max_tasks=None):
-    """Claim and run unfinished tasks until none is left; returns the number run here."""
+    """Claim and run unfinished tasks until none is left; returns the number attempted here
+    (failed attempts are listed in ``failures.log``, their JEWEL output under ``failed/``)."""
     directory = Path(directory)
     doc = load(directory)
     cfg = dict(doc["config"])
@@ -274,9 +297,9 @@ def work(directory, scratch=None, timeout=None, log=print, max_tasks=None):
         try:
             if (directory / f"{t['name']}.json").exists():
                 continue
+            done += 1  # attempts count towards max_tasks
             try:
                 run_task(cfg, t, directory, scratch=scratch, timeout=timeout, log=log)
-                done += 1
             except Exception as e:  # recorded, the farm continues with other tasks
                 with open(directory / "failures.log", "a") as f:
                     f.write(json.dumps({"task": t["name"], "error": repr(e), "host": socket.gethostname(),
