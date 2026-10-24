@@ -454,7 +454,10 @@ inference. Development data only (rule 4); the generator has **not** passed M3.
 - `PYTHONUNBUFFERED=1` added to `m5.env` after chunk 1 started (worker logs of chunk 1 are
   block-buffered).
 - Round-2 trainings resubmitted with the memory fix (b4e4c64): **60183701** (set, 3.5 h) and
-  **60183702** (PET, 5 h), shared GPU QOS, same settings as 60133655/60133656.
+  **60183702** (PET, 5 h), shared GPU QOS, same settings as 60133655/60133656. Both started
+  ≈ 07:25 (2026-10-24) after ≈ 31 h in the queue and passed data preparation (6.14 M jets
+  × 83 slots; the memory fix works): set ≈ 29.5 ms/step (200k ≈ 1.6 h), PET ≈ 46 ms/step
+  (≈ 2.6 h). Set EMA val 1.05364 at 10k (round 1: 1.05362 at 10k).
 - Prediction from the gate's parameter shift: constrained-direction bias ≈ 0.6 posterior σ
   at N = 250.
 - **Chunk 1 (60183215) ended at its limit (22:48, rc 143) with 4/20 sealed** (toy 0–1, control
