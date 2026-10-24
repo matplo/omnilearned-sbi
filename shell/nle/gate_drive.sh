@@ -16,8 +16,9 @@ for i in $(seq 1 "$MAX"); do
   log "chunk $i/$MAX: requesting a 4 h interactive GPU node ($before/256 gate points)"
   salloc -A alice_g -C gpu -q interactive -N 1 -n 1 -c 128 -t 04:00:00 --gpus 4 -J m3-gate \
     srun -N 1 -n 1 -c 128 --gpus 4 --cpu-bind=none bash "$HERE/gate_chunk.sh" "$@" > "$LOG/chunk_$i.log" 2>&1
+  rc=$?
   after=$(n)
-  log "chunk $i ended rc=$?, gate points $before -> $after"
+  log "chunk $i ended rc=$rc, gate points $before -> $after"
   [ "$after" -le "$before" ] && { log "no progress: stopping (see chunk log)"; break; }
   sleep 60
 done
