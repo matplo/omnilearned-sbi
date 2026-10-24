@@ -464,6 +464,11 @@ inference. Development data only (rule 4); the generator has **not** passed M3.
   sha 1d587f3962eb / 7a3f7b5e66bd). **Round-2 gate** (convergence, shift, all 128 points, both
   models) driven by `shell/nle/gate_drive.sh` (logs `runs/m3/r2_gate`), chunk 1 = job
   60219376 from 10:16, snapshot ecab59b.
+- Round-2 sampler convergence: 128 → 256 steps ≤ 0.05 se (set), ≤ 0.03 se (PET).
+- **Interim round-2 gate (set, 15 points, same points as round 1):** significant at α/128
+  4 → **0**, p < 0.01 12 → **3** of 15, surrogate acceptance 0.90–0.96 → **0.93–0.97**; mean
+  largest shift at N = 1000 0.89 → 0.81 (the size of the residual offsets shrinks only a
+  little; point 1 still has width/outer fraction relevant at 1.36 but is not significant).
 - Prediction from the gate's parameter shift: constrained-direction bias ≈ 0.6 posterior σ
   at N = 250.
 - **Chunk 1 (60183215) ended at its limit (22:48, rc 143) with 4/20 sealed** (toy 0–1, control
