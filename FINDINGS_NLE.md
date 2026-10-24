@@ -719,6 +719,43 @@ public repository approved. Production still needs an approved budget (rule 8).
   - **Clean-up:** the old paused step of the first attempt (bash and the 4 stopped trainings)
     was killed at 14:55, after the new step had ended; the allocation was released.
 
+### M3 round-2 gate result (DONE 2026-10-24 15:10)
+
+Both round-2 flows, each with the all-counts p(N|θ) attached, at all 128 validation points.
+Snapshot ecab59b, jobs 60219376 (chunk 1, 4 h) and 60224919 (chunk 2, 0.8 h), with extra
+workers on idle GPUs (`runs/m3/r2_gate/extra_gpus*.sh`); A100. Criteria unchanged:
+- FAIL = significant at α/128 = 3.9e-4 (family-wise permutation p) and relevant at N = 1000;
+- the gate passes with 0 FAIL.
+
+| | set r1 (`set_d256_L6_multC64`) | **set r2** (200k, v2_m2) | PET r1 (`pet_d256_L6_100k_multC64`) | **PET r2** (200k, v2_m2) |
+|---|---|---|---|---|
+| FAIL | 9 | **1** (pt 50, p 3.90e-4) | 9 | **2** (pts 56, 84) |
+| significant | 22 | 1 | 9 | 2 |
+| p < 0.01 (1.3 expected) | 104 | **23** | 60 | 55 |
+| mean largest relevance, N = 1000 | 1.05 | 0.91 | 1.13 | 0.91 |
+| width / outer fraction relevant at | 35 / 23 | 22 / 15 | 44 / 38 | 28 / 14 |
+| acceptance | 0.90–0.96 | 0.92–0.97 | 0.89–0.97 | 0.92–0.97 |
+| constrained shift at the development point | ≈ 1.3 | 1.17 | – | 1.12 |
+| marginal shift at N = 1000 (b, T_ref, τ_init) [σ] | – | +0.53, +0.48, −0.30 | – | +0.64, +0.60, −0.34 |
+
+- **Verdict (rule 5): neither round-2 model passes M3 formally.**
+  - Set has 1 FAIL, set by a hair (p 3.90e-4 against a threshold of 3.906e-4).
+  - PET has 2 FAILs: (3.19, 0.536, 0.297) and (0.91, 0.53, 0.41), both at T_ref ≈ 0.53 near
+    the top of the box. Point 56 also failed for set r1 and PET r1.
+- **Round 2 is a clear improvement:** FAILs went from 9 to 1–2. The residual pattern is
+  unchanged: the generated jets are slightly too narrow (width, outer fraction) at high T_ref.
+- **Set r2 is the better generator.** Its p-values are much closer to uniform (23 against 55
+  below 0.01) at equal relevance size. PET r2's equivalent shift is not smaller.
+- **Sampler convergence** (128 → 256 steps): ≤ 0.05 se (set), ≤ 0.03 se (PET), so the
+  residuals are not sampler error.
+- **Meaning for inference.** At N = 1000 the residual corresponds to about half a posterior σ
+  in b and T_ref (marginal) at the development point. At N = 250 it is about 0.3σ.
+  - The round-1 N = 250 closure showed no detectable bias with a larger residual.
+  - Whether to accept set r2 for the M5 test closure (the user's decision), or to train
+    longer / on more data at high T_ref, is open. Options: more v2 jets at T_ref > 0.45, a
+    larger model, or more steps; the round-2 learning curves were still falling slowly at
+    200k (best at 156k / 162k).
+
 ### M5 development closure result (DONE 2026-10-24 08:14; diagnostic, round-1 generator)
 
 Campaign `runs/m5/dev_N250_setC64`, checkpoint `set_d256_L6_multC64`, N = 250 at the
