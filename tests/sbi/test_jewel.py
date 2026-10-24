@@ -231,3 +231,30 @@ def test_topup_adds_chunks_from_measured_acceptance(fake_cfg, tmp_path):
     assert [t["chunk"] for t in new] == list(range(1, want))
     doc = generate.load(d)
     assert len({t["njob"] for t in doc["tasks"]}) == len(doc["tasks"]) and doc["topups"][0]["added"] == len(new)
+
+
+def test_toy_train_runs_on_jewel_shards(fake_cfg, tmp_path):
+    pytest.importorskip("hepyy")
+    from omnilearned.sbi.flow import FlowSurrogate
+    from omnilearned.sbi.jewel import generate
+    from omnilearned.sbi.toy import train
+
+    for split, theta in (("train", [[4.5, 0.45, 0.65], [8.0, 0.8, 0.3]]), ("validation", [[2.0, 0.2, 0.9]])):
+        d = tmp_path / split
+        doc = generate.plan(fake_cfg, "probe", d, chunks=1, theta=theta, nevent=30)
+        doc["split"] = split
+        for t in doc["tasks"]:
+            t["split"] = split
+            t["name"] = t["name"].replace("probe", split)
+        (d / "tasks.json").write_text(json.dumps(doc))
+        generate.work(d, scratch=str(tmp_path), log=lambda m: None)
+        generate.write_index(d)
+    out = tmp_path / "run"
+    train.main(["--data-dir", str(tmp_path / "train"), "--val-dir", str(tmp_path / "validation"),
+                "--config", str(cards.CONFIG), "--out", str(out), "--steps", "4", "--val-every", "2",
+                "--warmup-steps", "1", "--dim", "16", "--depth", "1", "--heads", "2", "--mult-steps", "4",
+                "--mult-hidden", "8", "--mult-depth", "1", "--batch-size", "8", "--device", "cpu"])
+    run = json.loads((out / "run.json").read_text())
+    assert run["meta"]["backend"] == "jewel-2.6.0-cs-v1" and run["meta"]["box"]["T_ref"] == [0.1, 0.9]
+    sur = FlowSurrogate.load(out / "checkpoint.pt")
+    assert sur.layout.center["T_ref"] == pytest.approx(0.5) and sur.layout.scale["T_ref"] == pytest.approx(0.4)

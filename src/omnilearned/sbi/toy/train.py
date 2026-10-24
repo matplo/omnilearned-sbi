@@ -61,9 +61,31 @@ def prepare(data, transform, layout, chunk=200_000):
     return {"u": u, "mask": mask, "cond": torch.from_numpy(cond)}
 
 
+def sample_setup(config):
+    """(backend id, selection, box) of a toy or JEWEL sample configuration.
+
+    JEWEL configs (``configs/jewel-*.toml``) carry the parameter box under
+    ``[design].box`` and a toy-v2 style ``[selection]``.
+    """
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python < 3.11
+        import tomli as tomllib
+    with open(config, "rb") as f:
+        backend = tomllib.load(f).get("backend", "")
+    if backend.startswith("jewel"):
+        from omnilearned.sbi.jewel import cards, jets
+
+        cfg = cards.load_config(config)
+        box = {p: tuple(cfg["design"]["box"][p]) for p in PARAMETERS}
+        return backend, jets.selection_from_config(cfg), box
+    _, _, sel = load_toy_config(config)
+    return backend, sel, BOX
+
+
 def build_surrogate(args, train, val, out, log=print):
-    _, _, sel = load_toy_config(args.config)
-    lo, hi = box_arrays(BOX)
+    backend, sel, box = sample_setup(args.config)
+    lo, hi = box_arrays(box)
     transform = FeatureTransform.fit(
         FEATURES, [sel.constituent_abs_eta_max, sel.constituent_abs_phi_max_rad, None],
         train["x"], train["mask"], chunk=200_000)
@@ -93,7 +115,7 @@ def build_surrogate(args, train, val, out, log=print):
     tr, va = prepare(train, transform, layout), prepare(val, transform, layout)
     train.pop("x", None)  # the float32 model coordinates replace the physical ones
     val.pop("x", None)
-    meta = {"backend": "toy-quenching-v2", "arch": args.arch, "parameters": list(PARAMETERS), "box": BOX,
+    meta = {"backend": backend, "arch": args.arch, "parameters": list(PARAMETERS), "box": box,
             "train_options": opts.to_dict(), "tf32_training": bool(args.tf32),
             "n_params": int(sum(p.numel() for p in model.parameters()))}
 
@@ -120,7 +142,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data-dir", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--config", default=str(V2_CONFIG))
+    ap.add_argument("--config", default=str(V2_CONFIG),
+                    help="sample configuration: toy (configs/toy-*.toml) or JEWEL (configs/jewel-*.toml)")
+    ap.add_argument("--val-dir", default=None,
+                    help="validation shards from this directory (default: --data-dir)")
     ap.add_argument("--arch", default="set", choices=["set", "pet_smooth"],
                     help="SetFlowVelocity or SmoothPETVelocity (PET2 with smooth locality)")
     ap.add_argument("--local-dim", dest="local_dim", type=int, default=64,
@@ -162,7 +187,7 @@ def main(argv=None):
     start = time.time()
     host = host_info()  # source revision at start (the checkout may change while training)
     log(f"source {host['source_revision']} dirty={host['source_dirty']} host {host['host']}")
-    tp, vp = shard_paths(args.data_dir, "train"), shard_paths(args.data_dir, "validation")
+    tp, vp = shard_paths(args.data_dir, "train"), shard_paths(args.val_dir or args.data_dir, "validation")
     train, val = read_shards(tp), read_shards(vp)
     log(f"data: train {train['x'].shape} from {len(tp)} shards, val {val['x'].shape} "
         f"from {len(vp)} shards, {time.time() - start:.1f}s")
