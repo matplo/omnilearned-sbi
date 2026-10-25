@@ -850,6 +850,23 @@ log, `junit.xml`, `run_info.txt`).
   "CPyCppyy API not found" UserWarning at import, and a multiprocessing fork-with-threads
   DeprecationWarning (Python 3.13) in the task-farm tests.
 
+### More parallel jobs (2026-10-25 15:30, user: the allocation is larger than all needs together)
+
+- **JEWEL fidelity:** a second array `jewel-fid2` (job 60283131, 16 nodes × 4 h, regular CPU,
+  snapshot 5019c74, same task directory `data/jewel_v1/fidelity`). Workers claim tasks
+  exclusively, so the two arrays share the 7262 tasks; nodes that find no task left end at
+  once. The first array 60281245 (16 nodes) has been pending since 14:42: the regular CPU
+  partition is full (≈ 2950 nodes busy, ≈ 6150 jobs pending).
+- **N = 1000 closure:** `logs/start_regular.sh` waits for the numerics pass and both
+  `campaign.json`, then submits 3 regular-QOS GPU nodes (4 × A100 each) as a chain of 3
+  links of 4 h (afterany), each running `m5_dev_closure.sh`. With drivers a and b that is
+  20 GPUs for the 20 fits. Fits resume from their cache; jobs with nothing to claim end at
+  once.
+- **CUDA tests:** the full suite on 1 GPU (shared QOS, job 60282835). Report in
+  `runs/tests/2026-10-25T1515-0700_0a0dc75_gpu/`.
+- **Fidelity thread** (S0–S5, branch `dev/nle-fidelity`): told to submit independent
+  trainings and gates concurrently.
+
 ## Open items
 
 ### To do (2026-10-25, user request): surrogate fidelity improvement, `docs/SURROGATE_FIDELITY_PLAN.md`
