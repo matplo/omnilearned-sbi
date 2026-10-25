@@ -831,6 +831,25 @@ development setting (7.5, 0.30, 0.95); 4 interactive chunks (60183215, 60190975,
   detectable inference bias at N = 250 with this statistics;** joint coverage and the
   joint-level distribution are as calibrated as the exact-likelihood control's.
 
+### Test suite report (2026-10-25 15:02–15:10 PDT, login34, CPU only)
+
+Revision 5be73c6 (clean, `dirty_files=0`), `CUDA_VISIBLE_DEVICES=` (login node, CPU torch),
+`henv -n omni-sbi -x python -m pytest tests/sbi -rsxX -v --durations=15 --junitxml=...`.
+Report: `$JEST_NLE_ROOT/runs/tests/2026-10-25T1502-0700_5be73c6/` (`pytest.txt` full verbose
+log, `junit.xml`, `run_info.txt`).
+
+- **110 passed, 0 failed, 13 skipped**, exit 0, 7 min 45 s.
+- Skips are all accelerator-only device tests (`test_device_accel.py`, `test_cli_device.py`):
+  7 × "MPS not available / no MPS" (no Apple GPU on Linux) and 6 × "CUDA not available"
+  (GPUs hidden on the login node). The CUDA ones run only on a GPU node; not run in this
+  report.
+- Slowest: `test_train_and_generate_single_process[cpu]` 340 s, concurrent stale-claim
+  reclaim 27 s, SmoothPET smoothness 12 s, JEWEL merge 9 s; the rest < 9 s.
+- 327 warnings, none from a failing check: empty-slice / divide RuntimeWarnings in
+  `fidelity.py:63,127` from the tiny gate-driver test (few jets per bin), a cppyy
+  "CPyCppyy API not found" UserWarning at import, and a multiprocessing fork-with-threads
+  DeprecationWarning (Python 3.13) in the task-farm tests.
+
 ## Open items
 
 ### To do (2026-10-25, user request): surrogate fidelity improvement, `docs/SURROGATE_FIDELITY_PLAN.md`
