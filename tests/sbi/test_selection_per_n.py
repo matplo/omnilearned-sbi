@@ -227,3 +227,30 @@ def test_residual_map_scaling_and_seed_spread(tmp_path):
                     "--out", str(tmp_path / "s.json")])
     assert abs(json.loads((tmp_path / "s.json").read_text())["regions"]["all"]["per_observable"]["width"]["alpha"]
                - 0.5) < 0.05
+
+
+def test_mean_shift_decomposes_into_multiplicity_mix_and_fixed_n():
+    from omnilearned.sbi.toy.boundary import decompose, merged_bins
+
+    rng = np.random.default_rng(0)
+    n_d = rng.poisson(30, 50000) + 2
+    n_s = rng.poisson(28, 50000) + 2  # surrogate N tilted low
+    o_d = 0.01 * n_d + rng.normal(0, 0.1, n_d.size)
+    o_s = 0.01 * n_s + 0.02 + rng.normal(0, 0.1, n_s.size)  # and +0.02 at fixed N
+    tot, mix, fixed, nb = decompose(o_s, n_s, o_d, n_d)
+    assert abs(tot - (o_s.mean() - o_d.mean())) < 1e-9  # exact identity
+    assert abs(mix - 0.01 * (n_s.mean() - n_d.mean())) < 0.003 and abs(fixed - 0.02) < 0.003
+    bins = merged_bins(n_s, n_d, 30)
+    assert bins[0][0] == min(n_s.min(), n_d.min()) and bins[-1][1] == max(n_s.max(), n_d.max())
+    assert all(b[0] == a[1] + 1 for a, b in zip(bins[:-1], bins[1:])) and nb == len(bins)
+
+
+def test_dr_max_from_pt_weighted_axis():
+    from omnilearned.sbi.toy.boundary import dr_max
+
+    x = np.zeros((2, 3, 3))
+    x[0, :, 0] = [0.0, 0.0, 0.3]   # eta; equal pT -> axis at eta 0.1
+    x[0, :, 2] = 0.0
+    x[1, :2, 1] = [0.2, -0.2]      # phi; third slot padded
+    mask = np.array([[1, 1, 1], [1, 1, 0]], bool)
+    np.testing.assert_allclose(dr_max(x, mask), [0.2, 0.2])
