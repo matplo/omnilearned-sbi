@@ -359,3 +359,28 @@ def test_logp_cache_resumes_fit_without_recomputation(tmp_path):
     np.testing.assert_array_equal(a.loglik, b.loglik)
     with pytest.raises(ValueError, match="another fit"):
         LogpCache(tmp_path / "c.npz", {"fit": "other"})
+
+
+def test_numerics_check_deltas_and_criteria():
+    from omnilearned.sbi.observations import Observations
+    from omnilearned.sbi.toy import numerics
+
+    sur = _variable_surrogate()
+    x, mask = sur.sample([0.5, 1.0], 16, None, seed=7, nsteps=6)
+    obs = Observations(x.astype(np.float64), mask, np.arange(16) + 3, None, (), ("eta", "phi", "lpt"), "sha", "mem")
+    pairs = [[0.5, 1.0, 0.55, 1.0], [0.5, 1.0, 0.5, 1.2]]  # two pairs sharing theta0
+    base = {"solver": "midpoint", "nsteps": 8, "divergence": "hutchinson", "num_probes": 2,
+            "probe": "rademacher", "probe_schedule": "per_step"}
+    d = numerics.deltas(sur, obs, pairs, base, [0, 1], names=["a", "b"], log=lambda m: None)
+    assert sorted(d) == [0, 1] and len(d[0]) == 2
+    # the summed difference equals log L(theta1) - log L(theta0) computed directly
+    from omnilearned.sbi.likelihood import LikelihoodOptions
+
+    ll = numerics.summed_logl(sur, obs, np.array([[0.5, 1.0], [0.55, 1.0]]),
+                              LikelihoodOptions.from_dict({**base, "probe_seed": 0}), names=["a", "b"])
+    assert d[0][0] == pytest.approx(ll[1] - ll[0], abs=1e-6)
+    exact = {**base, "divergence": "exact"}
+    ref = numerics.deltas(sur, obs, pairs, exact, [0], names=["a", "b"], log=lambda m: None)
+    ev = numerics.evaluate(d, ref, limit=1e9)
+    assert ev["pass"] and ev["n_test_seeds"] == 2 and len(ev["probe_std"]) == 2
+    assert numerics.evaluate(d, {0: [v + 1.0 for v in ref[0]]}, limit=0.5)["pass"] is False

@@ -2,6 +2,9 @@
 # One chunk of a closure campaign inside a GPU allocation (4 GPUs). Every phase is
 # idempotent, so the same command continues where the previous chunk stopped:
 #   0. selection-acceptance table Pr_q(S|theta) of the checkpoint (4 GPU shards, merged)
+#   0b. if m5.env sets NUMERICS_PAIRS: the M4 numerics check (toy.numerics) at the campaign's
+#      N on development jets (index NUMERICS_INDEX), 12 probe seeds on 4 GPUs; no fit
+#      starts unless it passes (BASE/numerics.json)
 #   1. prepare the toy campaign and the surrogate self-closure control (once)
 #   2. interim reports of whatever is sealed
 #   3. fits: 4 GPUs x PER workers claim unsealed fits of both campaigns (interleaved);
@@ -38,6 +41,32 @@ if [ ! -f "$BASE/acceptance.npz" ]; then
   wait
   $CL acceptance-merge --parts "$BASE"/acc_part_{0,1,2,3}.npz --out "$BASE/acceptance.npz" 2>&1 | tail -1 | tee -a "$BASE/logs/progress.log"
   [ -f "$BASE/acceptance.npz" ] || { log "acceptance table failed"; exit 1; }
+fi
+
+# 0b. numerics
+if [ -n "${NUMERICS_PAIRS:-}" ] && [ ! -f "$BASE/numerics.json" ]; then
+  NUM=$BASE/numerics; mkdir -p "$NUM"
+  if [ ! -f "$NUM/obs.h5" ]; then
+    $RUN -m omnilearned.sbi.toy.datasets observe --theta $NUMERICS_THETA --n "$NUMERICS_N" \
+      --split development --index "$NUMERICS_INDEX" --out "$NUM/obs.h5" --truth-out "$NUM/truth.json" \
+      2>&1 | tail -1 | tee -a "$BASE/logs/progress.log"
+  fi
+  log "phase 0b: numerics check at N=$NUMERICS_N ($NUMERICS_PAIRS)"
+  PA=""; for q in $NUMERICS_PAIRS; do PA="$PA --pair ${q//,/ }"; done
+  for g in 0 1 2 3; do
+    [ -f "$NUM/part_$g.json" ] && continue
+    CUDA_VISIBLE_DEVICES=$g $RUN -m omnilearned.sbi.toy.numerics run --checkpoint "$CKPT" \
+      --observations "$NUM/obs.h5" $PA --seeds $((3 * g)) $((3 * g + 1)) $((3 * g + 2)) --device cuda \
+      --out "$NUM/part_$g.json" > "$BASE/logs/numerics_$g.log" 2>&1 &
+  done
+  wait
+  $RUN -m omnilearned.sbi.toy.numerics merge --parts "$NUM"/part_{0,1,2,3}.json --out "$NUM/numerics.json" \
+    2>&1 | tail -1 | tee -a "$BASE/logs/progress.log"
+  [ -f "$NUM/numerics.json" ] || { log "numerics check did not complete"; exit 1; }
+  cp "$NUM/numerics.json" "$BASE/numerics.json"
+fi
+if [ -f "$BASE/numerics.json" ] && ! grep -q '"pass": true' "$BASE/numerics.json"; then
+  log "numerics check FAILED: no fits (see $BASE/numerics.json)"; exit 1
 fi
 
 # 1. prepare
