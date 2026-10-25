@@ -15,6 +15,11 @@ Reference (round 2, `set_d256_L6_200k_multC64`): 1 FAIL, 23 with p < 0.01, const
 | date | step | job | resources | status | what |
 |---|---|---|---|---|---|
 | 2026-10-25 | S0.3 / S3 / S4 | 60282682 (`nle-train4`, regular, 1 node × 4 A100, 7 h limit) | pending | `runs/m2r3/`: set seed 1, set seed 2 (200k), set 400k, set d384 L8 200k, all on `data/v2_m2` with round-2 settings; the round-2 all-counts p(N\|θ) attached (`checkpoint_mult.pt`) |
+| 2026-10-25 | S1 | 60283786 (`s1-gate-set`), 60283787 (`s1-gate-pet`) | 1 node × 4 A100 each, 3 h | pending | redraw re-gates (shift, convergence, 128 points) of set r2 / PET r2 → `runs/m3/{set,pet}_d256_L6_200k_multC64_redraw/` (snapshot 19ac616) |
+| 2026-10-25 | S1 | 60283788 (`s1-acc-set`) | 1 node × 4 A100, 1.5 h | pending | Pr_q(S\|θ) and per-N table of set r2 → `runs/m3/acceptance/set_d256_L6_200k_multC64/` |
+| 2026-10-25 | S2 | 60283789 (`nle-s2-data`) | 1 CPU node, 45 min | pending | `data/v2_m3a`, `data/v2_m3b` |
+| 2026-10-25 | S2 × S3 | 60283791 (`nle-train4`, after 60283789) | 1 node × 4 A100, 8 h | pending | `runs/m2r3/set_d256_L6_{200k,400k}_{m3a,m3b}` |
+| 2026-10-25 | gates | 60283792–60283799 (after 60282682), 60283800–60283807 (after 60283791) | 1 node each, 3 h | pending | each new model with the round-2 method (`runs/m3/m2r3_<run>`) and with redraw (`..._redraw`) |
 
 ## S0: diagnostics on existing results (2026-10-25, login node, analysis only)
 
