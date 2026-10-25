@@ -14,12 +14,13 @@ Reference (round 2, `set_d256_L6_200k_multC64`): 1 FAIL, 23 with p < 0.01, const
 
 | date | step | job | resources | status | what |
 |---|---|---|---|---|---|
-| 2026-10-25 | S0.3 / S3 / S4 | 60282682 (`nle-train4`, regular, 1 node × 4 A100, 7 h limit) | pending | `runs/m2r3/`: set seed 1, set seed 2 (200k), set 400k, set d384 L8 200k, all on `data/v2_m2` with round-2 settings; the round-2 all-counts p(N\|θ) attached (`checkpoint_mult.pt`) |
+| 2026-10-25 | S0.3 / S3 / S4 | 60282682 (`nle-train4`, regular, 1 node × 4 A100, 7 h limit) | **failed after 17 s** (`nvidia-smi -L -i` invalid, every run's subshell exited; the job still COMPLETED, 0.005 node-h) → resubmitted as 60284243 | `runs/m2r3/`: set seed 1, set seed 2 (200k), set 400k, set d384 L8 200k, all on `data/v2_m2` with round-2 settings; the round-2 all-counts p(N\|θ) attached (`checkpoint_mult.pt`) |
 | 2026-10-25 | S1 | 60283786 (`s1-gate-set`), 60283787 (`s1-gate-pet`) | 1 node × 4 A100 each, 3 h | pending | redraw re-gates (shift, convergence, 128 points) of set r2 / PET r2 → `runs/m3/{set,pet}_d256_L6_200k_multC64_redraw/` (snapshot 19ac616) |
 | 2026-10-25 | S1 | 60283788 (`s1-acc-set`) | 1 node × 4 A100, 1.5 h | pending | Pr_q(S\|θ) and per-N table of set r2 → `runs/m3/acceptance/set_d256_L6_200k_multC64/` |
+| 2026-10-25 | S0/S1 | 60284684, 60284685, 60284686 (`fid_boundary`, 9b648aa) | 1 node × 4 A100 each, 1.5 h | pending | `toy.boundary` at 32 gate points of set r2, PET r2, set r1 → `runs/m3/boundary/<run>/` |
 | 2026-10-25 | S2 | 60283789 (`nle-s2-data`) | 1 CPU node, 45 min | pending | `data/v2_m3a`, `data/v2_m3b` |
-| 2026-10-25 | S2 × S3 | 60283791 (`nle-train4`, after 60283789) | 1 node × 4 A100, 8 h | pending | `runs/m2r3/set_d256_L6_{200k,400k}_{m3a,m3b}` |
-| 2026-10-25 | gates | 60283792–60283799 (after 60282682), 60283800–60283807 (after 60283791) | 1 node each, 3 h | pending | each new model with the round-2 method (`runs/m3/m2r3_<run>`) and with redraw (`..._redraw`) |
+| 2026-10-25 | S2 × S3 | ~~60283791~~ cancelled (same script bug) → 60284244 (after 60283789) | 1 node × 4 A100, 8 h | pending | `runs/m2r3/set_d256_L6_{200k,400k}_{m3a,m3b}` |
+| 2026-10-25 | gates | ~~60283792–60283807~~ cancelled → 60284245–60284252 (after 60284243), 60284253–60284261 (after 60284244), snapshot 5d3e948 | 1 node each, 3 h | pending | each new model with the round-2 method (`runs/m3/m2r3_<run>`) and with redraw (`..._redraw`) |
 
 ## S0: diagnostics on existing results (2026-10-25, login node, analysis only)
 
@@ -118,3 +119,30 @@ c0 + c_b u_b + c_T u_T + c_τ u_τ, u ∈ [−1, 1] over the box; se ≈ 0.03 on
   - `data/v2_m3b`: the round-2 shards (symlinks) plus the 343 extra Sobol points (indices
     1024–2047 with T_ref > 0.45) at 6000 jets (option b).
   - Both link the round-2 validation split.
+
+## Boundary diagnostic, `toy.boundary` (9b648aa, 2026-10-25)
+
+A second explanation besides the N tilt (H3) fits the S0 offsets: **truncation leakage at
+the selection boundaries (H6).**
+- A smooth density fitted to truncated data puts mass beyond the cut and lacks mass just
+  inside it, so the selected mean moves away from the cut.
+- Jet pT ≥ 60 GeV: the selected mean pT comes out high (observed: +0.38).
+- One-jet requirement: the widest clouds fail it, so jets just inside are missing and the
+  width comes out low (observed: −0.62).
+- The leakage does not shrink with more data, which matches the flat S0.2 scaling below
+  T_ref = 0.45.
+- Same-N redraws (S1) do not remove it. Redrawing at fixed N samples the same truncated
+  q(x|N), so only the N-mix part changes.
+
+`toy.boundary` measures the split directly:
+- **Decomposition:** Δ⟨o⟩ = Σ_N (p_s − p_d) o_d(N) [N mix] + Σ_N p_s (o_s(N) − o_d(N))
+  [fixed N], exact by construction, for the dropped and the redrawn selected samples.
+- **Boundary densities:** near the jet-pT cut and of the largest constituent distance from
+  the axis, plus the surrogate's mass beyond the cuts.
+
+A CPU smoke test (1 point, 1500 clouds, 16 steps; not converged, so not a result) already
+put almost all of the width shift in the fixed-N term.
+
+If the full run confirms it, the S5 lever is not loss weighting. It is a representation that
+puts the boundary into the transform, for example constituents relative to the jet axis with
+a bounded ΔR. That would be a new item ("S5b"), to be discussed before any change.
