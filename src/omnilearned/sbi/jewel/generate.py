@@ -67,39 +67,58 @@ def box(cfg):
 
 
 def design_points(cfg, split):
-    """Points of a split: the Cartesian grid (train), Sobol (validation)."""
+    """Points of a split: the Cartesian grid (train), Sobol (validation and fidelity)."""
     if split == "train":
         axes = [np.asarray(cfg["design"][p], float) for p in PARAMETERS]
         return np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, len(PARAMETERS))
-    if split == "validation":
+    if split in ("validation", "fidelity"):
         pts, _ = make_design(int(cfg["design"]["validation_points"]), "validation", cfg, box=box(cfg))
         return pts
     raise ValueError(f"no design for split {split}")
 
 
 def plan(cfg, split, out, chunks=1, points=None, theta=None, keep_hepmc=(), extra=None,
-         nevent=None):
+         nevent=None, keep_events=True):
     """Write ``tasks.json``: every (point, chunk) of the split (or explicit ``theta`` rows),
-    chunk-major."""
+    chunk-major. ``chunks`` is a number for every point or a dict point -> number of chunks.
+    ``keep_events=False`` writes jets and diagnostics but no raw event store."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     pts = np.atleast_2d(np.asarray(theta, float)) if theta is not None else design_points(cfg, split)
     ids = list(range(len(pts))) if points is None else list(points)
     nev = int(nevent or cfg["design"]["events_per_task"])
     tl = []
+    per = {pid: int(chunks[pid] if isinstance(chunks, dict) else chunks) for pid in ids}
     # chunk-major: every point's chunk 0 first, so a partial run covers the design evenly
-    for c in range(int(chunks)):
+    for c in range(max(per.values(), default=0)):
         for pid in ids:
+            if c >= per[pid]:
+                continue
             tl.append({"name": task_name(split, pid, c), "split": split, "point_id": int(pid),
                        "chunk": c, "theta": [float(v) for v in pts[pid]], "nevent": nev,
                        "njob": cards.njob(cfg, split, pid, c),
                        "keep_hepmc": task_name(split, pid, c) in set(keep_hepmc),
-                       "extra_cards": extra or {}})
+                       "keep_events": bool(keep_events), "extra_cards": extra or {}})
     doc = {"schema": TASKS_SCHEMA, "backend": cfg["backend"], "split": split,
            "parameters": list(PARAMETERS), "tasks": tl, "config": cfg, "host": host_info()}
     with open(out / "tasks.json", "w") as f:
         json.dump(doc, f, indent=1)
     return doc
+
+
+def chunks_for_target(index_dir, target_jets, nevent, margin=1.05):
+    """Chunks per point to reach ``target_jets`` at the acceptance measured in another split
+    at the same points (``index_<split>.json`` + ``tasks.json`` of ``index_dir``)."""
+    index_dir = Path(index_dir)
+    idx = json.loads(next(index_dir.glob("index_*.json")).read_text())
+    events = {}
+    for t in load(index_dir)["tasks"]:
+        events[t["point_id"]] = events.get(t["point_id"], 0) + int(t["nevent"])
+    jets_ = {}
+    for s in idx["shards"]:
+        jets_[s["point_id"]] = jets_.get(s["point_id"], 0) + int(s["n_jets"])
+    return {pid: int(np.ceil(target_jets * margin / max(jets_.get(pid, 0) / ev * nevent, 1e-9)))
+            for pid, ev in sorted(events.items())}
 
 
 def topup(directory, target_jets, margin=1.05, max_chunks=None, log=print):
@@ -290,8 +309,9 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
         cfg_sha = cfg.get("_sha256", "unknown")  # of the config the task list was planned from
         sha, dsha = write_shard(out_dir / f"{name}.h5", [(task["point_id"], task["theta"], rec)],
                                 task["split"], cfg["backend"], cfg_sha)
+        keep_ev = task.get("keep_events", True)
         esha = _write_events(out_dir / f"{name}.events.h5", events, stream, task["point_id"],
-                             task["chunk"], task["nevent"])
+                             task["chunk"], task["nevent"]) if keep_ev else None
         t_proc = time.time() - t1
         if task.get("keep_hepmc"):
             (out_dir / "hepmc").mkdir(exist_ok=True)
@@ -307,8 +327,9 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
                "seconds_jewel": t_gen, "seconds_processing": t_proc,
                "seconds_per_event": t_gen / max(1, len(events)),
                "files": {"jets": f"{name}.h5", "jets_sha256": sha, "diag": f"{name}.diag.h5",
-                         "diag_sha256": dsha, "events": f"{name}.events.h5", "events_sha256": esha},
-               "events_bytes": os.path.getsize(out_dir / f"{name}.events.h5"),
+                         "diag_sha256": dsha, "events": f"{name}.events.h5" if keep_ev else None,
+                         "events_sha256": esha},
+               "events_bytes": os.path.getsize(out_dir / f"{name}.events.h5") if keep_ev else 0,
                "cards": {"params": params, "medium": medium}, "jewel_log_tail": logtail,
                "installation": {k: v for k, v in cards.inspect_installation(cfg).items() if k != "patches"},
                "host": host_info(), "wall_seconds": time.time() - t0}
@@ -496,13 +517,18 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("plan")
-    p.add_argument("--split", required=True, choices=["train", "validation", "probe"])
+    p.add_argument("--split", required=True, choices=["train", "validation", "fidelity", "probe"])
     p.add_argument("--out", required=True)
     p.add_argument("--config", default=str(cards.CONFIG))
     p.add_argument("--chunks", type=int, default=1)
     p.add_argument("--points", type=int, nargs="*", default=None)
     p.add_argument("--theta", type=float, nargs="+", default=None, help="explicit rows b TI TAUI ... (probe)")
     p.add_argument("--nevent", type=int, default=None)
+    p.add_argument("--target-jets", type=int, default=None,
+                   help="chunks per point from this jet target and the acceptance in --acceptance-from")
+    p.add_argument("--acceptance-from", default=None, help="indexed split directory at the same points")
+    p.add_argument("--margin", type=float, default=1.05)
+    p.add_argument("--no-events", action="store_true", help="no raw event stores (jets and diagnostics only)")
     p.add_argument("--keep-hepmc", nargs="*", default=[])
     p.add_argument("--extra", default=None, help="JSON object of extra main-card lines")
     w = sub.add_parser("work")
@@ -529,8 +555,15 @@ def main(argv=None):
     if a.cmd == "plan":
         cfg = cards.load_config(a.config)
         theta = None if a.theta is None else np.asarray(a.theta).reshape(-1, 3)
-        doc = plan(cfg, a.split, a.out, a.chunks, a.points, theta, a.keep_hepmc,
-                   json.loads(a.extra) if a.extra else None, a.nevent)
+        chunks = a.chunks
+        if a.target_jets:
+            chunks = chunks_for_target(a.acceptance_from, a.target_jets,
+                                       int(a.nevent or cfg["design"]["events_per_task"]), a.margin)
+            if a.points is not None:
+                chunks = {p: chunks[p] for p in a.points}
+            a.points = sorted(chunks)
+        doc = plan(cfg, a.split, a.out, chunks, a.points, theta, a.keep_hepmc,
+                   json.loads(a.extra) if a.extra else None, a.nevent, keep_events=not a.no_events)
         print(f"{len(doc['tasks'])} tasks -> {a.out}/tasks.json")
     elif a.cmd == "work":
         print(f"worker ran {work(a.dir, a.scratch, a.timeout, max_tasks=a.max_tasks)} tasks")

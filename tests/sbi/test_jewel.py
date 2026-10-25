@@ -62,7 +62,8 @@ def test_njob_unique_in_range_and_design_respects_holdout():
     lo = np.array([v[0] for v in box(CFG).values()])
     hi = np.array([v[1] for v in box(CFG).values()])
     assert val.shape == (128, 3) and np.all((val >= lo) & (val <= hi))
-    nj = [cards.njob(CFG, s, p, c) for s, n in (("train", 972), ("validation", 128))
+    np.testing.assert_array_equal(design_points(CFG, "fidelity"), val)  # gate samples at the validation points
+    nj = [cards.njob(CFG, s, p, c) for s, n in (("train", 972), ("validation", 128), ("fidelity", 128))
           for p in range(n) for c in (0, 99)]
     assert len(set(nj)) == len(nj) and max(nj) < cards.MAX_NJOB
     with pytest.raises(ValueError):
@@ -312,3 +313,34 @@ def test_merge_keeps_every_jet_point_major(fake_cfg, tmp_path):
     first.write_bytes(bytes(raw))
     with pytest.raises(ValueError, match="does not match"):
         generate.merge(d, tmp_path / "bad", shards=2, log=lambda m: None)
+
+
+def test_fidelity_plan_from_measured_acceptance_without_event_stores(fake_cfg, tmp_path):
+    pytest.importorskip("hepyy")
+    from omnilearned.sbi.jewel import generate
+    from omnilearned.sbi.toy.datasets import read_shards
+
+    theta = [[4.5, 0.45, 0.65], [8.0, 0.8, 0.3]]
+    v = tmp_path / "validation"
+    doc = generate.plan(fake_cfg, "probe", v, chunks=1, theta=theta, nevent=30)
+    (v / "tasks.json").write_text(json.dumps(doc))
+    generate.work(v, scratch=str(tmp_path), log=lambda m: None)
+    vidx = generate.write_index(v)
+    jets_ = {}
+    for q in vidx["shards"]:
+        jets_[q["point_id"]] = jets_.get(q["point_id"], 0) + q["n_jets"]
+    chunks = generate.chunks_for_target(v, target_jets=50, nevent=20, margin=1.0)
+    for pid, n in chunks.items():  # enough chunks at the measured acceptance, not more
+        acc = jets_[pid] / 30
+        assert n * 20 * acc >= 50 > (n - 1) * 20 * acc
+    f = tmp_path / "fidelity"
+    doc = generate.plan(fake_cfg, "probe", f, chunks={0: 2, 1: 1}, theta=theta, nevent=20, keep_events=False)
+    assert [(t["point_id"], t["chunk"]) for t in doc["tasks"]] == [(0, 0), (1, 0), (0, 1)]  # chunk-major
+    assert generate.work(f, scratch=str(tmp_path), log=lambda m: None) == 3
+    assert not list(f.glob("*.events.h5"))
+    man = json.loads((f / "probe_p00000_c001.json").read_text())
+    assert man["files"]["events"] is None and man["events_bytes"] == 0
+    idx = generate.write_index(f)
+    assert idx["tasks_done"] == 3 and idx["shards"][0]["events"] is None
+    d = read_shards([f / q["file"] for q in idx["shards"]])
+    assert d["x"].shape[0] == idx["n_jets"] and np.unique(d["event_id"]).size == idx["n_jets"]

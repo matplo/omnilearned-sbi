@@ -52,6 +52,9 @@ tau_init = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 box = { b = [0.0, 11.0], T_ref = [0.1, 0.9], tau_init = [0.2, 1.0] }
 events_per_task = 1000
 validation_points = 128          # scrambled Sobol in the box, reservation margin 0.02
+# fidelity: gate samples at the same 128 validation points with their own NJOB streams
+# (njob_base.fidelity), larger tasks (5000 events, so a point needs < chunks_per_point tasks)
+# and no event stores (jets and diagnostics only; NJOB makes every task reproducible)
 
 [holdout]                        # at half steps on every axis: strictly between grid nodes (rule 2)
 development_validation = [7.5, 0.35, 0.85]
@@ -62,4 +65,4 @@ truth_manifest_access = "report_only_after_fit"
 [randomness]                     # PYTHIA MRPY(1) = NJOB * 1000; NJOB = base + chunks_per_point * point + chunk
 design_seed = 20931
 chunks_per_point = 100
-njob_base = { train = 100000, validation = 300000, test = 500000, probe = 800000 }
+njob_base = { train = 100000, validation = 300000, test = 500000, fidelity = 600000, probe = 800000 }

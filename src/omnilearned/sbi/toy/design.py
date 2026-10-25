@@ -22,6 +22,7 @@ STREAMS = {
     "jewel_train": 16,
     "jewel_validation": 17,
     "jewel_test": 18,
+    "jewel_fidelity": 19,  # JEWEL gate samples at the validation points (own NJOB streams)
 }
 
 

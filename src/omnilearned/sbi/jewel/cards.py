@@ -20,7 +20,7 @@ except ModuleNotFoundError:  # Python < 3.11
 
 CONFIG = Path(__file__).resolve().parents[4] / "configs" / "jewel-2.6.0-cs-v1.toml"
 SPLIT_STREAM = {"train": "jewel_train", "validation": "jewel_validation", "test": "jewel_test",
-                "probe": "jewel_test"}
+                "probe": "jewel_test", "fidelity": "jewel_fidelity"}
 MAX_NJOB = 900000
 
 
