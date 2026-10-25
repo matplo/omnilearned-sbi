@@ -756,6 +756,49 @@ workers on idle GPUs (`runs/m3/r2_gate/extra_gpus*.sh`); A100. Criteria unchange
     larger model, or more steps; the round-2 learning curves were still falling slowly at
     200k (best at 156k / 162k).
 
+- **JEWEL fidelity samples (started 2026-10-25, user request "create JEWEL fidelity samples -
+  run what's needed").**
+  - **Purpose:** gate samples at the 128 validation points, 20 000 selected jets each, as
+    the toy gate uses.
+  - **New split `fidelity`** (5019c74, tested):
+    - own event-id stream 19 (`jewel_fidelity`) and NJOB base 600000 (validation is
+      300000), so no event is shared with the validation split;
+    - points = the validation design;
+    - chunks per point from the acceptance measured in the validation split
+      (`plan --target-jets 20000 --acceptance-from data/jewel_v1/validation`, margin
+      1.05);
+    - 5000-event tasks, so a point needs 30–89 chunks, below chunks_per_point = 100;
+    - **no event stores** (`--no-events`): jets and diagnostics only (≈ 1.6 GB instead of
+      ≈ 0.8 TB). Each task is reproducible from its NJOB.
+  - **Size:** 7262 tasks, 36.3 M events. Expected ≈ 45–60 CPU node-hours (the training
+    production needed 33 for 28.3 M events; high-TI points dominate).
+  - **Job:** 60281245 (`jewel-fid`, array 0–15, 4 h, regular CPU, 128 workers per node),
+    output `data/jewel_v1/fidelity`. Afterwards: `generate index`, then `generate merge`
+    into `data/jewel_v1/merged` (index_fidelity.json), then `toy.gate run --config
+    configs/jewel-2.6.0-cs-v1.toml --fidelity-dir data/jewel_v1/merged` for the 4 JEWEL
+    checkpoints (`*_multJ.pt`).
+- **M5 development closure at N = 1000 with set round 2 (started 2026-10-25 14:46, user
+  request).** Campaign `runs/m5/dev_N1000_setR2` (snapshot 4112ec2):
+  - **Fits:** checkpoint `set_d256_L6_200k_multC64` (sha 1d587f3962eb), 10 toy fits
+    (development indices 1100–1109) + 10 surrogate-data control fits (2100–2109).
+  - **Grid 23 × 27 × 11** (T_ref doubled against N = 250, so the spacing is ≈ 3.4σ of the
+    N = 1000 best-measured direction, the same relative resolution as the N = 250 grid).
+    Seed stride (6, 6, 4), Δlog post 10, midpoint-64 with 8 per-step probes. A free nested
+    check after the fits: every other T_ref node (23 × 14 × 11) and every other b node.
+  - **New phase 0b (rule 6):** the M4 numerics check at N = 1000 before any fit
+    (`toy.numerics`, 4112ec2, tested). Δlog L for 3 pairs from the development point (1σ
+    along each Fisher eigen-direction at N = 1000), midpoint-64/8 against rk4-64/16 per-step
+    probes, 12 seeds each. Criteria < 0.5; fits do not start unless it passes.
+  - **Drivers:** two tagged drivers share the campaign (claims are exclusive and the
+    stale-claim check is job-aware). Driver a from 14:46 (chunk a1 = job 60281416,
+    4 × A100-40GB); driver b starts once numerics and prepare are done. At most 8 chunks
+    each.
+  - **Expected cost:** ≈ 900 evaluated nodes × ≈ 34 s ≈ 8–9 GPU-h per fit, i.e. ≈ 40–45
+    node-h for 20 fits (range 30–90 depending on the support size).
+  - **Before this run:** the GPU job scripts of the gate and the JEWEL trainings called
+    `$VIRTUAL_ENV/bin/python` (same venv) instead of `henv -n omni-sbi -x python`. The
+    closure and JEWEL farm scripts use henv. From now on everything uses henv.
+
 ### M5 development closure result (DONE 2026-10-24 08:14; diagnostic, round-1 generator)
 
 Campaign `runs/m5/dev_N250_setC64`, checkpoint `set_d256_L6_multC64`, N = 250 at the
@@ -789,6 +832,23 @@ development setting (7.5, 0.30, 0.95); 4 interactive chunks (60183215, 60190975,
   joint-level distribution are as calibrated as the exact-likelihood control's.
 
 ## Open items
+
+### To do (2026-10-25, user request): surrogate fidelity improvement, `docs/SURROGATE_FIDELITY_PLAN.md`
+- [ ] **S0, diagnostics:**
+  - residual map of width, outer fraction and jet pT against θ from the round-2 gate;
+  - round 1 → 2 data-scaling fit;
+  - seed-1 retrain of set round 2 for the gate-level seed spread.
+- [ ] **S1, per-N selection normalization** Pr_q(S|N,θ): likelihood, gate redraw at the same
+  N, tests; then re-gate set round 2 unchanged.
+- [ ] **S2, targeted data:** 12 000 jets per point everywhere (`v2_m3`), or a density × 2 at
+  T_ref > 0.45 (chosen by S0); train set round 3.
+- [ ] **S3, longer optimisation** (400k steps / slower EMA), crossed with S2.
+- [ ] **S4, capacity:** set d384 L8 on the best S2/S3 data.
+- [ ] **S5, objective weighting** for the soft wide-angle tail, only if S1–S4 leave the width
+  residual.
+- [ ] **S6, JEWEL gate** on the fidelity samples, then S1–S4 for JEWEL as indicated.
+  - The gate's `run`/`convergence` now take the JEWEL config.
+  - A JEWEL shift needs development-scan samples (budget).
 
 - **Decision (user): M5 compute.** With the scaled models a fit candidate costs 8.4 s
   (SetFlow) / 11 s (SmoothPET) at N = 250 on an A100 in IEEE float32. M5 as written is several

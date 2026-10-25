@@ -8,10 +8,10 @@
 set -euo pipefail
 SNAP=$1; RUN=$2; shift 2
 export PYTHONPATH=$SNAP/src
-PY=${PY:-$VIRTUAL_ENV/bin/python}
+PY=${PY:-henv -n omni-sbi -x python}  # always through henv (user rule)
 mkdir -p "$RUN"
 echo "job $SLURM_JOB_ID node $(hostname) snapshot $(cat "$SNAP/SOURCE_REVISION") start $(date -Is)" | tee -a "$RUN/job.log"
 nvidia-smi -L | tee -a "$RUN/job.log"
-"$PY" -c "import omnilearned, sys; assert omnilearned.__file__.startswith('$SNAP'), omnilearned.__file__"
-"$PY" -m omnilearned.sbi.toy.train --out "$RUN" "$@"
+$PY -c "import omnilearned, sys; assert omnilearned.__file__.startswith('$SNAP'), omnilearned.__file__"
+$PY -m omnilearned.sbi.toy.train --out "$RUN" "$@"
 echo "end $(date -Is)" | tee -a "$RUN/job.log"

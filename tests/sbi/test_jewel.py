@@ -344,3 +344,12 @@ def test_fidelity_plan_from_measured_acceptance_without_event_stores(fake_cfg, t
     assert idx["tasks_done"] == 3 and idx["shards"][0]["events"] is None
     d = read_shards([f / q["file"] for q in idx["shards"]])
     assert d["x"].shape[0] == idx["n_jets"] and np.unique(d["event_id"]).size == idx["n_jets"]
+
+
+def test_gate_selection_reads_toy_and_jewel_configs():
+    from omnilearned.sbi.jewel import jets
+    from omnilearned.sbi.toy.config import V2_CONFIG, load_toy_config
+    from omnilearned.sbi.toy.gate import selection
+
+    assert selection(str(cards.CONFIG)) == jets.selection_from_config(cards.load_config(cards.CONFIG))
+    assert selection(str(V2_CONFIG)) == load_toy_config(V2_CONFIG)[2]

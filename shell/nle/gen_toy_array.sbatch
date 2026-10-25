@@ -10,9 +10,9 @@
 #SBATCH -o %x-%A_%a.out
 set -euo pipefail
 DESIGN=$1; PPS=$2; JETS=$3; OUT=$4
-PY=${PY:-$VIRTUAL_ENV/bin/python}
+PY=${PY:-henv -n omni-sbi -x python}  # always through henv (user rule)
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export CLING_STANDARD_PCH=${TMPDIR:-/tmp}/cling-$USER-$SLURM_JOB_ID-$SLURM_ARRAY_TASK_ID/allDict.cxx.pch
 mkdir -p "$(dirname "$CLING_STANDARD_PCH")"
-"$PY" -m omnilearned.sbi.toy.datasets generate --design "$DESIGN" --shard "$SLURM_ARRAY_TASK_ID" \
+$PY -m omnilearned.sbi.toy.datasets generate --design "$DESIGN" --shard "$SLURM_ARRAY_TASK_ID" \
   --points-per-shard "$PPS" --jets "$JETS" --out-dir "$OUT" --skip-existing

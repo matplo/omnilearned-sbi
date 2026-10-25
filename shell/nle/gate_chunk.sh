@@ -10,7 +10,7 @@ export JEST_NLE_ROOT=${JEST_NLE_ROOT:-/global/cfs/cdirs/alice/ploskon/jest-nle}
 export VIRTUAL_ENV=${VIRTUAL_ENV:-/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv}
 export CLING_STANDARD_PCH=${TMPDIR:-/tmp}/cling-$USER/allDict.cxx.pch PYTHONUNBUFFERED=1
 mkdir -p "$(dirname "$CLING_STANDARD_PCH")" "$OA" "$OB"
-PYTHONPATH=$SNAP/src "$VIRTUAL_ENV/bin/python" -c "from omnilearned.sbi.toy import reco; reco.fastjet_version()" > /dev/null 2>&1
+PYTHONPATH=$SNAP/src henv -n omni-sbi -x python -c "from omnilearned.sbi.toy import reco; reco.fastjet_version()" > /dev/null 2>&1
 echo "[$(date -Is) $(hostname) job ${SLURM_JOB_ID:-local}] gate chunk start, snapshot $(cat "$SNAP/SOURCE_REVISION")" | tee -a "$OA/post_train.log" "$OB/post_train.log"
 bash "$HERE/post_train.sh" "$SNAP" "$CA" "$OA" 0 0 2 &
 bash "$HERE/post_train.sh" "$SNAP" "$CA" "$OA" 1 1 2 skip &

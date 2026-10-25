@@ -40,6 +40,13 @@ def _pad(v, w):
     return np.pad(v, [(0, 0), (0, w - v.shape[1])] + [(0, 0)] * (v.ndim - 2))
 
 
+def selection(config):
+    """Jet selection of a toy or JEWEL sample configuration (``--config``)."""
+    from omnilearned.sbi.toy.train import sample_setup
+
+    return sample_setup(config)[1]
+
+
 def direct_by_point(fidelity_dir):
     d = read_shards(shard_paths(fidelity_dir, "fidelity"))
     out = {}
@@ -72,7 +79,7 @@ def gate_point(sur, sel, theta, xd, md, n_generate, nsteps, seed, n_perm, solver
 def run(a):
     dev = resolve_device(a.device)
     sur = FlowSurrogate.load(a.checkpoint, device=dev.device)
-    _, _, sel = load_toy_config(a.config)
+    sel = selection(a.config)
     direct = direct_by_point(a.fidelity_dir)
     pids = sorted(direct)
     if a.points:
@@ -153,7 +160,7 @@ def summarize(a):
 def convergence(a):
     dev = resolve_device(a.device)
     sur = FlowSurrogate.load(a.checkpoint, device=dev.device)
-    _, _, sel = load_toy_config(a.config)
+    sel = selection(a.config)
     direct = direct_by_point(a.fidelity_dir)
     out = {}
     for pid in a.points:
