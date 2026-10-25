@@ -41,6 +41,10 @@ inside an allocation with `SLURM_*` unset. On a login node run tests with
 ## Environment (Perlmutter)
 
 - **Data locations** (toy and JEWEL samples, sizes, file layout, readers): `docs/NLE_DATA.md`.
+- **Project journal and permanent record** (for the publication): `JOURNAL.md` in the reports
+  repository below, latest first, one entry file per event in `journal/entries/` (every thread
+  writes there; format in `journal/README.md`). Reports there are self-contained (figures, sources,
+  inputs; no claude.ai links). Claude.ai artifacts are previews only.
 - **Reports archive** (private): `matplo/omni-sbi-nle-jet-dev-reports`, clone at
   `/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/omni-sbi-nle-jet-dev-reports`. HTML reports with
   their sources and inputs by topic and time stamp, findings snapshots (one per commit of this
