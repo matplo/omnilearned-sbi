@@ -30,6 +30,9 @@ Commands (``python -m omnilearned.sbi.toy.closure``):
   ``--control`` the pull differences against a self-closure control campaign.
 * ``acceptance`` / ``acceptance-merge``: the surrogate's selection acceptance table
   Pr_q(S | theta) (common random numbers), sharded over GPUs; used as ``log_norm_fn``.
+  ``acceptance-merge --per-n-out`` also writes the per-N table Pr_q(S | N, theta); a spec
+  with ``selection_normalization = "per_n"`` and that table as ``acceptance_table`` fits
+  with sum_i log Pr_q(S | N_i, theta) and draws the control with same-N redraws (plan S1).
 """
 
 import argparse
@@ -89,8 +92,11 @@ def _load_toml(path):
 # prepare
 # ---------------------------------------------------------------------------
 
-def _surrogate_ensemble(sur, sel, theta, n, seed, index, nsteps=128):
-    """Self-closure control: n selected clouds drawn from the surrogate at theta."""
+def _surrogate_ensemble(sur, sel, theta, n, seed, index, nsteps=128, redraw=False):
+    """Self-closure control: n selected clouds drawn from the surrogate at theta.
+
+    ``redraw``: rejected clouds are drawn again at the same N (per-N normalization), so the
+    control follows the per-N selected density."""
     from omnilearned.sbi.toy.sample_select import sample_and_select
     from omnilearned.sbi.toy.simulator import make_event_id
 
@@ -100,7 +106,7 @@ def _surrogate_ensemble(sur, sel, theta, n, seed, index, nsteps=128):
             raise RuntimeError(f"surrogate acceptance too low at {theta}: "
                                f"{sum(len(x) for x in xs)} of {draws} draws selected")
         x, m, rep = sample_and_select(sur, theta, int(1.25 * n) + 16, sel, seed=seed + 7919 * k,
-                                      nsteps=nsteps)
+                                      nsteps=nsteps, redraw=redraw)
         xs.append(x)
         ms.append(m)
         draws += rep["generated"]
@@ -136,6 +142,11 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
 
         sur = FlowSurrogate.load(ck, device=spec.get("device", "cpu"))
     table = spec.get("acceptance_table")
+    per_n = spec.get("selection_normalization", "per_theta") == "per_n"
+    if spec.get("selection_normalization", "per_theta") not in ("per_theta", "per_n"):
+        raise ValueError("selection_normalization must be 'per_theta' or 'per_n'")
+    if per_n and not table:
+        raise ValueError("per-N selection normalization needs an acceptance_table (per-N table)")
     if table and list(spec["fit"]["grid"]) != list(PARAMETERS):
         raise ValueError(f"with an acceptance table the grid must be ordered {list(PARAMETERS)}")
     tasks = []
@@ -146,7 +157,8 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
             split = SETTING_SPLIT.get(spec["setting"], "test")
             sha, _ = make_observations(obs, truth, theta, n, split, off + k, config)
         else:
-            rec, info = _surrogate_ensemble(sur, sel, theta, n, int(spec.get("seed", 0)) + off + k, off + k)
+            rec, info = _surrogate_ensemble(sur, sel, theta, n, int(spec.get("seed", 0)) + off + k, off + k,
+                                            redraw=per_n)
             sha = write_observation_file(obs, rec, attrs={"source": "surrogate self-closure control"})
             write_truth(truth, {"observations": str(obs), "observations_sha256": sha,
                                 "theta": [float(v) for v in theta], "source": "surrogate",
@@ -158,6 +170,7 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
         if table:
             fit_cfg["log_norm_table"] = str(Path(table).resolve())
             fit_cfg["log_norm_table_sha256"] = file_sha256(table)
+            fit_cfg["log_norm_mode"] = "per_n" if per_n else "per_theta"
         fit_cfg.update({k2: v for k2, v in spec["fit"].items()})
         check_fit_config(fit_cfg)
         path = out / "fits" / f"fit_{k:04d}.toml"
@@ -182,10 +195,17 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
 def _log_norm(cfg):
     if not cfg.get("log_norm_table"):
         return None
-    from omnilearned.sbi.toy.selection import TableLogNorm
+    from omnilearned.sbi.toy.selection import PerNLogNorm, TableLogNorm
 
     if file_sha256(cfg["log_norm_table"]) != cfg.get("log_norm_table_sha256"):
         raise ValueError("acceptance table does not match the fit configuration")
+    if cfg.get("log_norm_mode", "per_theta") == "per_n":
+        if cfg.get("mode", "fixed_vector") != "fixed_vector":
+            raise ValueError("per-N selection normalization is implemented for fixed-vector fits")
+        from omnilearned.sbi.observations import read_observations
+
+        obs = read_observations(cfg["observations"])
+        return PerNLogNorm(cfg["log_norm_table"]).bind(np.asarray(obs.mask).sum(1))
     return TableLogNorm(cfg["log_norm_table"])
 
 
@@ -492,20 +512,27 @@ def acceptance_part(checkpoint, axes, n_samples, seed, nsteps, shard, num_shards
     pts = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, len(axes))
     idx = np.arange(len(pts))[shard::num_shards]
     acc = np.full(len(pts), np.nan)
+    width = sur.multiplicity.max_n + 1
+    gen_n = np.full((len(pts), width), -1, np.int64)  # per-N counts for the per-N table (S1)
+    acc_n = np.full((len(pts), width), -1, np.int64)
     for i in idx:
         x, m = sur.sample(pts[i], n_samples, None, seed=seed, nsteps=nsteps,
                           candidate_names=list(PARAMETERS), batch=1024)
         ok, _, _ = select_clouds(x.astype(np.float64), sel, m)
         acc[i] = ok.mean()
+        cnt = m.sum(1)
+        gen_n[i], acc_n[i] = np.bincount(cnt, minlength=width), np.bincount(cnt[ok], minlength=width)
         log(f"  acceptance {np.round(pts[i], 3).tolist()}: {acc[i]:.4f}")
-    np.savez(out, acceptance=acc, **{f"axis_{k}": a for k, a in enumerate(axes)},
+    np.savez(out, acceptance=acc, generated_by_n=gen_n, accepted_by_n=acc_n,
+             **{f"axis_{k}": a for k, a in enumerate(axes)},
              checkpoint_sha256=sur.metadata["checkpoint_sha256"], n_samples=n_samples, seed=seed,
              nsteps=nsteps)
 
 
-def acceptance_merge(parts, out):
-    """Combine shard files into a ``selection.save_table`` table (all cells required)."""
-    from omnilearned.sbi.toy.selection import save_table
+def acceptance_merge(parts, out, per_n_out=None, n_knots=5):
+    """Combine shard files into a ``selection.save_table`` table (all cells required);
+    with ``per_n_out`` also the per-N table (``selection.save_per_n_table``)."""
+    from omnilearned.sbi.toy.selection import save_per_n_table, save_table
 
     ds = [np.load(p) for p in parts]
     axes = [ds[0][f"axis_{k}"] for k in range(len(PARAMETERS))]
@@ -523,6 +550,22 @@ def acceptance_merge(parts, out):
                 "seed": int(ds[0]["seed"]), "nsteps": int(ds[0]["nsteps"]),
                 "common_random_numbers": True, "parts": [str(p) for p in parts],
                 "acceptance_range": [float(acc.min()), float(acc.max())], "host": host_info()})
+    if per_n_out:
+        if any("generated_by_n" not in d for d in ds):
+            raise ValueError("acceptance shards without per-N counts (older code)")
+        gen = np.full(ds[0]["generated_by_n"].shape, -1, np.int64)
+        accn = gen.copy()
+        for d in ds:
+            have = d["generated_by_n"][:, 0] >= 0
+            gen[have], accn[have] = d["generated_by_n"][have], d["accepted_by_n"][have]
+        if (gen < 0).any():
+            raise ValueError("per-N counts missing for some cells")
+        w = gen.shape[-1]
+        save_per_n_table(per_n_out, axes, gen.reshape(shape + (w,)), accn.reshape(shape + (w,)),
+                         {"checkpoint_sha256": str(ds[0]["checkpoint_sha256"]),
+                          "n_samples": int(ds[0]["n_samples"]), "seed": int(ds[0]["seed"]),
+                          "nsteps": int(ds[0]["nsteps"]), "common_random_numbers": True,
+                          "parts": [str(p) for p in parts], "host": host_info()}, n_knots=n_knots)
     return acc.reshape(shape)
 
 
@@ -563,6 +606,8 @@ def main(argv=None):
     a2 = sub.add_parser("acceptance-merge")
     a2.add_argument("--parts", nargs="+", required=True)
     a2.add_argument("--out", required=True)
+    a2.add_argument("--per-n-out", default=None, help="also write the per-N table (plan S1)")
+    a2.add_argument("--n-knots", type=int, default=5, help="per-N table: knots of the logit in log N")
     a = ap.parse_args(argv)
     if a.cmd == "prepare":
         spec = _load_toml(a.spec)
@@ -595,7 +640,7 @@ def main(argv=None):
         acceptance_part(a.checkpoint, _axes(a.axis), a.n_samples, a.seed, a.nsteps, a.shard,
                         a.num_shards, a.out, a.device)
     else:
-        acc = acceptance_merge(a.parts, a.out)
+        acc = acceptance_merge(a.parts, a.out, a.per_n_out, a.n_knots)
         print(f"acceptance table {acc.shape}, range [{acc.min():.4f}, {acc.max():.4f}] -> {a.out}")
 
 

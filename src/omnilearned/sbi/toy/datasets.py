@@ -349,6 +349,12 @@ def _cli(argv=None):
     d.add_argument("--n", type=int, required=True)
     d.add_argument("--out", required=True)
     d.add_argument("--config", default=str(V2_CONFIG))
+    d.add_argument("--from-index", type=int, default=0,
+                   help="keep design points from this index on (extend an existing design: the "
+                        "Sobol prefix is unchanged, so points [0, from) are the smaller design)")
+    d.add_argument("--select", nargs=3, action="append", default=[], metavar=("PARAM", "LO", "HI"),
+                   help="keep only points with LO < PARAM <= HI (repeatable); point ids stay the "
+                        "design indices, so their random streams are distinct from other points")
     g = sub.add_parser("generate", help="generate one shard of a design")
     g.add_argument("--design", required=True)
     g.add_argument("--shard", type=int, default=None, help="default: $SLURM_ARRAY_TASK_ID")
@@ -357,6 +363,8 @@ def _cli(argv=None):
     g.add_argument("--out-dir", required=True)
     g.add_argument("--config", default=str(V2_CONFIG))
     g.add_argument("--skip-existing", action="store_true")
+    g.add_argument("--shard-offset", type=int, default=0,
+                   help="file number = shard + offset (add shards next to another design's)")
     g.add_argument("--counts-only", action="store_true",
                    help="store only multiplicities (training data for p(N | theta))")
     g.add_argument("--split", default=None, choices=sorted(SPLIT_SEED),
@@ -380,29 +388,38 @@ def _cli(argv=None):
     elif a.cmd == "design":
         cfg, _, _ = load_toy_config(a.config)
         pts, info = make_design(a.n, a.split, cfg)
+        ids = np.arange(len(pts))
+        keep = ids >= a.from_index
+        for name, lo, hi in a.select:
+            col = pts[:, list(PARAMETERS).index(name)]
+            keep &= (col > float(lo)) & (col <= float(hi))
+        if a.from_index or a.select:
+            info.update({"from_index": a.from_index, "select": a.select, "point_ids": ids[keep].tolist()})
+        pts = pts[keep]
         info.update({"parameters": list(PARAMETERS), "points": pts.tolist(),
                      "toy_config": a.config, "toy_config_sha256": file_sha256(a.config),
                      "host": host_info()})
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         with open(a.out, "w") as f:
             json.dump(info, f, indent=1)
-        print(f"design {a.split}: {a.n} points, dropped {info['dropped_by_margin']} by margin -> {a.out}")
+        print(f"design {a.split}: {len(pts)} of {a.n} points, dropped {info['dropped_by_margin']} by margin -> {a.out}")
     elif a.cmd == "generate":
         with open(a.design) as f:
             des = json.load(f)
         k = a.shard if a.shard is not None else int(os.environ["SLURM_ARRAY_TASK_ID"])
         pts = np.asarray(des["points"])
-        ids = np.arange(k * a.points_per_shard, min(len(pts), (k + 1) * a.points_per_shard))
-        if ids.size == 0:
+        rows = np.arange(k * a.points_per_shard, min(len(pts), (k + 1) * a.points_per_shard))
+        if rows.size == 0:
             print(f"shard {k}: no points")
             return
+        pid = np.asarray(des.get("point_ids", np.arange(len(pts))))
         split = a.split or des["split"]
-        out = Path(a.out_dir) / f"{split}{'_counts' if a.counts_only else ''}_{k:05d}.h5"
+        out = Path(a.out_dir) / f"{split}{'_counts' if a.counts_only else ''}_{k + a.shard_offset:05d}.h5"
         if a.skip_existing and out.with_suffix(".json").exists():
             print(f"shard {k}: exists, skipped")
             return
-        m = generate_shard(out, split, ids, pts[ids], a.jets, a.config, counts_only=a.counts_only)
-        print(f"shard {k}: {m['n_jets']} jets, {len(ids)} points, {m['wall_seconds']:.1f}s -> {out}")
+        m = generate_shard(out, split, pid[rows], pts[rows], a.jets, a.config, counts_only=a.counts_only)
+        print(f"shard {k}: {m['n_jets']} jets, {len(rows)} points, {m['wall_seconds']:.1f}s -> {out}")
     else:
         idx = write_index(a.dir, a.split)
         print(f"index {a.split}: {idx['n_points']} points, {idx['n_jets']} jets, "

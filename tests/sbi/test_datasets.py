@@ -31,6 +31,28 @@ def test_design_is_reproducible_in_box_and_respects_margin():
     assert margin_clashes(np.stack([close, far_one_axis]), reserved_settings(CFG)).tolist() == [True, False]
 
 
+def test_design_extension_keeps_prefix_ids_and_shard_offset(tmp_path):
+    """Plan S2 option b: extra Sobol points of a larger design in a sub-box, with their own
+    point ids (independent streams), written as shards next to an existing design's."""
+    pytest.importorskip("hepyy")
+    from omnilearned.sbi.toy import datasets
+
+    datasets._cli(["design", "--split", "train", "--n", "64", "--out", str(tmp_path / "d64.json")])
+    datasets._cli(["design", "--split", "train", "--n", "128", "--out", str(tmp_path / "d128.json")])
+    datasets._cli(["design", "--split", "train", "--n", "128", "--from-index", "64",
+                   "--select", "T_ref", "0.45", "0.55", "--out", str(tmp_path / "ext.json")])
+    d64, d128, ext = (json.loads((tmp_path / f).read_text()) for f in ("d64.json", "d128.json", "ext.json"))
+    np.testing.assert_array_equal(np.array(d128["points"])[:64], d64["points"])  # Sobol prefix
+    ids = np.array(ext["point_ids"])
+    assert ids.min() >= 64 and len(ids) == len(ext["points"]) > 0
+    np.testing.assert_array_equal(np.array(d128["points"])[ids], ext["points"])
+    assert np.all(np.array(ext["points"])[:, 1] > 0.45)
+    datasets._cli(["generate", "--design", str(tmp_path / "ext.json"), "--shard", "0", "--points-per-shard", "2",
+                   "--jets", "3", "--out-dir", str(tmp_path / "out"), "--shard-offset", "10"])
+    man = json.loads((tmp_path / "out" / "train_00010.json").read_text())
+    assert [q["point_id"] for q in man["points"]] == ids[:2].tolist() and man["n_jets"] == 6
+
+
 @pytest.fixture(scope="module")
 def shard_dir(tmp_path_factory):
     pytest.importorskip("hepyy")
@@ -343,6 +365,16 @@ def test_acceptance_shards_merge(tiny_run, tmp_path):
     assert acc.shape == (2, 2, 2) and np.all((acc >= 0) & (acc <= 1))
     with open(tmp_path / "t.json") as f:
         assert json.load(f)["common_random_numbers"] is True
+    # per-N table from the same shards (plan S1): counts per N add up to the samples per cell
+    from omnilearned.sbi.toy.selection import PerNLogNorm
+
+    closure.main(["acceptance-merge", "--parts", str(tmp_path / "part0.npz"), str(tmp_path / "part1.npz"),
+                  "--out", str(tmp_path / "t2.npz"), "--per-n-out", str(tmp_path / "pn.npz")])
+    with np.load(tmp_path / "pn.npz") as z:
+        assert np.all(z["generated"].sum(-1) == 16) and np.all(z["accepted"] <= z["generated"])
+        np.testing.assert_allclose(z["accepted"].sum(-1) / 16, acc)
+    la = PerNLogNorm(tmp_path / "pn.npz")([[7.0, 0.3, 0.95]], [3, 10])
+    assert la.shape == (1, 2) and np.all(np.isfinite(la)) and np.all(la <= 0)
 
 
 def test_closure_claims_and_interleaved_workers(tiny_run, tmp_path):

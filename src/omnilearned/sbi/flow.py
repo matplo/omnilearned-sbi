@@ -233,7 +233,8 @@ class FlowSurrogate:
         """Physical-coordinate samples at one candidate.
 
         ``num_particles`` fixes the multiplicity (returns ``x`` [n, P, F], or
-        ``(x, mask)`` with ``return_mask``). With ``num_particles=None`` N is
+        ``(x, mask)`` with ``return_mask``); an array of n counts fixes N per cloud
+        (returns ``(x, mask)``, as for drawn N). With ``num_particles=None`` N is
         drawn from the multiplicity model and ``(x, mask)`` is returned:
         left-packed, zero-padded to ``pad_to`` (default: the largest N drawn).
         ``sort_by_length`` integrates the clouds in order of N (each batch is cut
@@ -251,13 +252,18 @@ class FlowSurrogate:
                 self.multiplicity.layout.assemble(np.repeat(cand, n, 0), candidate_names)
             ).to(self.device)
             counts = self.multiplicity.sample(mcond, gen).numpy()
+        elif np.ndim(num_particles):
+            counts = np.asarray(num_particles, dtype=np.int64)
+            if counts.shape != (n,) or counts.min(initial=1) < 1:
+                raise ValueError("num_particles needs n positive counts")
         else:
             counts = np.full(n, int(num_particles))
+        variable = num_particles is None or np.ndim(num_particles) > 0
         width = int(pad_to or max(1, counts.max() if n else 1))
         if counts.max(initial=0) > width:
             raise ValueError("pad_to is smaller than a drawn multiplicity")
         order = None
-        if sort_by_length and num_particles is None:
+        if sort_by_length and variable:
             order = np.argsort(counts, kind="stable")
             counts = counts[order]
         xs, ms = [], []
@@ -285,7 +291,7 @@ class FlowSurrogate:
             inv = np.empty_like(order)
             inv[order] = np.arange(order.size)
             x, mask = x[inv], mask[inv]
-        if num_particles is not None and not return_mask:
+        if not variable and not return_mask:
             return x
         return x, mask
 

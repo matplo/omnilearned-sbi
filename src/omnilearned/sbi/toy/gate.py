@@ -8,6 +8,9 @@ against the direct-toy ``fidelity`` jets at the same point
 constituent observables, mean relevance at the analysis N). One JSON per
 point (resumable) plus the selected surrogate clouds (HDF5).
 
+``run --redraw`` draws rejected clouds again at the same N (per-N selection
+normalization, fidelity plan S1), so the selected surrogate sample keeps p(N | theta).
+
 ``summarize``: Bonferroni verdicts with S = number of points
 (significant and relevant at N = 1000 fails; relevance at 250 recorded), the
 global uniformity check of the family-wise p-values, and a table.
@@ -59,9 +62,9 @@ def direct_by_point(fidelity_dir):
 
 
 def gate_point(sur, sel, theta, xd, md, n_generate, nsteps, seed, n_perm, solver="midpoint",
-               batch=4096):
+               batch=4096, redraw=False):
     xs, ms, rep = sample_and_select(sur, theta, n_generate, sel, seed=seed, nsteps=nsteps,
-                                    solver=solver, batch=batch)
+                                    solver=solver, batch=batch, redraw=redraw)
     w = max(xd.shape[1], xs.shape[1])
     t0 = time.time()
     res = fidelity.evaluate(_pad(xd, w), _pad(xs, w), n_events=max(ANALYSIS_N), n_perm=n_perm,
@@ -97,8 +100,8 @@ def run(a):
             xd, md = xd[:a.max_direct], md[:a.max_direct]
         t0 = time.time()
         res, xs, ms = gate_point(sur, sel, theta, xd, md, a.n_generate, a.nsteps, a.seed + pid,
-                                 a.n_perm, batch=a.batch)
-        res.update({"point_id": pid, "theta": theta.tolist(), "checkpoint": a.checkpoint,
+                                 a.n_perm, batch=a.batch, redraw=a.redraw)
+        res.update({"point_id": pid, "theta": theta.tolist(), "checkpoint": a.checkpoint, "redraw": a.redraw,
                     "checkpoint_sha256": sur.metadata.get("checkpoint_sha256"),
                     "nsteps": a.nsteps, "device": dev.to_dict(), "host": host,
                     "gpu_name": torch.cuda.get_device_name() if dev.device == "cuda" else None,
@@ -146,7 +149,8 @@ def summarize(a):
            "significant": [t["point_id"] for t in table if t["significant"]],
            "global_uniformity": glob, "table": table,
            "checkpoint_sha256": sorted({r["checkpoint_sha256"] for r in rows}),
-           "nsteps": sorted({r["nsteps"] for r in rows})}
+           "nsteps": sorted({r["nsteps"] for r in rows}),
+           "redraw": sorted({bool(r.get("redraw", False)) for r in rows})}
     with open(Path(a.out) / "summary.json", "w") as f:
         f.write(json_dumps(doc))
     print(f"{S} of {a.n_settings or S} points, alpha/S {alpha_s:.2e}: {len(doc['fails'])} FAIL, "
@@ -255,7 +259,7 @@ def shift(a):
     for pid in targets:
         xd, md, od = obs_by_point[pid]
         xs, ms, rep = sample_and_select(sur, pts[pid], a.n_generate, sel, seed=a.seed + pid,
-                                        nsteps=a.nsteps, batch=a.batch)
+                                        nsteps=a.nsteps, batch=a.batch, redraw=a.redraw)
         o = fidelity.all_obs(xs, ms)
         osur = np.column_stack([o[k] for k in keys])
         dmu = osur.mean(0) - od.mean(0)
@@ -277,7 +281,7 @@ def shift(a):
               f"acc={rep['acceptance']:.3f}",
               flush=True)
     out.update({"checkpoint": a.checkpoint, "checkpoint_sha256": sur.metadata.get("checkpoint_sha256"),
-                "nsteps": a.nsteps, "n_generate": a.n_generate, "device": dev_.to_dict(),
+                "nsteps": a.nsteps, "n_generate": a.n_generate, "redraw": a.redraw, "device": dev_.to_dict(),
                 "host": host_info()})
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     with open(a.out, "w") as f:
@@ -307,6 +311,8 @@ def main(argv=None):
     r.add_argument("--num-shards", type=int, default=1)
     r.add_argument("--max-direct", type=int, default=None)
     r.add_argument("--save-samples", action="store_true")
+    r.add_argument("--redraw", action="store_true",
+                   help="redraw rejected clouds at the same N (per-N selection normalization, plan S1)")
     c = sub.choices["convergence"]
     c.add_argument("--points", type=int, nargs="+", required=True)
     c.add_argument("--steps", type=int, nargs="+", default=[64, 128, 256])
@@ -319,6 +325,7 @@ def main(argv=None):
     h.add_argument("--seed", type=int, default=0)
     h.add_argument("--batch", type=int, default=1024)
     h.add_argument("--max-points", type=int, default=None)
+    h.add_argument("--redraw", action="store_true", help="as for run")
     h.add_argument("--device", default="auto")
     h.add_argument("--config", default=str(V2_CONFIG))
     s = sub.add_parser("summarize")
