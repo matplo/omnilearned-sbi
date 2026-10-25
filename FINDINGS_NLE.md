@@ -891,6 +891,27 @@ log, `junit.xml`, `run_info.txt`).
 - **Failure:** training node 60282682 exited after 17 s on a wrong `nvidia-smi` call, and Slurm still reported COMPLETED. Fixed in 5d3e948 (the job now fails when a training fails). Its chained gates were cancelled.
 - **Main-branch fix from it:** `gen_toy_local.sh` quoted the multi-word `$PY` (broken since 5be73c6), fixed in 233387f.
 
+### N = 1000 closure: M4 numerics check PASS (2026-10-25 16:08), fits started; grid-resolution check queued
+
+Campaign `runs/m5/dev_N1000_setR2`, snapshot 4112ec2, job 60281416 (nid001688, 4 × A100-SXM4-40GB,
+CUDA, no fallback). 1000 development jets (index 1200), Δlog L between the development point and
+1σ steps along the three Fisher eigen-directions at N = 1000. Test: midpoint-64 with 8 per-step
+probes. Reference: rk4-64 with 16 per-step probes. 12 seeds each (`numerics.json`).
+
+| pair | reference Δlog L | test − reference (12-seed mean) | single seed | probe std |
+|---|---|---|---|---|
+| thin direction (mostly T_ref, σ_F 0.0034) | −0.154 ± 0.005 | 0.028 | 0.017 | 0.028 |
+| mostly τ_init (σ_F 0.118) | −5.256 ± 0.010 | 0.094 | 0.089 | 0.094 |
+| tube direction (mostly b, σ_F 2.92) | −134.12 ± 0.05 | **0.469** | 0.122 | 0.275 |
+
+- **PASS** (all < 0.5). The seed-averaged shift on the tube pair is close to the limit: about 0.35% of a Δlog L of 134, the solver bias of a long step.
+- Fits started at 16:09 (prepare toy and control, then phase 3).
+- **Open question, the grid:** the grid (23 × 27 × 11; steps 0.5 fm, 0.0115 GeV, 0.1 fm/c) was sized from the Fisher matrix of 7 jet observables.
+  - The τ_init-pair Δlog L of −5.3 for a 1σ_F step (≈ −0.5 expected) says the full likelihood has about 10× more information there. That would make the grid spacing about 2.5–3 conditional σ.
+  - The −134 along the tube is mostly curvature: a straight step leaves the curved ridge.
+  - Check (development data, `gridcheck/scan.py`, job 60285412, 1 GPU): fine 1D log L scans through the development point at ¼ grid step, including −N log Pr_q(S|θ), giving the conditional width along each axis against the grid step.
+  - If the grid is too coarse, the fits' node values are kept: a 2× refinement contains the current nodes. Refinement is then the decision to make.
+
 ## Open items
 
 ### To do (2026-10-25, user request): surrogate fidelity improvement, `docs/SURROGATE_FIDELITY_PLAN.md`
