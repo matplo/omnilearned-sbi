@@ -871,6 +871,26 @@ log, `junit.xml`, `run_info.txt`).
 - **Fidelity thread** (S0–S5, branch `dev/nle-fidelity`): told to submit independent
   trainings and gates concurrently.
 
+### Fidelity thread, first report (2026-10-25 ~16:00; branch `dev/nle-fidelity`, log `FINDINGS_FIDELITY.md` there)
+
+- **S0 (analysis of existing gates):** set r1, set r2 and PET r2 have the same offsets: width
+  ≈ −0.62, outer fraction ≈ −0.53, N ≈ −0.35 (relevance units at N = 1000).
+  - Tripling the data (2000 → 6000 jets per point) did not reduce them below T_ref = 0.45. Above it they fall as n^−0.25.
+  - Predicted gain of S2 option a (12 000 jets per point): width B² 0.64 → 0.53. The residual is a floor, not a data shortage.
+  - Report: `reports/m3-surrogate-fidelity/2026-10-25T1537-0700_toy-v2_S0-residuals/` in the reports repository.
+- **New hypothesis H6:** the flow leaks probability across the selection cuts and is short just inside them. That would explain jet pT up from the 60 GeV cut (+0.38) and the widest jets missing (−0.62). A same-N redraw (S1) cannot fix it.
+  - A one-point smoke test (unconverged) puts the width shift at fixed N, which favours H6 over H3.
+  - A boundary diagnostic (jobs 60284684–86) and the S1 re-gates (60283786–88) will decide between them.
+  - If H6 holds, the fix is a jet-axis-relative representation with bounded ΔR. That is outside S1–S5, so the thread will propose it ("S5b") rather than build it.
+- **Jobs (regular QOS):**
+  - seed / 400k / d384 node 60284243;
+  - S2 data 60283789 (`v2_m3a` 12k jets/pt, `v2_m3b` + 343 points at T_ref > 0.45);
+  - S2 × S3 node 60284244;
+  - gates 60284245–61.
+  - Planned use ≈ 40 node-h (1.2× the plan's S0–S4).
+- **Failure:** training node 60282682 exited after 17 s on a wrong `nvidia-smi` call, and Slurm still reported COMPLETED. Fixed in 5d3e948 (the job now fails when a training fails). Its chained gates were cancelled.
+- **Main-branch fix from it:** `gen_toy_local.sh` quoted the multi-word `$PY` (broken since 5be73c6), fixed in 233387f.
+
 ## Open items
 
 ### To do (2026-10-25, user request): surrogate fidelity improvement, `docs/SURROGATE_FIDELITY_PLAN.md`
