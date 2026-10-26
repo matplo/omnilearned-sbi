@@ -21,11 +21,12 @@ Reference (round 2, `set_d256_L6_200k_multC64`): 1 FAIL, 23 with p < 0.01, const
 | 2026-10-25 | S2 | 60283789 (`nle-s2-data`) | 1 CPU node, 45 min | done (9 min; 12.3 M and 8.2 M jets) | `data/v2_m3a`, `data/v2_m3b` |
 | 2026-10-25 | S2 × S3 | ~~60283791~~ cancelled (same script bug) → 60284244 (after 60283789) | 1 node × 4 A100, 8 h | done (3 h 37 m; 60284243: 3 h 36 m) | `runs/m2r3/set_d256_L6_{200k,400k}_{m3a,m3b}` |
 | 2026-10-25 | gates | ~~60283792–60283807~~ cancelled → 60284245–60284252 (after 60284243), 60284253–60284261 (after 60284244), snapshot 5d3e948 | 1 node each, 3 h | s1, s2, 400k done; d384, 200k_m3a running (≈ 90/128 on 2026-10-26 10:50); 400k_m3a, m3b pending | each new model with the round-2 method (`runs/m3/m2r3_<run>`) and with redraw (`..._redraw`) |
-| 2026-10-26 | S3 seed check | ~~60322904–06~~ (shared-queue seed 1 + gates) cancelled before start → interactive node A 60323636 (nid003857, 4 h) | 3 × A100 ≈ 3.6 h | running since 11:16 | 400k seeds 1, 2, 3 (`runs/m2r3/spec_400k_s123.txt`, the seed-0 400k line with `--seed 1/2/3`, multC64 attached) → `runs/m2r3/set_d256_L6_400k_s{1,2,3}`. Gates to be submitted when they finish |
-| 2026-10-26 | gate completion | interactive node B 60323642 (nid001021, 4 h) | 4 A100 | running | resume the gates that hit their 3 h limit: d384 (108/128), d384 redraw (101/128), PET r2 redraw (117/128) |
-| 2026-10-26 | shift, high statistics | node B CPUs (data); node A GPU 3, shared-queue workers 60324273/75/76 (1 A100, 4 h) | ≈ 1 GPU-h per model (≈ 5.5 min per point) | 400k s0, set r2, set s1 done (12:22–12:48); s2, d384, m3a, PET r2 running | `data/v2_m3_shiftdirect`: 200 000 direct jets at each of the 11 shift points, new indices 1000–1010 of the development_scan stream (independent of the scan), snapshot 5d3e948 (generator unchanged, config sha 2c047d92). `gate shift --direct-dir` (046a3cb), 50 000 surrogate clouds per point, redraw, via `shell/nle/shift_queue.sh` and `runs/m3/shift_hi_queue.txt` → `runs/m3/shift_hi/<name>/`. Expected 11-point se ≈ 0.05σ (was 0.09) |
-| 2026-10-26 | S3 seed check, measurement | gates 60331580/81 (s1), 60331583/84 (s2), 60331586/87 (s3), regular, 1 node × 4 A100, 3 h; shift workers 60331582/85/88, shared, 1 A100, 2 h; all `--begin 14:55` | 6 node × ≤ 3 h, 3 × ≤ 2 GPU-h | pending | gates of 400k seeds 1–3 with and without redraw (`fid_gate.sbatch`, snapshot 5d3e948 → `runs/m3/m2r3_set_d256_L6_400k_s{1,2,3}{,_redraw}`) and their high-statistics shifts (`runs/m3/shift_hi_queue_400k.txt`, snapshot 046a3cb). Each job runs through `runs/m3/after_ckpt.sh`, which waits up to 40 min for `checkpoint_mult.pt` (node A ends 15:16, training ends ≈ 14:50) |
-| 2026-10-26 | pT-differential fidelity | interactive node B 60323642, GPUs 1–3 (step 60323642.7; the 3-GPU step .4 was cancelled before computing) | 3 A100 × ≲ 1 h | running | `toy.ptbins run` (snapshot a2e7dba), 16 gate points, redraw, set 400k / set r2 / PET r2 → `runs/m3/ptbins/<model>/` |
+| 2026-10-26 | S3 seed check | ~~60322904–06~~ (shared-queue seed 1 + gates) cancelled before start → interactive node A 60323636 (nid003857, 4 h) | 3 × A100 ≈ 3.5 h | done 14:52–14:54 (12 540–12 630 s; final val(ema) 1.05221–1.05222, = seed 0) | 400k seeds 1, 2, 3 (`runs/m2r3/spec_400k_s123.txt`, the seed-0 400k line with `--seed 1/2/3`, multC64 attached) → `runs/m2r3/set_d256_L6_400k_s{1,2,3}`. Gates to be submitted when they finish |
+| 2026-10-26 | gate completion | interactive node B 60323642 (nid001021, 4 h) | 4 A100 | d384 done 12:53, d384 redraw done 14:50; PET r2 redraw stopped at ≈ 119/128 when the allocation ended (15:16), resumed as 60341128 | resume the gates that hit their 3 h limit: d384 (108/128), d384 redraw (101/128), PET r2 redraw (117/128) |
+| 2026-10-26 | shift, high statistics | node B CPUs (data); node A GPU 3, shared-queue workers 60324273/75/76 (1 A100, 4 h) | ≈ 1 GPU-h per model (≈ 5.5 min per point) | all 7 done 12:22–14:31 | `data/v2_m3_shiftdirect`: 200 000 direct jets at each of the 11 shift points, new indices 1000–1010 of the development_scan stream (independent of the scan), snapshot 5d3e948 (generator unchanged, config sha 2c047d92). `gate shift --direct-dir` (046a3cb), 50 000 surrogate clouds per point, redraw, via `shell/nle/shift_queue.sh` and `runs/m3/shift_hi_queue.txt` → `runs/m3/shift_hi/<name>/`. Expected 11-point se ≈ 0.05σ (was 0.09) |
+| 2026-10-26 | S3 seed check, measurement | gates 60331580/81 (s1), 60331583/84 (s2), 60331586/87 (s3), regular, 1 node × 4 A100, 3 h; shift workers 60331582/85/88, shared, 1 A100, 2 h; all `--begin 14:55` | 6 node × ≤ 3 h, 3 × ≤ 2 GPU-h | shifts done 16:00–16:07 (nid003997, nid001064, nid003885); gates pending | gates of 400k seeds 1–3 with and without redraw (`fid_gate.sbatch`, snapshot 5d3e948 → `runs/m3/m2r3_set_d256_L6_400k_s{1,2,3}{,_redraw}`) and their high-statistics shifts (`runs/m3/shift_hi_queue_400k.txt`, snapshot 046a3cb). Each job runs through `runs/m3/after_ckpt.sh`, which waits up to 40 min for `checkpoint_mult.pt` (node A ends 15:16, training ends ≈ 14:50) |
+| 2026-10-26 | pT-differential fidelity | interactive node B 60323642, GPUs 1–3 (step 60323642.7; the 3-GPU step .4 was cancelled before computing) | 3 A100 × 50 min | set 400k, set r2 done 14:47 (16/16, ≈ 3 min per point); PET r2 13/16 at the allocation end, last 3 points as 60341127 (shared, 1 A100) | `toy.ptbins run` (snapshot a2e7dba), 16 gate points, redraw, set 400k / set r2 / PET r2 → `runs/m3/ptbins/<model>/` |
+| 2026-10-26 | resumes after node B ended | 60341127 (`ptbins-pet`, shared, 1 A100, 40 min), 60341128 (`gr-pet-r2-resume`, regular, 1 node, 1 h) | ≲ 1.5 GPU-h | submitted 16:35 | PET r2 ptbins points 104–120 (snapshot a2e7dba, `runs/m3/ptbins/run_ptbins_one.sh`); PET r2 redraw gate resume (snapshot 19ac616) |
 
 ## S0: diagnostics on existing results (2026-10-25, login node, analysis only)
 
@@ -307,7 +308,7 @@ Share of the development-point c²:
 - **The constrained bias does not go away:** 0.38–0.54 after subtracting the noise floor, i.e. the residuals are significant but largely orthogonal to the parameter directions (dominated by width, as in the boundary decomposition).
   - A posterior-level number still needs a closure; see the limits in the previous section.
 - **Seed s2 (partial, 7 of 11 points) is larger at the tube points:** b +0.36, +0.51, +0.22σ at points 1004–1006 (θ_b = 4, 5, 6). Its mean may land near or above 0.2σ.
-- **Still pending:** s2, d384, m3a and PET r2 (due ≈ 13:50), and 400k seeds 1–3 (after 14:55). This section will be completed when they finish.
+- **Completed in the next section,** with all 10 models.
 
 ## Training statistics vs jet pT (2026-10-26, login node, analysis only)
 
@@ -336,4 +337,73 @@ Each θ point has a fixed number of selected jets, so the per-θ count is set by
 - **Next:** `toy.ptbins` (a2e7dba, tested) compares direct and selected surrogate jets in the same 8 bins. It reports the spectrum ratio and, per observable, the effect size Δ/σ_direct, the pull, σ_s/σ_d and the KS statistic, combined over points.
   - Running on interactive node B GPUs 1–3 since 13:58, redraw, 22 000 clouds at gate points 0, 8, …, 120 (16 points).
   - Models: set 400k, set r2, PET r2 → `runs/m3/ptbins/<model>/`.
+
+## High-statistics shifts, all 10 models (2026-10-26)
+
+Same method as the partial section: snapshot 046a3cb, cuda A100, redraw, 200 000 direct jets and 50 000 surrogate clouds at each of the 11 shift points. Output `runs/m3/shift_hi/breakdown_all.json`. Columns: b, T_ref, τ_init in marginal σ at N = 1000, 11-point mean ± 0.05; noise-corrected constrained bias.
+
+| run (redraw) | job / host | 11-point mean | without N | constrained bias (all / without N) | development-point N share of c² |
+|---|---|---|---|---|---|
+| set 400k s0 | 60323636 / nid003857 | −0.03 −0.04 +0.10 | −0.05 −0.05 +0.12 | 0.38 / 0.33 | 0.24 |
+| set 400k s1 | 60331582 / nid003997 | −0.02 −0.02 +0.07 | −0.04 −0.04 +0.10 | 0.35 / 0.29 | 0.32 |
+| set 400k s2 | 60331585 / nid001064 | −0.05 −0.06 +0.08 | −0.07 −0.07 +0.10 | 0.35 / 0.29 | 0.30 |
+| set 400k s3 | 60331588 / nid003885 | −0.05 −0.05 +0.08 | −0.06 −0.06 +0.11 | 0.33 / 0.27 | 0.34 |
+| set r2 (200k, seed 0) | 60324273 / nid002265 | +0.06 +0.06 +0.00 | +0.04 +0.04 +0.03 | 0.54 / 0.49 | 0.26 |
+| set seed 1 (200k) | 60324275 / nid003841 | +0.13 +0.13 −0.07 | +0.11 +0.11 −0.05 | 0.52 / 0.47 | 0.38 |
+| set seed 2 (200k) | 60324276 / nid001484 | +0.13 +0.14 −0.07 | +0.11 +0.12 −0.04 | 0.47 / 0.41 | 0.52 |
+| set m3a (200k, 2× jets per θ) | 60324275 / nid003841 | +0.14 +0.15 −0.05 | +0.12 +0.13 −0.03 | 0.50 / 0.44 | 0.43 |
+| set d384 L8 (200k) | 60323636 / nid003857 | +0.10 +0.10 −0.03 | +0.08 +0.08 −0.01 | 0.46 / 0.40 | 0.37 |
+| PET r2 (200k) | 60324273 / nid002265 | +0.17 +0.17 −0.04 | +0.15 +0.15 −0.02 | 0.48 / 0.44 | 0.31 |
+
+- **Training length is the lever; data and capacity are not.**
+  - 400k (4 seeds): b **−0.04, seed spread 0.015**; constrained bias **0.35** (0.33–0.38).
+  - 200k set (3 seeds): b **+0.11, spread 0.04**; constrained bias **0.51**.
+  - The difference is 0.15σ in b (≈ 3 se of a single model, beyond the spread of either group) and 0.16 in constrained bias.
+- **Neither more jets per θ nor a wider/deeper model helps at 200k steps:** m3a (2× jets) is at +0.14 / 0.50 and d384 L8 at +0.10 / 0.46, inside the 200k seed group. PET r2 (+0.17) is the largest.
+- **All 10 b means are inside 0.2σ.** The 400k models are inside 0.1σ, at all four seeds.
+- **The constrained bias stays ≈ 0.35 even at 400k:** the residuals do not project onto θ, and width and lead_fraction dominate the development-point c².
+- **The development-point shift is −0.02 to −0.22σ in every model,** with no relation to the 11-point mean. It is no longer a useful model comparison (see "The parameter shift").
+
+## Surrogate fidelity vs jet pT, `toy.ptbins` (2026-10-26)
+
+`toy.ptbins` (a2e7dba; heatmap label fix in the next commit), redraw, 22 000 clouds at gate points 0, 8, …, 120 (16 points, 13 for PET r2 so far), against the 20 000 direct jets per point of `data/v2_m1_fidelity`.
+- **Run provenance:** interactive node B 60323642 (nid001021), GPUs 1–3, checkpoints sha256 a297fd9f (set 400k), 1d587f39 (set r2), 7a3f7b5e (PET r2).
+- **Figures** in `runs/m3/ptbins/figs/`:
+  - `ptbins_spectrum.png`: pooled spectrum and surrogate/direct in 5 GeV bins;
+  - `ptbins_effect.png`: Δ/σ_direct per observable vs pT, mean over points ± se;
+  - `ptbins_sd_ratio.png`;
+  - `ptbins_pulls.png`: Σ pull/√P, observable × pT bin.
+- **Per-model summaries:** `runs/m3/ptbins/<model>/ptbins_summary.json`.
+
+**Effect size Δ/σ_direct** (mean over points; se ≈ 0.005–0.009 below 120 GeV, 0.013–0.04 above):
+
+| observable | model | 60–70 | 70–80 | 80–100 | 100–120 | 120–140 | 140–170 | 170–200 |
+|---|---|---|---|---|---|---|---|---|
+| width | 400k | **−0.015** | −0.013 | ≈ 0 | −0.004 | +0.018 | −0.011 | +0.027 |
+| width | r2 | **−0.024** | **−0.020** | ≈ 0 | +0.001 | +0.031 | +0.003 | +0.053 |
+| width | PET | **−0.032** | −0.016 | ≈ 0 | +0.002 | +0.024 | −0.005 | +0.070 |
+| outer_fraction | r2 | **−0.022** | −0.015 | ≈ 0 | −0.003 | +0.026 | −0.011 | +0.039 |
+| n_constituents | r2 | 0.000 | −0.005 | −0.01 | +0.007 | +0.031 | **+0.062** | +0.049 |
+| soft8_fraction | r2 | +0.002 | +0.002 | ≈ 0 | −0.009 | **−0.031** | −0.034 | −0.006 |
+
+**Spectrum, surrogate / direct:**
+
+| model | 60–70 | 70–120 | 120–140 | 140–170 | 170–200 |
+|---|---|---|---|---|---|
+| set 400k | 0.983 | 1.01–1.02 | 1.03 | 1.00 | 0.97 |
+| set r2 | 0.975 | 1.02 | 1.05 | 1.02 | 0.94 |
+| PET r2 | 0.977 | 1.02–1.03 | 1.10 | 1.03 | **0.71** |
+
+- **The largest and most significant defect is at low pT, not at high pT.**
+  - Width and outer_fraction are too small at 60–80 GeV (pulls −4 to −8). In the first 5 GeV above the cut the spectrum is 3–5 % short (−2 % for 60–70 overall).
+  - This is the truncation leakage at the 60 GeV cut found by the boundary decomposition. It is smaller at 400k (−0.015 vs −0.024).
+  - Weighted by jet share, for a 1000-jet analysis (e √(1000 f)): the 60–70 GeV width term is ≈ 0.5 se (r2) and 0.3 se (400k); the 140–170 GeV n_constituents term is ≈ 0.27 se.
+- **At high pT the effect sizes are 2–3× larger per jet, but they are diluted and only 2–4 σ significant.**
+  - The pattern above 120 GeV is the same in all three models: n_constituents too high (+0.03 to +0.06), soft8_fraction, ptd and lead_fraction too low (−0.02 to −0.04). The surrogate's high-pT jets carry a few too many soft constituents.
+  - The spectrum above 170 GeV is short, slightly for set (−3 to −6 %) and strongly for PET (−29 %).
+- **The spread ratios σ_s/σ_d are 0.98–1.02 below 120 GeV.** Above it they are 0.92–1.09, inside the noise.
+- **Consequence for the weighted-sample study (`dev/nle-weighted`):**
+  - High-pT fidelity is measurably worse per jet. But at the current analysis selection (60–200 GeV, steeply falling) it is not the leading term, and the integrated shift does not improve with 2× jets per θ (m3a).
+  - A weighted sample should therefore be judged in the ≥ 120 GeV bins of `toy.ptbins`, and it matters most for a high-pT analysis or for JEWEL.
+  - The low-pT boundary defect needs its own fix (S5b, to be discussed).
 

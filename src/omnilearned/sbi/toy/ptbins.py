@@ -182,13 +182,13 @@ def plot(a):
         fig.savefig(out / fn, dpi=130)
 
     fig, axs = plt.subplots(1, len(runs), figsize=(4.2 * len(runs) + 1, 3.6), squeeze=False)
-    for x, c, lab in zip(axs[0], runs, labels):
+    for j, (x, c, lab) in enumerate(zip(axs[0], runs, labels)):
         m = np.array([c["observables"][k]["pull_combined"] for k in KEYS])
         im = x.imshow(m, cmap="RdBu_r", vmin=-10, vmax=10, aspect="auto")
         for (i, jj), v in np.ndenumerate(m):
             x.text(jj, i, f"{v:.0f}", ha="center", va="center", fontsize=7)
         x.set_xticks(range(len(ctr)), [f"{int(e[i])}–{int(e[i + 1])}" for i in range(len(ctr))], rotation=45, fontsize=7)
-        x.set_yticks(range(len(KEYS)), KEYS, fontsize=8)
+        x.set_yticks(range(len(KEYS)), KEYS if j == 0 else [], fontsize=8)
         x.set_title(f"{lab}: Σ pull/√P", fontsize=9)
     fig.colorbar(im, ax=axs[0].tolist(), shrink=0.8)
     fig.savefig(out / "ptbins_pulls.png", dpi=130, bbox_inches="tight")
