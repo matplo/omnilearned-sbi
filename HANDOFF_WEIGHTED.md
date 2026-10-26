@@ -46,8 +46,13 @@ Read first: `AGENTS.md`, `PLAN_NLE_PERLMUTTER.md` (rules, especially rule 8 on t
 ## Phases
 
 **Phase 0: decision data, no new code.**
-- The main session already runs the `toy.ptbins` baseline for set 400k, set r2 and PET r2 (`runs/m3/ptbins/`); ask it for the results, don't redo them.
-- Here: run `toy.ptbins` for **set m3a**, trained on v2_m3a, i.e. 2× the jets at the same spectrum (`runs/m2r3/set_d256_L6_200k_m3a/checkpoint_mult.pt` or the multC64 one; check). If m3a is better at high pT, high pT is data-limited and the weighted arm is the right fix.
+- **Baseline already done by the main session** (`FINDINGS_FIDELITY.md` on `dev/nle-fidelity` 22646c6, sections "Surrogate fidelity vs jet pT" and "High-statistics shifts, all 10 models"; figures in `runs/m3/ptbins/figs/`):
+  - **Low pT is the largest and most significant defect.** Width and outer_fraction are short at 60–80 GeV (pulls −4 to −8), from the 60 GeV cut leakage.
+  - **High pT (≥ 120 GeV):** the per-jet effect sizes are 2–3× larger but only 2–4 σ significant. n_constituents is too high (+0.03 to +0.06 σ_direct), and soft8_fraction, ptd and lead_fraction are too low. The spectrum above 170 GeV is short: set −3 to −6 %, PET −29 %.
+  - **The integrated shift improves with training length** (400k vs 200k), **not with 2× jets per θ** (m3a) or a larger model (d384).
+  - The test for this study is therefore the ≥ 120 GeV `toy.ptbins` bins, not the integrated gate or shift.
+- Don't redo the baseline. `runs/m3/ptbins/run_ptbins_one.sh NAME CKPT` runs one model on one GPU and writes into the main tree, so write your own runs under `runs/w*/` instead.
+- Here: run `toy.ptbins` for **set m3a** (2× jets per θ at the same spectrum, `runs/m2r3/set_d256_L6_200k_m3a/checkpoint_mult.pt`) into `runs/w0/ptbins/set_m3a`. If m3a is better in the ≥ 120 GeV bins, high pT is data-limited and the weighted arm is the right fix. Its integrated shift is no better than the 200k set models.
 - Choose the bias exponent k from the effective sample size per jet-pT bin and θ, ESS = (Σw)²/Σw², from a quick CPU toy run. Aim for a roughly flat ESS per generated jet over 60–200 GeV, with weights capped. Expect k ≈ 2–4.
 
 **Phase 1: weighted toy generation.**
