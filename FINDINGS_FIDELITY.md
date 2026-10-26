@@ -21,6 +21,7 @@ Reference (round 2, `set_d256_L6_200k_multC64`): 1 FAIL, 23 with p < 0.01, const
 | 2026-10-25 | S2 | 60283789 (`nle-s2-data`) | 1 CPU node, 45 min | done (9 min; 12.3 M and 8.2 M jets) | `data/v2_m3a`, `data/v2_m3b` |
 | 2026-10-25 | S2 × S3 | ~~60283791~~ cancelled (same script bug) → 60284244 (after 60283789) | 1 node × 4 A100, 8 h | done (3 h 37 m; 60284243: 3 h 36 m) | `runs/m2r3/set_d256_L6_{200k,400k}_{m3a,m3b}` |
 | 2026-10-25 | gates | ~~60283792–60283807~~ cancelled → 60284245–60284252 (after 60284243), 60284253–60284261 (after 60284244), snapshot 5d3e948 | 1 node each, 3 h | s1, s2, 400k done; d384, 200k_m3a running (≈ 90/128 on 2026-10-26 10:50); 400k_m3a, m3b pending | each new model with the round-2 method (`runs/m3/m2r3_<run>`) and with redraw (`..._redraw`) |
+| 2026-10-26 | S3 seed check | 60322904 (`nle-train-400k-s1`, shared, 1 A100, 5 h) → gates 60322905 / 60322906 (regular, 1 node × 4 A100, 3 h each, afterok), snapshot 5d3e948 | ≈ 3.6 GPU-h + 6 node-h | pending | `runs/m2r3/set_d256_L6_400k_s1` (spec `runs/m2r3/spec_400k_s1.txt`: the seed-0 400k line with `--seed 1`, multC64 attached) → `runs/m3/m2r3_set_d256_L6_400k_s1{,_redraw}`. Is the 400k shift of +0.10 ± 0.09σ reproducible? |
 
 ## S0: diagnostics on existing results (2026-10-25, login node, analysis only)
 
