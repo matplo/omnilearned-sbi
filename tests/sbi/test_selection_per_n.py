@@ -238,6 +238,39 @@ def test_residual_map_scaling_and_seed_spread(tmp_path):
                - 0.5) < 0.05
 
 
+def test_shift_breakdown_contributions_and_noise_floor():
+    from omnilearned.sbi.fidelity import equivalent_shift
+    from omnilearned.sbi.toy import residuals
+
+    rng = np.random.default_rng(1)
+    K, P, nd, ns = 7, 3, 20000, 21000
+    G = rng.standard_normal((K, P))
+    L = rng.standard_normal((K, K))
+    C = L @ L.T + K * np.eye(K)
+    F = G.T @ np.linalg.inv(C) @ G
+    keys = ["jet_pt", "width", "soft8_fraction", "outer_fraction", "ptd", "lead_fraction", "n_constituents"]
+    cov = C * (1 / nd + 1 / ns)
+    noise = rng.multivariate_normal(np.zeros(K), cov, size=4000)
+    bias = np.zeros(K)
+    bias[1] = 0.02  # a width residual only
+    pts = [{"label": "tube", "delta_mean": bias + e, "n_direct": nd, "surrogate": {"selected": ns}}
+           for e in noise]
+    doc = {"observables": keys, "G": G, "C_dev": C, "fisher_per_jet": F, "points": pts}
+    b = residuals.shift_breakdown(doc)
+    sm = np.sqrt(np.diag(np.linalg.inv(F)) / 1000)
+    dth, _ = equivalent_shift(G, C, pts[0]["delta_mean"], cov)
+    np.testing.assert_allclose(b["dev"]["shift"], dth / sm, rtol=1e-9)  # contributions add up
+    np.testing.assert_allclose(b["dev"]["c2_share"].sum(), 1.0, rtol=1e-9)
+    assert abs(b["points"][0]["c2_noise"] - 3000 * (1 / nd + 1 / ns)) < 1e-9  # 3 parameters
+    # the noise floor is subtracted: the excess recovers the bias' constrained shift²
+    dtb, _ = equivalent_shift(G, C, bias, cov)
+    true_c2 = 1000 * dtb @ F @ dtb
+    assert abs(b["mean"]["c2_excess"] - true_c2) < 4 * np.sqrt(2 * 3) * 3000 * (1 / nd + 1 / ns) / np.sqrt(len(pts)) + 0.02 * true_c2
+    np.testing.assert_allclose(b["mean"]["shift"], dtb / sm, atol=4 * b["mean"]["se"].max())
+    # the N term carries no bias here: removing it leaves the mean shift
+    np.testing.assert_allclose(b["mean"]["shift_without"], b["mean"]["shift"], atol=4 * b["mean"]["se"].max())
+
+
 def test_mean_shift_decomposes_into_multiplicity_mix_and_fixed_n():
     from omnilearned.sbi.toy.boundary import decompose, merged_bins
 

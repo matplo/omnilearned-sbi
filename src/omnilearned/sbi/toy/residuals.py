@@ -11,17 +11,22 @@ the direct jets' standard error at 1000 jets, the unit of the gate's relevance):
   squared bias B² = mean(Δ² − se²) of two gates of generators trained on n_a and n_b jets per
   point, the exponent α of B ∝ n^−α, and the prediction at other n.
 * ``seeds``: the training-to-training spread from gates of generators that differ only in
-  the seed. The direct fidelity jets are shared, so their noise cancels in Δ_i − Δ_j, and
-  the variance of the difference is 2 τ² + 2 se_s² (τ: the model-to-model scatter of the
-  bias, se_s: the surrogate sample's part of the standard error, ≈ se/√2).
+  the seed. The direct fidelity jets are shared, so their noise cancels in Δ_i − Δ_j; the
+  surrogate seeds are shared too, so most of the surrogate noise cancels as well (bounds on
+  τ, the model-to-model scatter of the bias, and the spread of the global offset).
 * ``row``: the scalar gate statistics of one run (FAILs, p < 0.01, mean largest relevance,
   constrained and marginal shift at the development point).
+* ``shift``: the equivalent parameter shift of ``shift.json`` split by observable
+  (δθ = A Δμ is linear in the mean residuals), at the development point and averaged over
+  all its points (development + tube, independent direct samples), with the sampling-noise
+  floor of the constrained shift subtracted, and with the N term removed.
 
     python -m omnilearned.sbi.toy.residuals map --gate RUN/gate --out map.json
     python -m omnilearned.sbi.toy.residuals scaling --gate-a R1/gate --n-a 2000 \\
         --gate-b R2/gate --n-b 6000 --out scaling.json
     python -m omnilearned.sbi.toy.residuals seeds --gates S0/gate S1/gate --out seeds.json
     python -m omnilearned.sbi.toy.residuals row --gate RUN/gate --shift RUN/shift.json
+    python -m omnilearned.sbi.toy.residuals shift --shift RUN/shift.json
 """
 
 import argparse
@@ -157,6 +162,63 @@ def gate_row(gate_dir, shift_path=None, n_settings=128, alpha=ALPHA):
     return row
 
 
+def shift_breakdown(shift_doc, n=1000, drop="n_constituents"):
+    """Per-observable split of the equivalent shift of ``toy.gate shift``.
+
+    δθ = A Δμ with A = (GᵀC⁻¹G)⁻¹GᵀC⁻¹, so column k of A times Δμ_k is observable k's
+    part. The constrained shift² c² = n Δμᵀ W Δμ (W = AᵀFA) splits into signed shares
+    Δμ_k (W Δμ)_k. Its sampling-noise expectation is n tr(W cov Δμ), cov Δμ = C (1/n_direct +
+    1/n_surrogate). ``mean`` averages the points, whose direct samples are independent; the
+    ``*_without`` entries set Δμ of ``drop`` to 0. Shifts in marginal σ at n jets.
+    """
+    keys = list(shift_doc["observables"])
+    G, C, F = (np.asarray(shift_doc[k], float) for k in ("G", "C_dev", "fisher_per_jet"))
+    Ci = np.linalg.pinv(C)
+    A = np.linalg.pinv(G.T @ Ci @ G) @ G.T @ Ci
+    sm = np.sqrt(np.diag(np.linalg.pinv(F)) / n)
+    W = n * A.T @ F @ A
+    keep = np.array([k != drop for k in keys], float)
+    pts = []
+    for p in shift_doc["points"]:
+        d = np.asarray(p["delta_mean"], float)
+        cov = C * (1 / p["n_direct"] + 1 / p["surrogate"]["selected"])
+        dk, covk = d * keep, cov * np.outer(keep, keep)
+        pts.append({"label": p["label"], "contrib": A * d / sm[:, None], "c2_share": d * (W @ d),
+                    "c2": float(d @ W @ d), "c2_noise": float(np.trace(W @ cov)),
+                    "c2_without": float(dk @ W @ dk), "c2_noise_without": float(np.trace(W @ covk)),
+                    "se": np.sqrt(np.diag(A @ cov @ A.T)) / sm})
+    shifts = np.array([q["contrib"].sum(1) for q in pts])
+    without = np.array([(q["contrib"] * keep).sum(1) for q in pts])
+    excess = np.mean([q["c2"] - q["c2_noise"] for q in pts])
+    excess_without = np.mean([q["c2_without"] - q["c2_noise_without"] for q in pts])
+    return {"keys": keys, "drop": drop, "sigma_marginal": sm, "points": pts,
+            "dev": {"shift": shifts[0], "contrib": pts[0]["contrib"], "c2": pts[0]["c2"],
+                    "c2_noise": pts[0]["c2_noise"], "c2_share": pts[0]["c2_share"] / pts[0]["c2"]},
+            "mean": {"n_points": len(pts), "shift": shifts.mean(0),
+                     "se": np.sqrt(np.mean([q["se"] ** 2 for q in pts], 0) / len(pts)),
+                     "shift_without": without.mean(0), "c2_excess": float(excess),
+                     "c2_excess_without": float(excess_without),
+                     "constrained_bias": float(math.sqrt(max(excess, 0))),
+                     "constrained_bias_without": float(math.sqrt(max(excess_without, 0)))}}
+
+
+def _shift(a):
+    out = {}
+    for path in a.shift:
+        with open(path) as f:
+            b = shift_breakdown(json.load(f), drop=a.drop)
+        out[path] = b
+        d, m = b["dev"], b["mean"]
+        print(f"{path}: development point shift {np.round(d['shift'], 2).tolist()} marginal σ, "
+              f"constrained {math.sqrt(d['c2']):.2f} (noise floor {math.sqrt(d['c2_noise']):.2f}); "
+              f"share of c²: " + " ".join(f"{k}={v:+.2f}" for k, v in zip(b["keys"], d["c2_share"])))
+        print(f"  mean of {m['n_points']} points: {np.round(m['shift'], 2).tolist()} "
+              f"± {np.round(m['se'], 2).tolist()}, without {b['drop']} {np.round(m['shift_without'], 2).tolist()}; "
+              f"noise-corrected constrained bias {m['constrained_bias']:.2f} "
+              f"(without {b['drop']} {m['constrained_bias_without']:.2f})")
+    _write(a.out, out)
+
+
 def _map(a):
     g = load_gate(a.gate)
     box = DEFAULT_BOX
@@ -279,8 +341,12 @@ def main(argv=None):
     r.add_argument("--gate", required=True)
     r.add_argument("--shift", default=None)
     r.add_argument("--n-settings", type=int, default=128)
+    h = sub.add_parser("shift")
+    h.add_argument("--shift", nargs="+", required=True)
+    h.add_argument("--drop", default="n_constituents", help="observable whose term is removed")
+    h.add_argument("--out", default=None)
     a = ap.parse_args(argv)
-    {"map": _map, "scaling": _scaling, "seeds": _seeds, "row": _row}[a.cmd](a)
+    {"map": _map, "scaling": _scaling, "seeds": _seeds, "row": _row, "shift": _shift}[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -223,3 +223,53 @@ width and outer fraction by +0.05 to +0.09, jet pT by −0.06 to −0.09.)
 1. The width/outer-fraction residual is a fixed-N boundary error of the flow (H6). Neither the selection normalization (S1) nor more steps (S3: 400k gives −0.47 against −0.34 to −0.62 for the 200k seeds, within the seed spread) removes it.
 2. Any S2/S3/S4 comparison must be made against the seed spread (offset std 0.15, constrained-shift std 0.04), not against the single round-2 model. The m3a / m3b / d384 gates still running are single trainings and will be read that way.
 3. S5b (a representation with the R = 0.4 boundary in the transform, e.g. constituents relative to the jet axis with a bounded ΔR) is the lever for the gate residual. It needs discussion before any change. It does not obviously address the parameter shift, which barely moves with the residual: it should be checked whether that shift comes from the jet-pT/N terms or from the linear-Fisher read-out itself.
+
+## The parameter shift: what it measures (2026-10-26, `toy.residuals shift`)
+
+Question: does the development-point shift (constrained ≈ 1.1, marginal ≈ +0.5–0.7σ in b
+in every model) come from the jet observables or from the shift calculation? New subcommand
+`toy.residuals shift` (tested). δθ = A Δμ is linear in the 7 mean residuals, so it splits
+exactly by observable. It also averages all 11 points of `shift.json` (the development
+point and 10 tube points, each with its own direct sample) and subtracts the sampling-noise
+floor n tr(W cov Δμ) from the constrained shift². Output
+`runs/m3/fidelity_s0/shift_breakdown.json`.
+
+**Mostly the calculation, at the development point:**
+1. **Noise floor.** With 20 000 direct and ≈ 21 000 surrogate jets the constrained shift of pure noise is √(3000 (1/20000 + 1/21000)) = **0.54**, and the se of each marginal shift is **0.31σ** at a single point. The 0.2σ requirement cannot be resolved at one point.
+2. **One common N fluctuation.** N carries **61–83 % of the constrained shift² at the development point in every model**, +0.42 to +0.62σ of the b shift. There Δμ_N = −1.7 to −2.5 se.
+   - The selected N comes from the shared p(N|θ) model with the shared seeds and is compared with the shared direct sample, so this term is the same in every model: with redraw, Δμ_N/se is −1.70 at the development point and identical point by point along the tube for set r2 and 400k.
+   - Over the 128 gate points the redraw N offset is −0.01, so p(N|θ) is unbiased on average, and the development-point value is a ≈ 2 se fluctuation.
+   - **This is why the shift was "stable across seeds".** It is common-mode noise, not a flow property.
+3. **Width cancels part of it.** The width term is −0.10 to −0.43σ in b, so seeds with a smaller width residual show a *larger* development-point shift.
+
+**The estimate that measures the flow** (mean of 11 points, b / T_ref / τ_init in marginal σ
+at N = 1000, se 0.09; noise-corrected constrained bias, all terms / without N):
+
+| run | mean shift | without N | constrained bias (all / without N) |
+|---|---|---|---|
+| set r2 | +0.25 +0.24 −0.19 | +0.07 +0.08 +0.04 | 0.51 / 0.29 |
+| set r2, redraw | +0.20 +0.20 −0.12 | +0.20 +0.20 −0.13 | 0.43 / 0.25 |
+| PET r2 | +0.37 +0.37 −0.23 | +0.20 +0.20 −0.00 | 0.48 / 0.32 |
+| PET r2, redraw | +0.34 +0.34 −0.20 | same | 0.44 / 0.31 |
+| set seed 1 | +0.32 +0.31 −0.27 | +0.17 +0.18 −0.08 | 0.50 / 0.30 |
+| set seed 1, redraw | +0.27 +0.27 −0.20 | same | 0.47 / 0.31 |
+| set seed 2 | +0.33 +0.33 −0.25 | +0.22 +0.23 −0.12 | 0.47 / 0.25 |
+| set seed 2, redraw | +0.29 +0.30 −0.21 | same | 0.45 / 0.24 |
+| set 400k | +0.13 +0.13 −0.06 | +0.05 +0.05 +0.05 | 0.28 / 0.00 |
+| set 400k, redraw | +0.10 +0.10 −0.03 | same | 0.25 / 0.00 |
+| set m3a (12k/pt) | +0.34 +0.33 −0.24 | +0.23 +0.23 −0.10 | 0.47 / 0.30 |
+| set m3a, redraw | +0.30 +0.30 −0.19 | same | 0.45 / 0.29 |
+| set d384 L8 | +0.29 +0.29 −0.21 | +0.19 +0.20 −0.08 | 0.41 / 0.18 |
+| set d384 L8, redraw | +0.26 +0.27 −0.18 | same | 0.40 / 0.18 |
+
+(With redraw the N term averages to ≈ 0 over the 11 points, so "without N" equals the total.
+The m3a and d384 shift files are complete; their gates were still running.)
+
+- **The real bias is about half of the reported one:** b +0.10 to +0.37σ (se 0.09) against +0.53 to +0.71σ at the development point. The noise-corrected constrained bias is 0.25–0.51 against 0.88–1.17.
+- **Against the 0.2σ requirement:** 400k is inside it (+0.10 ± 0.09 with redraw), set r2 with redraw is at the limit, and the others are 1–1.5 se above it (0.26–0.34). Each is a single training, and the redraw rows are the relevant ones for a per-N likelihood.
+- **The development-point row (constrained, marginal) should no longer be used to compare models.** The gate-row reference in the header and the "constrained shift" columns above are dominated by the 0.54 noise floor and the common N fluctuation. From now on: the 11-point mean and the noise-corrected constrained bias, from `toy.residuals shift`.
+- **Remaining limits of the calculation:**
+  - The se of 0.09 is half the requirement, and the points lie on one line (τ_init = 0.95, the tube).
+  - The σ unit is the 7-observable Fisher marginal. The full likelihood is narrower (FINDINGS_NLE: about 10× more information in τ_init), so in posterior units the same shift is larger.
+  - The mean-residual projection is a proxy for the NLE fit's bias, not the bias itself. Only a closure measures that.
+  - A tighter number needs more direct jets at more points: the se scales as 1/√(points × jets).
