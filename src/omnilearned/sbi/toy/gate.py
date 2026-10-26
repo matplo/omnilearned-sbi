@@ -223,6 +223,31 @@ def response_gradients(points, means, dev, labels, window=5):
     return G
 
 
+DIRECT_DESIGN = "design_shift_direct.json"
+
+
+def direct_targets(direct_dir, keys):
+    """(point_id, theta, label, obs [n, K]) per point of a separate direct sample for ``shift``.
+
+    ``direct_dir/design_shift_direct.json`` lists ``points``, ``labels`` and ``point_ids``. The
+    ids are new indices of the ``development_scan`` stream, so the jets are independent of the
+    scan's (which keeps providing the response gradients and the covariance).
+    """
+    with open(Path(direct_dir) / DIRECT_DESIGN) as f:
+        des = json.load(f)
+    d = read_shards(shard_paths(direct_dir, des["split"]))
+    out = []
+    for pid, th, lab in zip(des["point_ids"], des["points"], des["labels"]):
+        m = d["point_id"] == pid
+        if not m.any():
+            raise ValueError(f"no direct jets for point {pid} in {direct_dir}")
+        x, mk = d["x"][m], d["mask"][m]
+        w = max(1, int(mk.sum(1).max()))
+        o = fidelity.all_obs(x[:, :w], mk[:, :w])
+        out.append((int(pid), np.asarray(th, float), lab, np.column_stack([o[k] for k in keys])))
+    return out
+
+
 def shift(a):
     """Equivalent parameter shift of the surrogate at the development setting and the tube."""
     from omnilearned.sbi.toy.simulator import PARAMETERS
@@ -247,18 +272,21 @@ def shift(a):
     G = response_gradients(pts, np.array(means), dev, labels)
     at_dev = [i for i, p in enumerate(pts) if np.allclose(p, dev)]
     targets = at_dev[:1] + [i for i, s in enumerate(labels) if s == "tube"]
-    if a.max_points:
-        targets = targets[:a.max_points]
     C = np.cov(obs_by_point[targets[0]][2], rowvar=False)
     F = G.T @ np.linalg.pinv(C) @ G  # per-jet Fisher information from these observables
     out = {"parameters": list(PARAMETERS), "observables": keys, "G": G, "C_dev": C,
-           "fisher_per_jet": F, "points": []}
+           "fisher_per_jet": F, "points": [], "direct_dir": a.direct_dir}
+    if a.direct_dir:  # G and C from the scan, the compared direct jets from a separate sample
+        jobs = direct_targets(a.direct_dir, keys)
+    else:
+        jobs = [(pid, pts[pid], labels[pid], obs_by_point[pid][2]) for pid in targets]
+    if a.max_points:
+        jobs = jobs[:a.max_points]
     for n in ANALYSIS_N:
         out[f"sigma_conditional_N{n}"] = 1 / np.sqrt(np.diag(F) * n)
         out[f"sigma_marginal_N{n}"] = np.sqrt(np.diag(np.linalg.pinv(F)) / n)
-    for pid in targets:
-        xd, md, od = obs_by_point[pid]
-        xs, ms, rep = sample_and_select(sur, pts[pid], a.n_generate, sel, seed=a.seed + pid,
+    for pid, theta, label, od in jobs:
+        xs, ms, rep = sample_and_select(sur, theta, a.n_generate, sel, seed=a.seed + pid,
                                         nsteps=a.nsteps, batch=a.batch, redraw=a.redraw)
         o = fidelity.all_obs(xs, ms)
         osur = np.column_stack([o[k] for k in keys])
@@ -267,14 +295,14 @@ def shift(a):
         dth, cov_th = fidelity.equivalent_shift(G, C, dmu, cov)
         se = np.sqrt(np.diag(cov_th))
         sig = out["sigma_conditional_N1000"]
-        row = {"point_id": pid, "label": labels[pid], "theta": pts[pid], "delta_mean": dmu,
+        row = {"point_id": pid, "label": label, "theta": theta, "delta_mean": dmu,
                "delta_theta": dth, "delta_theta_se": se, "in_sigma_conditional_N1000": dth / sig,
                "se_in_sigma_conditional_N1000": se / sig,
                "in_sigma_marginal_N1000": dth / out["sigma_marginal_N1000"],
                "pass_0.2_sigma": bool(np.all(np.maximum(np.abs(dth) - 2 * se, 0) <= 0.2 * sig)),
                "surrogate": rep, "n_direct": int(len(od))}
         out["points"].append(row)
-        print(f"point {pid} {labels[pid]} theta={np.round(pts[pid], 3).tolist()} "
+        print(f"point {pid} {label} theta={np.round(theta, 3).tolist()} "
               f"dtheta={np.round(dth, 4).tolist()} +- {np.round(se, 4).tolist()} "
               f"= {np.round(dth / sig, 2).tolist()} sigma_cond "
               f"{np.round(dth / out['sigma_marginal_N1000'], 2).tolist()} sigma_marg (N=1000) "
@@ -326,6 +354,8 @@ def main(argv=None):
     h.add_argument("--batch", type=int, default=1024)
     h.add_argument("--max-points", type=int, default=None)
     h.add_argument("--redraw", action="store_true", help="as for run")
+    h.add_argument("--direct-dir", default=None,
+                   help=f"compare with the direct jets of this directory ({DIRECT_DESIGN}) instead of the scan's")
     h.add_argument("--device", default="auto")
     h.add_argument("--config", default=str(V2_CONFIG))
     s = sub.add_parser("summarize")

@@ -296,3 +296,31 @@ def test_dr_max_from_pt_weighted_axis():
     x[1, :2, 1] = [0.2, -0.2]      # phi; third slot padded
     mask = np.array([[1, 1, 1], [1, 1, 0]], bool)
     np.testing.assert_allclose(dr_max(x, mask), [0.2, 0.2])
+
+
+def test_shift_direct_targets_select_by_point_id(tmp_path, monkeypatch):
+    from omnilearned.sbi import fidelity
+    from omnilearned.sbi.toy import gate
+
+    rng = np.random.default_rng(2)
+    ids, n, P = [1000, 1001, 1002], 50, 8
+    x = rng.random((len(ids) * n, P, 3)) + 0.1
+    mask = np.ones((len(ids) * n, P), bool)
+    mask[:, 6:] = False
+    pid = np.repeat(ids, n)[::-1].copy()  # stored out of design order
+    monkeypatch.setattr(gate, "shard_paths", lambda d, split: [f"{d}/{split}_00000.h5"])
+    monkeypatch.setattr(gate, "read_shards", lambda paths: {"x": x, "mask": mask, "point_id": pid})
+    des = {"split": "development_scan", "points": [[7.5, 0.3, 0.95], [1.0, 0.253, 0.95], [2.0, 0.255, 0.95]],
+           "labels": ["line_1", "tube", "tube"], "point_ids": ids}
+    (tmp_path / gate.DIRECT_DESIGN).write_text(json.dumps(des))
+    keys = list(fidelity.JET_VARIABLE)
+    out = gate.direct_targets(tmp_path, keys)
+    assert [o[0] for o in out] == ids and [o[2] for o in out] == des["labels"]
+    m = pid == 1001
+    ref = fidelity.all_obs(x[m][:, :6], mask[m][:, :6])
+    np.testing.assert_allclose(out[1][3], np.column_stack([ref[k] for k in keys]))
+    np.testing.assert_allclose(out[1][1], des["points"][1])
+    des["point_ids"] = [1000, 1001, 1003]
+    (tmp_path / gate.DIRECT_DESIGN).write_text(json.dumps(des))
+    with pytest.raises(ValueError, match="no direct jets for point 1003"):
+        gate.direct_targets(tmp_path, keys)
