@@ -23,7 +23,8 @@ Reference (round 2, `set_d256_L6_200k_multC64`): 1 FAIL, 23 with p < 0.01, const
 | 2026-10-25 | gates | ~~60283792–60283807~~ cancelled → 60284245–60284252 (after 60284243), 60284253–60284261 (after 60284244), snapshot 5d3e948 | 1 node each, 3 h | s1, s2, 400k done; d384, 200k_m3a running (≈ 90/128 on 2026-10-26 10:50); 400k_m3a, m3b pending | each new model with the round-2 method (`runs/m3/m2r3_<run>`) and with redraw (`..._redraw`) |
 | 2026-10-26 | S3 seed check | ~~60322904–06~~ (shared-queue seed 1 + gates) cancelled before start → interactive node A 60323636 (nid003857, 4 h) | 3 × A100 ≈ 3.6 h | running since 11:16 | 400k seeds 1, 2, 3 (`runs/m2r3/spec_400k_s123.txt`, the seed-0 400k line with `--seed 1/2/3`, multC64 attached) → `runs/m2r3/set_d256_L6_400k_s{1,2,3}`. Gates to be submitted when they finish |
 | 2026-10-26 | gate completion | interactive node B 60323642 (nid001021, 4 h) | 4 A100 | running | resume the gates that hit their 3 h limit: d384 (108/128), d384 redraw (101/128), PET r2 redraw (117/128) |
-| 2026-10-26 | shift, high statistics | node B CPUs (data); node A GPU 3, shared-queue workers 60324273/75/76 (1 A100, 4 h), later node B GPUs | ≈ 1.2 GPU-h per model | running / pending | `data/v2_m3_shiftdirect`: 200 000 direct jets at each of the 11 shift points, new indices 1000–1010 of the development_scan stream (independent of the scan), snapshot 5d3e948 (generator unchanged, config sha 2c047d92). `gate shift --direct-dir` (046a3cb), 50 000 surrogate clouds per point, redraw, via `shell/nle/shift_queue.sh` and `runs/m3/shift_hi_queue.txt` → `runs/m3/shift_hi/<name>/`. Expected 11-point se ≈ 0.05σ (was 0.09) |
+| 2026-10-26 | shift, high statistics | node B CPUs (data); node A GPU 3, shared-queue workers 60324273/75/76 (1 A100, 4 h) | ≈ 1 GPU-h per model (≈ 5.5 min per point) | 400k s0, set r2, set s1 done (12:22–12:48); s2, d384, m3a, PET r2 running | `data/v2_m3_shiftdirect`: 200 000 direct jets at each of the 11 shift points, new indices 1000–1010 of the development_scan stream (independent of the scan), snapshot 5d3e948 (generator unchanged, config sha 2c047d92). `gate shift --direct-dir` (046a3cb), 50 000 surrogate clouds per point, redraw, via `shell/nle/shift_queue.sh` and `runs/m3/shift_hi_queue.txt` → `runs/m3/shift_hi/<name>/`. Expected 11-point se ≈ 0.05σ (was 0.09) |
+| 2026-10-26 | S3 seed check, measurement | gates 60331580/81 (s1), 60331583/84 (s2), 60331586/87 (s3), regular, 1 node × 4 A100, 3 h; shift workers 60331582/85/88, shared, 1 A100, 2 h; all `--begin 14:55` | 6 node × ≤ 3 h, 3 × ≤ 2 GPU-h | pending | gates of 400k seeds 1–3 with and without redraw (`fid_gate.sbatch`, snapshot 5d3e948 → `runs/m3/m2r3_set_d256_L6_400k_s{1,2,3}{,_redraw}`) and their high-statistics shifts (`runs/m3/shift_hi_queue_400k.txt`, snapshot 046a3cb). Each job runs through `runs/m3/after_ckpt.sh`, which waits up to 40 min for `checkpoint_mult.pt` (node A ends 15:16, training ends ≈ 14:50) |
 
 ## S0: diagnostics on existing results (2026-10-25, login node, analysis only)
 
@@ -276,3 +277,33 @@ The m3a and d384 shift files are complete; their gates were still running.)
   - The σ unit is the 7-observable Fisher marginal. The full likelihood is narrower (FINDINGS_NLE: about 10× more information in τ_init), so in posterior units the same shift is larger.
   - The mean-residual projection is a proxy for the NLE fit's bias, not the bias itself. Only a closure measures that.
   - A tighter number needs more direct jets at more points: the se scales as 1/√(points × jets).
+
+## High-statistics shifts, partial: 3 of 7 models (2026-10-26)
+
+`gate shift --direct-dir data/v2_m3_shiftdirect` (snapshot 046a3cb, clean, cuda A100).
+- **Sample:** 200 000 direct jets per point at the 11 shift points (new stream indices, independent of the scan and of the old shift sample) and 50 000 surrogate clouds per point.
+- **Method:** redraw on. G and C come from the scan as before.
+- **Noise floor:** the constrained noise floor at a single point drops from 0.54 to **0.27**, and the se of the 11-point mean drops from 0.09 to **0.05σ**.
+- **Runs:** `runs/m3/shift_hi/<name>/shift.json`, breakdown `runs/m3/shift_hi/breakdown_partial.json`.
+
+| run (redraw) | job / host | ckpt sha256 | development point (b, T_ref, τ_init, σ_marg) | 11-point mean ± 0.05 | without N | noise-corrected constrained bias (all / without N) | earlier 11-point mean (old direct sample) |
+|---|---|---|---|---|---|---|---|
+| set 400k s0 | 60323636 / nid003857 | a297fd9fad2bff31 | −0.21 −0.23 +0.27 | **−0.03 −0.04 +0.10** | −0.05 −0.05 +0.12 | 0.38 / 0.33 | +0.10 +0.10 −0.03 |
+| set r2 | 60324273 / nid002265 | 1d587f3962eba32e | −0.22 −0.26 +0.26 | **+0.06 +0.06 +0.00** | +0.04 +0.04 +0.03 | 0.54 / 0.49 | +0.20 +0.20 −0.12 |
+| set seed 1 | 60324275 / nid003841 | 7eab17b801c9add3 | −0.12 −0.14 +0.16 | **+0.13 +0.13 −0.07** | +0.11 +0.11 −0.05 | 0.52 / 0.47 | +0.27 +0.27 −0.20 |
+
+Share of the development-point c²:
+- width 0.45–0.63;
+- N 0.24–0.38 (smaller than before);
+- lead_fraction 0.10–0.21;
+- the remaining observables ≤ 0.11 each.
+
+- **The b shift with the larger direct sample is smaller in every model: about 0.15σ lower** (−0.13, −0.14, −0.14). This is the same in all three models, so it comes from the old direct sample (shared by all models), not from the flows.
+  - The old 11-point means were biased upward by that sample by about 1.5 se (old se 0.09).
+  - The old development-point shift (+0.5σ) has changed sign: it is now −0.1 to −0.2σ.
+- **All three b means are inside 0.2σ:** 400k −0.03, set r2 +0.06, seed 1 +0.13. The ordering between models holds (400k smallest).
+  - The spread between seeds of the same 200k configuration (r2 vs seed 1: 0.07) is comparable to the 400k vs 200k difference (0.09–0.16), so a ranking needs the other seeds (s2 and 400k s1–s3 running).
+- **The constrained bias does not go away:** 0.38–0.54 after subtracting the noise floor, i.e. the residuals are significant but largely orthogonal to the parameter directions (dominated by width, as in the boundary decomposition).
+  - A posterior-level number still needs a closure; see the limits in the previous section.
+- **Seed s2 (partial, 7 of 11 points) is larger at the tube points:** b +0.36, +0.51, +0.22σ at points 1004–1006 (θ_b = 4, 5, 6). Its mean may land near or above 0.2σ.
+- **Still pending:** s2, d384, m3a and PET r2 (due ≈ 13:50), and 400k seeds 1–3 (after 14:55). This section will be completed when they finish.
