@@ -912,6 +912,39 @@ probes. Reference: rk4-64 with 16 per-step probes. 12 seeds each (`numerics.json
   - Check (development data, `gridcheck/scan.py`, job 60285412, 1 GPU): fine 1D log L scans through the development point at ¼ grid step, including −N log Pr_q(S|θ), giving the conditional width along each axis against the grid step.
   - If the grid is too coarse, the fits' node values are kept: a 2× refinement contains the current nodes. Refinement is then the decision to make.
 
+### N = 1000 closure: the grid is too coarse (2026-10-25 17:00); new allocations stopped, decision pending
+
+Grid-resolution check `runs/m5/dev_N1000_setR2/gridcheck/` (`scan.py`, `scan.json`), job
+60286917 (nid002589, 1 × A100-SXM4-40GB, CUDA, 1146 s for 49 candidates), code 63c25e5 (clean).
+1D log L scans through the development point (7.5, 0.30, 0.95) along each axis, ¼ grid step,
+±2 grid steps, on the 1000 development jets of the numerics check, with the fits' options
+(midpoint-64, 8 per-step probes, probe seed 49193) and −N log Pr_q(S|θ) from the campaign's
+acceptance table. Conditional width from a quadratic fit per axis:
+
+| axis | conditional σ | grid step | step / σ |
+|---|---|---|---|
+| b | 0.110 fm | 0.5 fm | **4.6** |
+| T_ref | 0.00253 GeV | 0.0115 GeV | **4.6** |
+| τ_init | 0.045 fm/c | 0.1 fm/c | **2.2** |
+
+- log L − max along b (¼ steps): −23.9 … −1.0, 0.0, −0.1, −1.4 … −59.9 (asymmetric, the maximum between the development point and +¼ step); along T_ref −64.2 … 0.0, −0.7 … −19.8.
+- **Reading:** at N = 1000 the posterior is a narrow ridge (≈ 0.1 fm, 0.0025 GeV across) that the 23 × 27 × 11 grid samples every ≈ 4.6σ. Node values alias the ridge: credible levels, marginals and coverage from this grid would be grid artefacts, whatever the surrogate does. A failed or passed closure on it would not be evidence.
+- **Earlier closure:** the N = 250 closure (`dev_N250_setC64`, same v1 grid) had steps of about 2.3σ in b and T_ref and 1.1σ in τ_init (σ ∝ N^−1/2, development point only). Its over-coverage of the marginals (toy and control) may in part come from the grid. It stays as recorded; a nested check of it is open.
+- **Actions taken:** the STOP file is set, so drivers a (60281416) and b (60285564) request no new allocations. The regular chain 60285561–63 (3 × 3 links) is held (`scontrol hold`), not cancelled. The 8 fits in progress continue: their coarse supports locate the ridge for any refinement.
+- **Rate:** 23 s per candidate per A100 at N = 1000 (8 candidates per ≈ 181 s); the coarse support scans had 120–185 candidates after ≈ 70 min, not yet closed.
+- **Options (decision for the user, budget):**
+  1. Two-stage nested scan (recommended). Stage 1 is the coarse support scan now running. Stage 2 is a support scan on a grid refined 5 × 5 × 2 (steps 0.1 fm, 0.0023 GeV, 0.05 fm/c ≈ 0.9σ, 0.9σ, 1.1σ), seeded from the stage-1 support and with the same Δlog post 10, so only the ridge is evaluated. The refined grid contains every coarse node. New code: a support scan seeded from a previous result, with tests. Cost: the ridge volume is not known until one stage 2 is run. Estimate 1500–6000 candidates per fit, i.e. 10–40 GPU-h per fit, **50–200 node-h for the 20 fits**. Before the 20 fits: one fit at the refined spacing and at half of it in a sub-box (nested check, lesson 2).
+  2. Uniform refinement of the whole grid: ≈ 450 000 nodes; with the support scan the cost is the same as option 1, without the code but with no stage-1 reuse.
+  3. Gradient-based sampling (HMC through the flow) instead of a grid: no resolution problem, but a new numerical method to validate, and a comparable number of likelihood evaluations.
+- Separately: the τ_init pair of the numerics check (Δlog L −5.3 for a 1σ_F step) had already shown that the Fisher matrix of 7 observables under-estimates the information by about 10×. Grid design must use the likelihood's own curvature.
+
+### CUDA test suite (2026-10-25 15:42–15:52 PDT, job 60282835, nid003104, 1 × A100-SXM4-40GB)
+
+Revision 81a818c (clean), torch 2.14.1+cu130, CUDA 13.0 available. Report
+`runs/tests/2026-10-25T1515-0700_0a0dc75_gpu/` (`pytest.txt`, `junit.xml`, `run_info.txt`).
+**116 passed, 0 failed, 7 skipped** (the 7 MPS tests), exit 0, 9 min 13 s. The 6 CUDA tests
+that the CPU report skipped pass.
+
 ## Open items
 
 ### To do (2026-10-25, user request): surrogate fidelity improvement, `docs/SURROGATE_FIDELITY_PLAN.md`
