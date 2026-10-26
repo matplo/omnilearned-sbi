@@ -25,6 +25,7 @@ Reference (round 2, `set_d256_L6_200k_multC64`): 1 FAIL, 23 with p < 0.01, const
 | 2026-10-26 | gate completion | interactive node B 60323642 (nid001021, 4 h) | 4 A100 | running | resume the gates that hit their 3 h limit: d384 (108/128), d384 redraw (101/128), PET r2 redraw (117/128) |
 | 2026-10-26 | shift, high statistics | node B CPUs (data); node A GPU 3, shared-queue workers 60324273/75/76 (1 A100, 4 h) | ≈ 1 GPU-h per model (≈ 5.5 min per point) | 400k s0, set r2, set s1 done (12:22–12:48); s2, d384, m3a, PET r2 running | `data/v2_m3_shiftdirect`: 200 000 direct jets at each of the 11 shift points, new indices 1000–1010 of the development_scan stream (independent of the scan), snapshot 5d3e948 (generator unchanged, config sha 2c047d92). `gate shift --direct-dir` (046a3cb), 50 000 surrogate clouds per point, redraw, via `shell/nle/shift_queue.sh` and `runs/m3/shift_hi_queue.txt` → `runs/m3/shift_hi/<name>/`. Expected 11-point se ≈ 0.05σ (was 0.09) |
 | 2026-10-26 | S3 seed check, measurement | gates 60331580/81 (s1), 60331583/84 (s2), 60331586/87 (s3), regular, 1 node × 4 A100, 3 h; shift workers 60331582/85/88, shared, 1 A100, 2 h; all `--begin 14:55` | 6 node × ≤ 3 h, 3 × ≤ 2 GPU-h | pending | gates of 400k seeds 1–3 with and without redraw (`fid_gate.sbatch`, snapshot 5d3e948 → `runs/m3/m2r3_set_d256_L6_400k_s{1,2,3}{,_redraw}`) and their high-statistics shifts (`runs/m3/shift_hi_queue_400k.txt`, snapshot 046a3cb). Each job runs through `runs/m3/after_ckpt.sh`, which waits up to 40 min for `checkpoint_mult.pt` (node A ends 15:16, training ends ≈ 14:50) |
+| 2026-10-26 | pT-differential fidelity | interactive node B 60323642, GPUs 1–3 (step 60323642.7; the 3-GPU step .4 was cancelled before computing) | 3 A100 × ≲ 1 h | running | `toy.ptbins run` (snapshot a2e7dba), 16 gate points, redraw, set 400k / set r2 / PET r2 → `runs/m3/ptbins/<model>/` |
 
 ## S0: diagnostics on existing results (2026-10-25, login node, analysis only)
 
@@ -307,3 +308,32 @@ Share of the development-point c²:
   - A posterior-level number still needs a closure; see the limits in the previous section.
 - **Seed s2 (partial, 7 of 11 points) is larger at the tube points:** b +0.36, +0.51, +0.22σ at points 1004–1006 (θ_b = 4, 5, 6). Its mean may land near or above 0.2σ.
 - **Still pending:** s2, d384, m3a and PET r2 (due ≈ 13:50), and 400k seeds 1–3 (after 14:55). This section will be completed when they finish.
+
+## Training statistics vs jet pT (2026-10-26, login node, analysis only)
+
+Each θ point has a fixed number of selected jets, so the per-θ count is set by the dataset.
+- **Method:** counts of the anti-kt jet pT (column `global[:, 3]` of the shards) per θ point in 8 bins over the selection range 60–200 GeV.
+- **Script and outputs:** script `runs/m3/ptbins/pt_stats.py`; figure `runs/m3/ptbins/training_jets_per_theta_vs_pt.png`, made by `pt_stats_plot.py`.
+
+| jet pT [GeV] | share of jets | v2_m2: 1024 θ × 6000 (set r2/s1/s2/400k/d384, PET); median per θ (10–90 %) | v2_m3a: 1024 θ × 12 000 | v2_m1_fidelity (gate direct): 128 θ × 20 000 | median N |
+|---|---|---|---|---|---|
+| 60–70 | 45.8 % | 2746 (2690–2797) | 5494 | 9146 | 32 |
+| 70–80 | 22.5 % | 1351 (1312–1393) | 2697 | 4499 | 33 |
+| 80–90 | 12.1 % | 724 (693–757) | 1450 | 2420 | 34 |
+| 90–100 | 7.0 % | 416 (392–443) | 836 | 1402 | 35 |
+| 100–120 | 7.0 % | 417 (392–443) | 832 | 1390 | 36 |
+| 120–140 | 3.0 % | 181 (164–197) | 361 | 601 | 37 |
+| 140–170 | 1.9 % | 115 (102–129) | 231 | 386 | 39 |
+| 170–200 | 0.8 % | 47 (39–56) | 94 | 160 | 40 |
+
+- **v2_m3b** has the per-point statistics of v2_m2 on 1367 θ points (the 1024 base points plus 343 more).
+- **Steep spectrum:** two thirds of the jets are below 80 GeV. 2.7 % are above 140 GeV, ≈ 160 per θ point in v2_m2 and ≈ 550 in the gate's direct sample.
+- **Almost no θ dependence:** the share above 100 GeV is 12.8 % for b < 2 and 12.5 % for b > 9. Correlation of that share with b −0.3, with T_ref +0.3, with τ_init 0; the largest shape change is ≈ ±4 % in 170–200 GeV.
+- **Consequence for fidelity:**
+  - The flow is not conditioned on jet pT, so its high-pT behaviour rests on ≈ 1 % of the training clouds.
+  - The gate, the shift and the boundary decomposition all average over the spectrum. A defect above ≈ 120 GeV would be diluted by its ≈ 6 % weight and would not show in them.
+  - Per-point tests in the top bins are weak (160 direct jets per point in 170–200 GeV), so a pT-differential test has to pool points.
+- **Next:** `toy.ptbins` (a2e7dba, tested) compares direct and selected surrogate jets in the same 8 bins. It reports the spectrum ratio and, per observable, the effect size Δ/σ_direct, the pull, σ_s/σ_d and the KS statistic, combined over points.
+  - Running on interactive node B GPUs 1–3 since 13:58, redraw, 22 000 clouds at gate points 0, 8, …, 120 (16 points).
+  - Models: set 400k, set r2, PET r2 → `runs/m3/ptbins/<model>/`.
+
