@@ -109,15 +109,29 @@ def predict_b2(b2_b, n_b, alpha, n):
     return float(b2_b * (n / n_b) ** (-2 * alpha))
 
 
-def seed_spread(ys, ses):
-    """Model-to-model scatter τ² of the signed shift (relevance units) from runs that differ
-    only in the seed, using every pair; per observable [K]."""
+def seed_spread(ys, ses, common_random_numbers=True):
+    """Model-to-model scatter τ of the signed shift (relevance units) from runs that differ
+    only in the seed, using every pair; per observable [K].
+
+    The gates share the direct sample, so its noise cancels in a pair difference. They also
+    share the surrogate seeds (seed + point), so for similar models most of the surrogate
+    noise cancels too and the independent-noise subtraction (``tau_independent``, a lower
+    bound) over-corrects, down to τ² < 0. With ``common_random_numbers`` ``tau`` is the
+    unsubtracted pair RMS / √2 (an upper bound). ``offset_std`` is the run-to-run spread of
+    the mean signed shift over the points (the model-to-model part of the global offset).
+    """
     ys, ses = np.asarray(ys, float), np.asarray(ses, float)
     se_s2 = np.mean(ses ** 2, 0) / 2  # surrogate-sample part of the se (equal sample sizes)
     d2 = [np.mean((ys[i] - ys[j]) ** 2, 0) for i in range(len(ys)) for j in range(i + 1, len(ys))]
-    tau2 = np.mean(d2, 0) / 2 - np.mean(se_s2, 0)
-    return {"tau2": tau2, "tau": np.sqrt(np.maximum(tau2, 0)), "pair_msd": np.mean(d2, 0),
-            "surrogate_se2": np.mean(se_s2, 0), "n_runs": len(ys)}
+    msd = np.mean(d2, 0)
+    tau2_ind = msd / 2 - np.mean(se_s2, 0)
+    tau_upper, tau_ind = np.sqrt(msd / 2), np.sqrt(np.maximum(tau2_ind, 0))
+    offset = np.mean(ys, 1)  # [runs, K]
+    return {"tau": tau_upper if common_random_numbers else tau_ind, "tau_upper": tau_upper,
+            "tau_independent": tau_ind, "tau2_independent": tau2_ind, "pair_msd": msd,
+            "surrogate_se2": np.mean(se_s2, 0), "offset": offset,
+            "offset_std": np.std(offset, 0, ddof=1), "common_random_numbers": common_random_numbers,
+            "n_runs": len(ys)}
 
 
 def gate_row(gate_dir, shift_path=None, n_settings=128, alpha=ALPHA):
@@ -222,8 +236,12 @@ def _seeds(a):
         scal["marginal_shift"] = {"values": m, "mean": np.mean(m, 0), "std": np.std(m, 0, ddof=1)}
     doc = {"gates": a.gates, "keys": gs[0]["keys"], "spread": sp, "rows": rows, "scalars": scal}
     _write(a.out, doc)
-    print("model-to-model scatter tau (relevance units, N=1000): "
-          + " ".join(f"{k}={t:.2f}" for k, t in zip(gs[0]["keys"], sp["tau"])))
+    print("model-to-model scatter tau (relevance units, N=1000; independent-noise bound .. CRN bound): "
+          + " ".join(f"{k}={lo:.2f}..{hi:.2f}" for k, lo, hi in zip(gs[0]["keys"], sp["tau_independent"],
+                                                                   sp["tau_upper"])))
+    print("  mean signed shift per run: "
+          + " ".join(f"{k}={np.round(o, 2).tolist()}" for k, o in zip(gs[0]["keys"], sp["offset"].T))
+          + "; std " + " ".join(f"{k}={v:.2f}" for k, v in zip(gs[0]["keys"], sp["offset_std"])))
     for k, v in scal.items():
         print(f"  {k}: {np.round(v['values'], 3).tolist()} std {np.round(v['std'], 3).tolist()}")
 

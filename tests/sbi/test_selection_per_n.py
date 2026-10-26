@@ -219,7 +219,16 @@ def test_residual_map_scaling_and_seed_spread(tmp_path):
     direct = se / np.sqrt(2) * rng.standard_normal((P, K))
     runs = [bias + 0.2 * rng.standard_normal((P, K)) + se / np.sqrt(2) * rng.standard_normal((P, K)) - direct
             for _ in range(3)]
-    sp = residuals.seed_spread(runs, [se] * 3)
+    sp = residuals.seed_spread(runs, [se] * 3, common_random_numbers=False)
+    np.testing.assert_allclose(sp["tau"], 0.2, atol=0.03)
+    # common random numbers (the gates' seeding): the surrogate noise is shared too, the
+    # independent-noise subtraction over-corrects to 0, the CRN bound recovers tau; offsets
+    # 0, 0.3, 0.6 between runs give offset_std 0.3
+    surr = se / np.sqrt(2) * rng.standard_normal((P, K))
+    runs = [bias + c + 0.2 * rng.standard_normal((P, K)) + surr - direct for c in (0.0, 0.3, 0.6)]
+    np.testing.assert_allclose(residuals.seed_spread(runs, [se] * 3)["offset_std"], 0.3, atol=0.03)
+    sp = residuals.seed_spread([r - c for r, c in zip(runs, (0.0, 0.3, 0.6))], [se] * 3)
+    assert np.all(sp["tau_independent"] == 0)  # tau² 0.04 < surrogate se² 0.045
     np.testing.assert_allclose(sp["tau"], 0.2, atol=0.03)
     row = residuals.gate_row(g_b)
     assert row["points"] == P and row["fail"] <= row["significant"]
