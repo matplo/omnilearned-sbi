@@ -15,12 +15,12 @@ Reference (round 2, `set_d256_L6_200k_multC64`): 1 FAIL, 23 with p < 0.01, const
 | date | step | job | resources | status | what |
 |---|---|---|---|---|---|
 | 2026-10-25 | S0.3 / S3 / S4 | 60282682 (`nle-train4`, regular, 1 node × 4 A100, 7 h limit) | **failed after 17 s** (`nvidia-smi -L -i` invalid, every run's subshell exited; the job still COMPLETED, 0.005 node-h) → resubmitted as 60284243 | `runs/m2r3/`: set seed 1, set seed 2 (200k), set 400k, set d384 L8 200k, all on `data/v2_m2` with round-2 settings; the round-2 all-counts p(N\|θ) attached (`checkpoint_mult.pt`) |
-| 2026-10-25 | S1 | 60283786 (`s1-gate-set`), 60283787 (`s1-gate-pet`) | 1 node × 4 A100 each, 3 h | pending | redraw re-gates (shift, convergence, 128 points) of set r2 / PET r2 → `runs/m3/{set,pet}_d256_L6_200k_multC64_redraw/` (snapshot 19ac616) |
-| 2026-10-25 | S1 | 60283788 (`s1-acc-set`) | 1 node × 4 A100, 1.5 h | pending | Pr_q(S\|θ) and per-N table of set r2 → `runs/m3/acceptance/set_d256_L6_200k_multC64/` |
-| 2026-10-25 | S0/S1 | 60284684, 60284685, 60284686 (`fid_boundary`, 9b648aa) | 1 node × 4 A100 each, 1.5 h | pending | `toy.boundary` at 32 gate points of set r2, PET r2, set r1 → `runs/m3/boundary/<run>/` |
-| 2026-10-25 | S2 | 60283789 (`nle-s2-data`) | 1 CPU node, 45 min | pending | `data/v2_m3a`, `data/v2_m3b` |
-| 2026-10-25 | S2 × S3 | ~~60283791~~ cancelled (same script bug) → 60284244 (after 60283789) | 1 node × 4 A100, 8 h | pending | `runs/m2r3/set_d256_L6_{200k,400k}_{m3a,m3b}` |
-| 2026-10-25 | gates | ~~60283792–60283807~~ cancelled → 60284245–60284252 (after 60284243), 60284253–60284261 (after 60284244), snapshot 5d3e948 | 1 node each, 3 h | pending | each new model with the round-2 method (`runs/m3/m2r3_<run>`) and with redraw (`..._redraw`) |
+| 2026-10-25 | S1 | 60283786 (`s1-gate-set`), 60283787 (`s1-gate-pet`) | 1 node × 4 A100 each, 3 h | set: done (2 h 27 m); PET: **timeout** at 117/128 points | redraw re-gates (shift, convergence, 128 points) of set r2 / PET r2 → `runs/m3/{set,pet}_d256_L6_200k_multC64_redraw/` (snapshot 19ac616) |
+| 2026-10-25 | S1 | 60283788 (`s1-acc-set`) | 1 node × 4 A100, 1.5 h | done (48 min), acceptance 0.914–0.982 | Pr_q(S\|θ) and per-N table of set r2 → `runs/m3/acceptance/set_d256_L6_200k_multC64/` |
+| 2026-10-25 | S0/S1 | 60284684, 60284685, 60284686 (`fid_boundary`, 9b648aa) | 1 node × 4 A100 each, 1.5 h | done (47–87 min) | `toy.boundary` at 32 gate points of set r2, PET r2, set r1 → `runs/m3/boundary/<run>/` |
+| 2026-10-25 | S2 | 60283789 (`nle-s2-data`) | 1 CPU node, 45 min | done (9 min; 12.3 M and 8.2 M jets) | `data/v2_m3a`, `data/v2_m3b` |
+| 2026-10-25 | S2 × S3 | ~~60283791~~ cancelled (same script bug) → 60284244 (after 60283789) | 1 node × 4 A100, 8 h | done (3 h 37 m; 60284243: 3 h 36 m) | `runs/m2r3/set_d256_L6_{200k,400k}_{m3a,m3b}` |
+| 2026-10-25 | gates | ~~60283792–60283807~~ cancelled → 60284245–60284252 (after 60284243), 60284253–60284261 (after 60284244), snapshot 5d3e948 | 1 node each, 3 h | s1, s2, 400k done; d384, 200k_m3a running (≈ 90/128 on 2026-10-26 10:50); 400k_m3a, m3b pending | each new model with the round-2 method (`runs/m3/m2r3_<run>`) and with redraw (`..._redraw`) |
 
 ## S0: diagnostics on existing results (2026-10-25, login node, analysis only)
 
@@ -146,3 +146,80 @@ put almost all of the width shift in the fixed-N term.
 If the full run confirms it, the S5 lever is not loss weighting. It is a representation that
 puts the boundary into the transform, for example constituents relative to the jet axis with
 a bounded ΔR. That would be a new item ("S5b"), to be discussed before any change.
+
+## Results: S0.3 seed spread, S1 re-gates, S3 400k, boundary decomposition (2026-10-26)
+
+Analysis on the login node, worktree at dca6224 plus the `seed_spread` fix below. Outputs in
+`runs/m3/fidelity_s0/` (`map_<run>.json`, `seeds_set_r2_s1_s2.json`) and
+`runs/m3/boundary/<run>/summary.{json,txt}`. Units as in S0 (relevance at N = 1000). All
+m2r3 trainings ran on `data/v2_m2` with the round-2 settings (snapshot 5d3e948). The source
+diff from round 2 (b4e4c64) touches sampling options only. The seed-0 400k run repeats round
+2's loss curve to the 5th digit, so seed and stopping step are the only differences. The best
+validation loss is 1.05222 for all of them.
+
+**Gate rows** (`toy.residuals row`, 128 points unless noted):
+
+| run | best step | FAIL | p < 0.01 | mean max rel. | constrained shift | marginal b, T_ref, τ_init |
+|---|---|---|---|---|---|---|
+| set r2 (seed 0) | 156k | 1 | 23 | 0.91 | 1.17 | +0.53 +0.48 −0.30 |
+| set r2, redraw | | 1 | 27 | 0.86 | 0.96 | +0.46 +0.42 −0.25 |
+| set seed 1 | 176k | 2 | 14 | 0.76 | 1.09 | +0.66 +0.62 −0.44 |
+| set seed 1, redraw | | 1 | 13 | 0.73 | 0.94 | +0.61 +0.57 −0.39 |
+| set seed 2 | | 0 | 4 | 0.74 | 1.10 | +0.71 +0.67 −0.46 |
+| set seed 2, redraw | | 0 | 8 | 0.71 | 0.95 | +0.66 +0.63 −0.41 |
+| set 400k (seed 0) | 332k | 1 | 6 | 0.72 | 0.97 | +0.56 +0.52 −0.30 |
+| set 400k, redraw | | 0 | 10 | 0.71 | 0.88 | +0.50 +0.47 −0.26 |
+| PET r2 | | 2 | 55 | 0.91 | 1.12 | +0.64 +0.60 −0.34 |
+| PET r2, redraw (117 points) | | 1 | 55 | 0.83 | 0.95 | +0.60 +0.57 −0.33 |
+
+**Residual map offsets** c0 / c_T (and B², all 128 points):
+
+| run | width | outer fraction | jet pT | N | not-one-jet leakage |
+|---|---|---|---|---|---|
+| set r1 | −0.64 / −0.67 (0.87) | −0.55 / −0.55 (0.60) | +0.57 / −0.01 (0.42) | −0.39 / −0.27 (0.23) | 5.3 % |
+| set r2 | −0.62 / −0.35 (0.64) | −0.54 / −0.23 (0.45) | +0.38 / +0.18 (0.22) | −0.33 / −0.26 (0.17) | 3.8 % |
+| set r2, redraw | −0.53 / −0.25 (0.51) | −0.46 / −0.15 (0.36) | +0.45 / +0.23 (0.30) | −0.01 / −0.01 (0.03) | |
+| PET r2 | −0.61 / −0.56 (0.68) | −0.50 / −0.33 (0.41) | +0.24 / +0.17 (0.11) | −0.35 / −0.27 (0.19) | 4.2 % |
+| set seed 1 | −0.35 / −0.32 (0.33) | −0.29 / −0.24 (0.21) | +0.29 / +0.11 (0.16) | −0.28 / −0.23 (0.13) | 3.2 % |
+| set seed 2 | −0.36 / −0.27 (0.32) | −0.29 / −0.20 (0.21) | +0.21 / +0.07 (0.10) | −0.23 / −0.22 (0.11) | 2.7 % |
+| set 400k | −0.47 / −0.22 (0.32) | −0.39 / −0.15 (0.22) | +0.25 / +0.09 (0.11) | −0.19 / −0.18 (0.08) | 2.5 % |
+
+(Leakage: the fraction of generated surrogate clouds that fail the one-jet requirement, mean
+over the gate points. Redraw rows of seed 1, seed 2 and 400k move like set r2's: N to −0.01,
+width and outer fraction by +0.05 to +0.09, jet pT by −0.06 to −0.09.)
+
+**S0.3, seed spread: the S0 "common floor" was partly a coincidence.**
+- Three same-configuration trainings put the global width offset at −0.62, −0.34 and −0.35 (std 0.15), and outer fraction at −0.54, −0.29, −0.29 (std 0.14). Their validation losses are equal, so the loss does not see this.
+- Per-point model-to-model scatter: τ ≤ 0.20 (width), ≤ 0.19 (outer fraction), ≤ 0.12 (jet pT).
+- The S0 statement that r1, set r2 and PET r2 share the same offset compared three single trainings. S0.2's scaling exponents, from one training per data size, carry the same ±0.15 scatter, so the "floor at T_ref ≤ 0.45" is not established either.
+- **The parameter shift is stable even though the observable residuals are not:** constrained shift 1.17, 1.10, 1.10 (std 0.04). The marginals got worse in the seeds with smaller residuals (b +0.53 → +0.66, +0.71).
+  - So the dev-point shift is not driven by the width/outer-fraction offset that dominates the gate statistics.
+  - The requirement (|δθ| ≤ 0.2σ) is missed by 2.5–3.5× in every model so far.
+  - Caveat: the shift is a linear Fisher projection of 7 observable means, and the main thread found that this Fisher matrix under-estimates the information about 10× (FINDINGS_NLE, N = 1000 numerics check).
+- **Estimator fix:** `toy.residuals.seed_spread` subtracted independent surrogate noise. The gates share the surrogate seeds (seed + point) as well as the direct sample, so for similar models that noise mostly cancels, and the subtraction gave τ² < 0, τ = 0 for every observable. It now reports `tau_independent` (lower bound), `tau_upper` (the unsubtracted pair RMS / √2, the default with common random numbers) and the run-to-run spread of the mean offset (`offset_std`). The test covers the CRN case.
+
+**S1, same-N redraw: it removes the N tilt and little else.**
+- Every model's N offset goes to −0.01, and the constrained shift drops by 0.10–0.21 (1.17 → 0.96 for set r2).
+- The width and outer-fraction offsets shrink by only 0.05–0.12, jet pT grows by 0.06–0.09, and p < 0.01 counts do not improve (23 → 27, 14 → 13, 4 → 8, 6 → 10).
+- So H3 (selection tilt through N) is a minor part of the width residual. The per-N normalization stays useful for N itself and for the shift.
+
+**Boundary decomposition (`toy.boundary`, 32 points each): H6 confirmed as the main mechanism.**
+
+| run | width total / N-mix / fixed-N | outer fraction | jet pT | N |
+|---|---|---|---|---|
+| set r1 | −1.07 / −0.15 / −0.92 | −0.90 / −0.13 / −0.78 | +0.45 / −0.13 / +0.58 | −0.52 / −0.52 / 0.00 |
+| set r2 | −0.84 / −0.13 / −0.71 | −0.68 / −0.11 / −0.57 | +0.44 / −0.11 / +0.55 | −0.46 / −0.45 / 0.00 |
+| PET r2 | −0.98 / −0.14 / −0.84 | −0.68 / −0.12 / −0.57 | +0.25 / −0.12 / +0.37 | −0.48 / −0.48 / 0.00 |
+
+(dropped samples; with redraw the N-mix terms go to ≈ +0.03 and the fixed-N terms do not change.)
+- About 85 % of the width and outer-fraction shift is at fixed N, and all of the N shift is N-mix.
+- **Boundary densities, mean over 32 points, surrogate-selected / direct:**
+  - Constituent distance from the axis: 1.04–1.09 over ΔR 0.28–0.38, then **0.91–0.95 in the last bin inside R = 0.4** (0.38–0.40); 5.5–7.2 % of generated clouds leak out and fail the one-jet requirement.
+  - Jet pT: **0.82–0.89 in the first bin above the 60 GeV cut**, 1.01–1.04 above it.
+  - This is the truncation-leakage pattern H6 predicts: mass is missing just inside each cut and pushed inward, which shrinks the width and outer fraction and raises the jet pT.
+- Across models the leakage tracks the width offset only loosely: r1 → r2 cut the leakage 5.3 → 3.8 % at an unchanged offset, while seeds 1 and 2 have 2.7–3.2 % and offset −0.35.
+
+**Reading and consequences for the plan:**
+1. The width/outer-fraction residual is a fixed-N boundary error of the flow (H6). Neither the selection normalization (S1) nor more steps (S3: 400k gives −0.47 against −0.34 to −0.62 for the 200k seeds, within the seed spread) removes it.
+2. Any S2/S3/S4 comparison must be made against the seed spread (offset std 0.15, constrained-shift std 0.04), not against the single round-2 model. The m3a / m3b / d384 gates still running are single trainings and will be read that way.
+3. S5b (a representation with the R = 0.4 boundary in the transform, e.g. constituents relative to the jet axis with a bounded ΔR) is the lever for the gate residual. It needs discussion before any change. It does not obviously address the parameter shift, which barely moves with the residual: it should be checked whether that shift comes from the jet-pT/N terms or from the linear-Fisher read-out itself.
