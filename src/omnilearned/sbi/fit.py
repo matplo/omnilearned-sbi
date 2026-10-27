@@ -33,6 +33,8 @@ numerical options. It has no truth section. Example (TOML)::
     refine = {rounds = 1, delta_logpost = 12.0, points = [9, 9]}
     # or, instead of refine: evaluate only the supported region of [grid]
     # support = {seed_stride = [4, 4], delta_logpost = 10.0}
+    # or a ridge-following lattice for long thin posteriors (see _run_ridge):
+    # ridge = {axis = "b", step = 0.5, h = 1.5, locate = {likelihood = {nsteps = 16}}}
 
     [local]                           # only for mode = "local_variable"
     name = "b"
@@ -261,7 +263,12 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
     def progress(done, total, sec):
         log(f"  candidates {done}/{total} {sec:.0f}s")
 
-    if mode == "fixed_vector" and scan_cfg.get("support"):
+    if mode == "fixed_vector" and scan_cfg.get("ridge"):
+        if scan_cfg.get("support") or int(scan_cfg.get("refine", {}).get("rounds", 0)):
+            raise ValueError("scan.ridge excludes scan.support and scan.refine")
+        doc = _run_ridge(cfg, surrogate, obs, options, scan_cfg, log_norm_fn, provenance,
+                         out_prefix, progress, log, file_order, logp_cache)
+    elif mode == "fixed_vector" and scan_cfg.get("support"):
         if int(scan_cfg.get("refine", {}).get("rounds", 0)):
             raise ValueError("scan.support and scan.refine are exclusive")
         sup = scan_cfg["support"]
@@ -316,6 +323,87 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
     with open(f"{out_prefix}.json", "w") as f:
         json.dump(doc, f, indent=1, default=_default)
     return doc
+
+
+def _bounds(cfg, grid):
+    b = cfg.get("prior", {}).get("bounds")
+    return [tuple(b[n]) if b else (float(a[0]), float(a[-1])) for n, a in zip(grid.names, grid.axes)]
+
+
+def _total_logpost_fn(fn, n_events, event_chunk, log_norm_fn=None):
+    """theta[M, P] -> [M] log likelihood (minus the selection normalization); no prior,
+    so the ridge locator can fit across a prior bound."""
+    def total(cand):
+        cand = np.atleast_2d(cand)
+        tot = np.zeros(len(cand))
+        for e0 in range(0, n_events, event_chunk):
+            v = np.asarray(fn(slice(e0, min(n_events, e0 + event_chunk)), cand), dtype=np.float64)
+            tot += np.where(np.isfinite(v), v, np.nan).sum(1)
+        if log_norm_fn is not None:
+            tot = tot - n_events * np.asarray(log_norm_fn(cand), dtype=np.float64)
+        return tot
+    return total
+
+
+def _run_ridge(cfg, surrogate, obs, options, scan_cfg, log_norm_fn, provenance, out_prefix,
+               progress, log, file_order, logp_cache):
+    """Ridge-following lattice scan (``omnilearned.sbi.ridge``)::
+
+        [scan]
+        ridge = {axis = "b", step = 0.5, h = 1.5, u_max = 6.0, delta_logpost = 10.0,
+                 locate = {likelihood = {nsteps = 16, num_probes = 2}, seed_stride = [6, 6, 4],
+                           delta_logpost = 15.0, knot_step = 0.5, iterations = 6, stencil = 1.5}}
+
+    [grid] is the coarse grid of the locate stage and fixes the parameter order; the prior
+    bounds are the lattice's domain. The locate stage uses the cheaper ``locate.likelihood``
+    options (overriding [likelihood]) and its own cache (``*_locate.npz``); it only places
+    the lattice. Every lattice value uses [likelihood].
+    """
+    from omnilearned.sbi.ridge import locate_ridge, ridge_scan
+
+    rc = scan_cfg["ridge"]
+    loc = rc.get("locate", {})
+    grid = _grid(cfg["grid"])
+    bounds = _bounds(cfg, grid)
+    ec, cc = scan_cfg.get("event_chunk", 256), scan_cfg.get("candidate_chunk", 8)
+    cheap = LikelihoodOptions.from_dict({**cfg.get("likelihood", {}), **loc.get("likelihood", {})})
+    loc_cache = None
+    if logp_cache is not None:
+        loc_cache = LogpCache(str(logp_cache.path).replace(".npz", "_locate.npz"),
+                              {**logp_cache.identity, "stage": "locate", "likelihood": cheap.to_dict()},
+                              every=logp_cache.every)
+    t0 = time.time()
+    fn_c, diag_c = make_logp_fn(surrogate, obs, cheap, grid.names, cache=loc_cache)
+    coarse = support_scan(fn_c, len(obs), grid, loc.get("seed_stride", [4] * len(grid.names)),
+                          delta_logpost=loc.get("delta_logpost", 15.0), event_chunk=ec,
+                          candidate_chunk=cc, log_prior=_prior(cfg, grid), log_norm_fn=log_norm_fn,
+                          keep_per_event=False, progress=progress)
+    cd = coarse.diagnostics
+    log(f"locate: coarse grid {grid.shape} evaluated {cd['evaluated']} closed={cd['support_closed']} "
+        f"map {coarse.summary()['mle']} {cd['seconds']:.0f}s")
+    rmap, linfo = locate_ridge(_total_logpost_fn(fn_c, len(obs), ec, log_norm_fn), coarse, rc["axis"],
+                               bounds, knot_step=loc.get("knot_step", 0.5),
+                               delta_knots=loc.get("delta_logpost", 15.0),
+                               iterations=loc.get("iterations", 6), stencil=loc.get("stencil", 1.5),
+                               chord_tol=loc.get("chord_tol", 0.25),
+                               log=log)
+    if loc_cache is not None:
+        loc_cache.flush()
+    t_locate = time.time() - t0
+    fn, diag = make_logp_fn(surrogate, obs, options, grid.names, cache=logp_cache)
+    res = ridge_scan(fn, len(obs), rmap, bounds, rc["step"], rc["h"], u_max=rc.get("u_max", 6.0),
+                     delta_logpost=rc.get("delta_logpost", 10.0), event_chunk=ec, candidate_chunk=cc,
+                     log_norm_fn=log_norm_fn, keep_per_event=True, progress=progress,
+                     max_seconds=scan_cfg.get("max_seconds"), coarse=coarse)
+    file_order(res.scan)
+    d = res.diagnostics
+    d["likelihood"] = diag
+    d["locate"] = {**linfo, "likelihood": diag_c, "options": cheap.to_dict(), "seconds": t_locate,
+                   "coarse": {k: cd[k] for k in ("evaluated", "grid_size", "support_closed", "passes")}}
+    log(f"ridge scan: lattice {res.scan.grid.shape} evaluated {d['evaluated']} closed={d['support_closed']} "
+        f"(scan {d['scan_closed']}, on u edge {d['supported_on_u_edge']}, coarse outside "
+        f"{d['coarse_support_outside_lattice']}) mle {res.summary()['mle']} {d['seconds']:.0f}s")
+    return res.save(out_prefix, extra={"provenance": provenance})
 
 
 def _run_local(cfg, surrogate, obs, options, scan_cfg, weight_fn, log_norm_fn,

@@ -331,7 +331,11 @@ def verify_seal(out, k):
 
 
 def joint_level(res, logpost_truth):
-    """Posterior mass on the grid at higher posterior density than at the truth."""
+    """Posterior mass at higher posterior density than at the truth.
+
+    ``res.log_posterior()`` is the density in θ for both result types (a ridge lattice
+    removes its Jacobian), so the ordering is that of the θ density.
+    """
     lp = res.log_posterior()
     mass = res.posterior_mass()
     return float(mass[np.isfinite(lp) & (lp > logpost_truth)].sum())
@@ -389,7 +393,7 @@ def report(out, device="cpu", control=None, log=print):
     """Verify seals, open truth, and summarize the campaign (writes report.json)."""
     from omnilearned.sbi.fit import load_fit_config
     from omnilearned.sbi.flow import FlowSurrogate
-    from omnilearned.sbi.scan import ScanResult
+    from omnilearned.sbi.ridge import load_result
 
     out = Path(out)
     with open(out / "campaign.json") as f:
@@ -405,7 +409,7 @@ def report(out, device="cpu", control=None, log=print):
         cfg = load_fit_config(out / "fits" / f"fit_{k:04d}.toml")
         if sur is None:
             sur = FlowSurrogate.load(cfg["checkpoint"], device=device)
-        res = ScanResult.load(cfg["output_prefix"])
+        res = load_result(cfg["output_prefix"])  # grid or ridge-lattice result
         summ = res.summary()
         with open(out / "truth" / f"truth_{k:04d}.json") as f:  # opened only after the seal
             truth = dict(zip(PARAMETERS, json.load(f)["theta"]))
@@ -415,8 +419,8 @@ def report(out, device="cpu", control=None, log=print):
                "mean": summ["posterior_mean"], "std": summ["posterior_std"], "covered": {},
                "boundary": summ["boundary"],
                "evaluated": None if res.evaluated is None else int(np.sum(res.evaluated))}
-        row["fixed"] = [n for n, ax in zip(res.grid.names, res.grid.axes) if len(ax) < 2]
-        for n in res.grid.names:
+        row["fixed"] = res.fixed_names()
+        for n in res.parameter_names():
             if n in row["fixed"]:  # a single-node axis is held fixed: no pull or coverage
                 continue
             row["pull"][n] = (summ["posterior_mean"][n] - truth[n]) / summ["posterior_std"][n]

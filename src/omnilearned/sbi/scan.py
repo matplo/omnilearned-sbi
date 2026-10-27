@@ -148,6 +148,13 @@ class ScanResult:
         idx[k] = slice(None)
         return self.grid.axes[k], self.loglik[tuple(idx)]
 
+    def parameter_names(self):
+        return list(self.grid.names)
+
+    def fixed_names(self):
+        """Single-node axes: parameters held fixed (no pull or coverage)."""
+        return [n for n, a in zip(self.grid.names, self.grid.axes) if len(a) < 2]
+
     def mle_index(self):
         return np.unravel_index(np.nanargmax(self.loglik), self.loglik.shape)
 
@@ -405,6 +412,8 @@ def support_scan(
     keep_per_event=True,
     progress=None,
     max_seconds=None,
+    seed=None,
+    skip_outside_prior=False,
 ):
     """Fixed-vector scan that evaluates the supported region of a fine grid.
 
@@ -420,6 +429,10 @@ def support_scan(
     log posterior >= max - delta is missed: the seed lattice must be fine
     enough to intersect every relevant mode. Returns a :class:`ScanResult`
     whose ``evaluated`` mask records which nodes were computed.
+
+    ``seed`` (boolean mask of the grid shape) replaces the stride lattice.
+    ``skip_outside_prior`` never evaluates nodes whose log prior is -inf (they
+    carry no mass); closure then ignores them.
     """
     pts = grid.points()
     shape = grid.shape
@@ -462,7 +475,9 @@ def support_scan(
                 complete = False
                 return
 
-    todo = np.flatnonzero(seed_mask(shape, seed_stride).reshape(-1))
+    allowed = np.isfinite(lp_prior) if skip_outside_prior else np.ones(M, dtype=bool)
+    seeds = seed_mask(shape, seed_stride) if seed is None else np.asarray(seed, dtype=bool)
+    todo = np.flatnonzero(seeds.reshape(-1) & allowed)
     while todo.size and complete:
         passes.append(int(todo.size))
         evaluate(todo)
@@ -470,13 +485,13 @@ def support_scan(
         if not np.isfinite(lp).any():
             break
         active = evaluated & (lp >= np.nanmax(lp) - delta_logpost)
-        todo = np.flatnonzero(dilate(active.reshape(shape)).reshape(-1) & ~evaluated)
+        todo = np.flatnonzero(dilate(active.reshape(shape)).reshape(-1) & ~evaluated & allowed)
     lp = loglik + lp_prior
     finite = np.isfinite(lp)
     if finite.any():
         active = evaluated & (lp >= np.nanmax(lp) - delta_logpost)
         closed = bool(complete and not (dilate(active.reshape(shape)).reshape(-1)
-                                        & ~evaluated).any())
+                                        & ~evaluated & allowed).any())
     else:
         active, closed = np.zeros(M, dtype=bool), False
     return ScanResult(
@@ -494,7 +509,9 @@ def support_scan(
             "scan": "support",
             "support_closed": closed,
             "delta_logpost": float(delta_logpost),
-            "seed_stride": [int(s) for s in seed_stride],
+            "seed_stride": None if seed is not None else [int(s) for s in seed_stride],
+            "seeds": int(seeds.sum()),
+            "skip_outside_prior": bool(skip_outside_prior),
             "evaluated": int(evaluated.sum()),
             "grid_size": int(M),
             "passes": passes,
