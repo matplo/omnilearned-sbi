@@ -411,3 +411,27 @@ first thing to look at — the fallback is WEXPO = 3, already coded and probed.
 - **Acceptance** 0.29–0.54 (v2_m2 0.12–0.18).
 - **ESS per point:** median 3606 of 6000 (0.60, as predicted), range 2493–3765.
 - **Weight range:** max/min ≤ 72.1 per point, the cap's bound (250/60)³.
+
+## Incident: JEWEL production chain stalled on stale claim locks (2026-10-27, fixed, no data lost)
+
+The 12-node production farm (60358270) ran well overall — **9159 of 9415 tasks (97.3%) completed
+cleanly** — but array elements 0 and 1 started first (≈ 23:43), ran the full 2 h 30 min time
+limit, and were killed by Slurm mid-work (`TIMEOUT`, not a code failure). Their in-flight workers
+were SIGKILLed before their `finally: tasklocks.release(lock)` could run, leaving **256 stale
+claim locks** — exactly the 256 tasks left incomplete, confirming the mechanism. `generate
+unlock-stale` only runs once, at array element 0's *start*, so it could not clean up locks its
+own node created later. Because Slurm's `afterok` on an array job requires every element to
+succeed, the two `TIMEOUT` elements blocked the whole downstream chain: **60358284** (index/merge)
+sat as `DependencyNeverSatisfied` and **60358288** (training) behind it, neither ever starting.
+
+**Fix:** `generate unlock-stale --dir data/jewel_w1/train` (removed exactly 256 locks) → cancelled
+the two stuck jobs → a small 2-node cleanup farm (**60373313**, 50 min, resumable — `generate.work`
+skips tasks with an existing manifest) for the 256 remaining tasks → rebuilt the chain: **60373319**
+(index/merge, afterok 60373313) → **60373320** (4 weighted trainings, afterok 60373319). No data
+or provenance was lost; the 9159 original task shards are untouched and unaffected.
+
+**Lesson for next time:** either give the farm's per-node time limit enough margin that a node
+naturally drains its share of the claim pool before the limit (the uneven start times here, not
+total work, caused the timeout — nodes 2–11 started 3–7 h late due to regular-QOS queue
+contention and found almost nothing left), or add a final `unlock-stale` + short mop-up pass as a
+standard last step of any multi-node JEWEL farm submission, not just on failure.
