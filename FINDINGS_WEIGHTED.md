@@ -304,3 +304,42 @@ recorded here before.
   own default (4) and JEWEL's hardcoded one (5), i.e. it is conservative relative to existing
   practice; the number itself was derived independently from the ESS study and the probe for
   this selection and physics, not from either default.
+
+## Phase 0 verdict: set m3a vs set r2 in `toy.ptbins`, ≥120 GeV bins (2026-10-26, job 60353176)
+
+`toy.ptbins run` (snapshot a2e7dba, redraw, 22 000 clouds, 16 gate points 0,8,…,120 — same
+settings as the main session's baseline) on `runs/m2r3/set_d256_L6_200k_m3a/checkpoint_mult.pt`
+(2× jets/θ at the same spectrum, multC64 attached), 50 min, 1 A100, rc 0 → `runs/w0/ptbins/set_m3a/`.
+Compared against the main session's `set_r2` (1×) and `set_400k` (same jets, 2× steps) summaries
+in `runs/m3/ptbins/`.
+
+**Aggregate over the 3 bins ≥ 120 GeV and the 6 observables:**
+
+| | mean \|effect\| | mean \|pull\| | rms \|pull\| |
+|---|---|---|---|
+| set r2 (1× jets, 200k steps) | 0.0275 | 1.57 | 1.78 |
+| **set m3a (2× jets, 200k steps)** | **0.0225** | **1.25** | **1.33** |
+| ratio m3a/r2 | 0.82 | 0.79 | — |
+
+**Spectrum ratio (surrogate/direct, normalised share) at 120–140 / 140–170 / 170–200 GeV:**
+r2 1.053 / 1.023 / 0.937; m3a 1.022 / 0.990 / 0.944 (closer to 1 at the first two, about the
+same at 170–200); set 400k (for reference) 1.027 / 0.996 / 0.972 — the largest spectrum gain
+still comes from more training (400k), not more jets per θ (m3a), consistent with the earlier
+integrated-shift finding.
+
+**Not uniform across observables:** n_constituents and soft8_fraction — the two flagged by the
+main session as "the surrogate's high-pT jets carry a few too many soft constituents" — improve
+with m3a in **every** ≥120 GeV bin (n_constituents |effect| 0.031/0.062/0.049 → 0.019/0.038/0.041;
+soft8_fraction 0.031/0.034/0.006 → 0.021/0.016/0.004). width and outer_fraction are mixed (better
+at 120–140 and 170–200, worse at 140–170). **ptd and lead_fraction get slightly worse at the
+single highest bin** (170–200 GeV, the thinnest-statistics bin: lead_fraction |effect| 0.023 →
+0.034, pull 0.9 → 1.3) — still well inside the family-wise significance threshold used elsewhere,
+but reported as found (rule 5), not smoothed over.
+
+**Verdict: aggregate improvement, ~18–20 % smaller effect size and pull with 2× the jets per θ,
+driven mainly by n_constituents and soft8_fraction — the per-handoff decision rule reads as
+"high pT is data-limited" for those two observables, with a mixed picture for the other four.**
+This is consistent with (not contradicted by) the main session's finding that the *integrated*
+shift does not improve with m3a — the low-pT-dominated integrated metric is insensitive to a
+high-pT-only gain this size. It supports continuing the weighted arm already underway (phases
+1–4 code, probe and the running `v2_w1` generation/training), rather than reopening it.
