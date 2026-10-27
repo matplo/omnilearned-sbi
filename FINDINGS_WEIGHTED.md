@@ -223,3 +223,43 @@ tasks `rc = 0`. Analysis: `runs/w4/probe/analyze_probe.py` → `probe_results.js
   - the same low-pT statistics and ×4–11 above 120 GeV;
   - with event stores, ≈ 600 GB more on CFS (jewel_v1: 601 GB); without them (`--no-events`), ≈ 2 GB of jets.
   - It needs a budget approved by the user (rule 8).
+
+## Phase 4: production proposal (2026-10-26, pending user budget decision)
+
+Sizing a weighted JEWEL training set from the existing jewel_v1 production (exact totals from
+`index_train.json`/`index_validation.json`: train 2 199 271 jets, 28 298 054 events, **2356.06
+core-h**; validation 146 016 jets, 1 904 712 events, 157.4 core-h) and the probe's acceptance
+ratios, using the pooled WEXPO-3 ESS-study ratio (×2.40, 40-task event sample, all 972 points)
+as the central estimate and the probe's 4-point range (×1.76–2.86, corners/edges of the box) as
+the uncertainty band — these two independent estimates bracket each other, which is some
+reassurance, but all 4 probed points lie on one diagonal of the (b, TI) plane, so the ratio's
+behaviour off that diagonal is not checked.
+
+- **Design:** no new config/design needed — mirror jewel_v1's existing train grid exactly (same
+  972 Cartesian points, same box; `[design]`/`[jewel]` unchanged, `sampling = {"wexpo": 3}` is a
+  per-task option as in `jewel/cards.py`). New split/directory, e.g. `data/jewel_w1/train`.
+- **Validation and fidelity reused as-is, unweighted** (no new JEWEL cost for them): the gate and
+  closure must compare against pseudo data drawn directly from the simulator (AGENTS.md rule 1),
+  so these splits stay unbiased, exactly as `v2_w1` reused `v2_m2`'s unbiased validation.
+- **WEXPO = 3** (candidate from the ESS study and the probe; 2 as the conservative fallback).
+
+| option | per-point target | total train jets | core-h (central) | core-h range | node-h (≈128 cores/node) | ESS vs jewel_v1 at 60–70 GeV | ESS vs jewel_v1 at 170–200 GeV |
+|---|---|---|---|---|---|---|---|
+| **A — match jet count** | same as today (median 2167) | 2.20 M (same) | **982** | 824–1339 | 7.7 (6.4–10.5) | ×0.38 (worse) | ×4.8 (better) |
+| **B — match budget already spent** | ×2.4 jets | 5.28 M | **2356** (= jewel_v1's own cost) | 1977–3213 | 18.4 (15.4–25.1) | ×0.9 (≈ even) | ×11.5 |
+| **C — ESS parity at the leading (low-pT) defect** | ×2.0 jets | 4.40 M | **1963** | 1648–2677 | 15.3 (12.9–20.9) | ×1.0 (parity) | ×9.5 |
+
+(ESS multipliers from the per-jet reweighting study's pooled total/bin ESS fractions at WEXPO 3,
+scaled by each option's jet multiplier; A's cost is lower than jewel_v1 because weighting raises
+acceptance per event, even though per-jet ESS at low pT is worse for the same accepted count.)
+
+- **Recommendation: option C.** It does not lose statistical power at 60–80 GeV — the largest and
+  most significant surrogate defect found so far (`FINDINGS_FIDELITY.md`) — while buying ≈9.5×
+  the power above 170 GeV, for less than double jewel_v1's already-spent budget.
+- **Given the ±30 % uncertainty band from only 4 corner/edge probe points, recommend a first
+  tranche of ≈ 10 % of the grid (≈ 97 points, full per-point target)** to measure the realized
+  core-h and the ratio's trend across more of the (b, TI) box before committing the rest — the
+  project rule against open-ended sweeps and the existing `chunks_for_target`/`topup` tooling
+  both support staging this way.
+- **Not yet decided (pending user):** WEXPO value, which option (A/B/C or a custom target), and
+  tranche-first vs. a single commit. No tasks have been planned or submitted for this production.
