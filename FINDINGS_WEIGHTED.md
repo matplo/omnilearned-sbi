@@ -11,6 +11,10 @@ the main-study trees are read only.
 |---|---|---|---|---|---|
 | 2026-10-26 | 0 | 60353176 (`w0-ptbins-m3a`, gpu shared, 1 A100, 1.5 h limit) | submitted | pending | `toy.ptbins` of set m3a → `runs/w0/ptbins/set_m3a/` (snapshot a2e7dba, as the baseline) |
 | 2026-10-26 | 0 | login node, 1 core | ≈ 2 min | done | ESS vs k by reweighting (`runs/w0/ess/ess_reweight.py`) and biased toy draws at 3 points (`ess_direct.py`, snapshot e9b52fe) |
+| 2026-10-26 | 1 | 60354888 (`w1-gen`, cpu shared, 64 tasks × 2 cores, 20 min limit) | ≈ 0.5 core-h expected | submitted | `data/v2_w1`: v2_m2 design and train stream, 6000 jets/point, `--bias-k 3 --bias-cap 250` (snapshot 1bf9fdc) |
+| 2026-10-26 | 2 | 60354914 (`w1-train4`, gpu regular, 1 node × 4 A100, 4 h limit, afterok 60354888) | ≈ 2 node-h expected | queued | `runs/w1/`: set d256 L6 200k (r2 settings) on v2_w1, `--weight-mode loss` seeds 0–2, `sample` seed 0; multC64 attached (`spec_w1.txt`) |
+| 2026-10-26 | 4 | login node | ≈ 3 min | done | WEXPO from ESS by reweighting jewel_v1 (`runs/w4/ess/ess_jewel.py`) |
+| 2026-10-26 | 4 | 60355573 (`w4-jewel-probe`, cpu debug, 1 node, 30 min) | ≤ 0.5 node-h (approved by the user) | submitted | weighted JEWEL probe, 4 grid points × WEXPO 2, 3 × 4 tasks × 1000 events → `runs/w4/probe/wexpo{2,3}` (snapshot 6294671) |
 
 ## Phase 0: choice of the bias exponent k (2026-10-26, login node, analysis only)
 
@@ -136,3 +140,49 @@ Job 60353176 (gpu shared, 1 A100): set m3a (`runs/m2r3/set_d256_L6_200k_m3a/chec
   - per-point normalisation at merge;
   - the old format unchanged;
   - the mixed-merge refusal.
+
+## Phase 4: weighted JEWEL probe (2026-10-26, job 60355573, approved by the user)
+
+32 real JEWEL tasks (16 WEXPO 2, 16 WEXPO 3; 4 tasks × 1000 events at each of 4 jewel_v1 grid points:
+(b, TI, TAUI) = (0, 0.9, 0.2), (5, 0.5, 0.6), (7, 0.3, 0.8), (11, 0.1, 1.0)), snapshot 6294671,
+1 CPU node, debug QOS, 9:55 wall (≈ 0.16 node-h, well under the approved 0.5 node-h), all 32/32
+tasks `rc = 0`. Analysis: `runs/w4/probe/analyze_probe.py` → `probe_results.json`.
+
+- **Weighting works correctly in the real binary, not just the fake-JEWEL tests.** At every point
+  the weighted jet pT, N and the ≥ 120 GeV share agree with the jewel_v1 unweighted reference
+  (2100–2800 jets/point) within 1–2 se, e.g. θ = (5, 0.5, 0.6): ⟨pT⟩ 80.30 ± 0.87 (w) vs 80.76 ± 0.48
+  (ref), ⟨N⟩ 31.95 ± 0.65 vs 31.90 ± 0.30.
+- **Seconds/event is unaffected by weighting** (ratio weighted/unweighted 0.97–1.04 at all 4 points,
+  both WEXPO). The strong TI dependence found in jewel_v1 (0.03–0.60 s/event, ρ = +0.94 with TI)
+  carries over unchanged, so that cost model applies directly to weighted production.
+- **Acceptance per event rises more than the ESS study predicted from reweighting alone**, because
+  weighting also raises the fraction of events that pass the jet-pT cut, not only the fraction with
+  a hard-pT jet already present:
+
+| θ (b, TI, TAUI) | unweighted acc. | WEXPO 2 acc. (ratio) | WEXPO 3 acc. (ratio) |
+|---|---|---|---|
+| (0, 0.9, 0.2) | 0.061 | 0.127 (2.08×) | 0.174 (2.86×) |
+| (5, 0.5, 0.6) | 0.070 | 0.136 (1.94×) | 0.192 (2.74×) |
+| (7, 0.3, 0.8) | 0.087 | 0.145 (1.66×) | 0.185 (2.12×) |
+| (11, 0.1, 1.0) | 0.132 | 0.198 (1.51×) | 0.232 (1.76×) |
+
+- **Per-CPU-time yield (jets per 1000 events generated, the quantity that sets the production
+  budget) is better than the per-jet ESS study suggested, because the acceptance gain and the
+  pT-reshaping multiply:**
+  - **170–200 GeV: ×4.2–9.2 (WEXPO 2), ×6.9–20.5 (WEXPO 3)** across the 4 points — larger than the
+    ×3.3/×4.8 predicted from reweighting jewel_v1 jet counts alone (that study fixed the jet count
+    per point and so missed the acceptance gain).
+  - **60–70 GeV is roughly unchanged, not costed, at WEXPO 2** (×1.00–1.16) and **mildly costed at
+    WEXPO 3** (×0.81–1.17, worst at the weak-quenching corner (11, 0.1, 1.0)). This differs from the
+    toy, where low pT was always costed (×0.42–0.61 at k = 3): in JEWEL the acceptance gain partly
+    offsets the reshaping away from low pT.
+- **Consequence for a production estimate:** because events needed per target jet count scales as
+  1/acceptance, and acceptance rises 1.5–2.9×, **a WEXPO-3 production run reaching the same total
+  jet statistics as jewel_v1 would need fewer JEWEL core-hours overall, not more, while concentrating
+  much more of that statistics above 120 GeV.** This is only 4 of 972 grid points (corners/edges of
+  the (b, TI) plane), so the acceptance-ratio trend with TI and b (ratio falls as TI falls / b rises,
+  i.e. less to gain where quenching is weak) should be checked over more of the grid before sizing
+  a full production run.
+- **Open before a production budget:** a probe at a few interior grid points (not just corners) to
+  confirm the acceptance-ratio trend, and a decision on WEXPO (3 is the current candidate; the
+  low-pT cost at weak quenching argues against going higher).
