@@ -25,7 +25,7 @@ Reference (round 2, `set_d256_L6_200k_multC64`): 1 FAIL, 23 with p < 0.01, const
 | 2026-10-26 | gate completion | interactive node B 60323642 (nid001021, 4 h) | 4 A100 | d384 done 12:53, d384 redraw done 14:50; PET r2 redraw stopped at ≈ 119/128 when the allocation ended (15:16), resumed as 60341128 | resume the gates that hit their 3 h limit: d384 (108/128), d384 redraw (101/128), PET r2 redraw (117/128) |
 | 2026-10-26 | shift, high statistics | node B CPUs (data); node A GPU 3, shared-queue workers 60324273/75/76 (1 A100, 4 h) | ≈ 1 GPU-h per model (≈ 5.5 min per point) | all 7 done 12:22–14:31 | `data/v2_m3_shiftdirect`: 200 000 direct jets at each of the 11 shift points, new indices 1000–1010 of the development_scan stream (independent of the scan), snapshot 5d3e948 (generator unchanged, config sha 2c047d92). `gate shift --direct-dir` (046a3cb), 50 000 surrogate clouds per point, redraw, via `shell/nle/shift_queue.sh` and `runs/m3/shift_hi_queue.txt` → `runs/m3/shift_hi/<name>/`. Expected 11-point se ≈ 0.05σ (was 0.09) |
 | 2026-10-26 | S3 seed check, measurement | gates 60331580/81 (s1), 60331583/84 (s2), 60331586/87 (s3), regular, 1 node × 4 A100, 3 h; shift workers 60331582/85/88, shared, 1 A100, 2 h; all `--begin 14:55` | 6 node × ≤ 3 h, 3 × ≤ 2 GPU-h | shifts done 16:00–16:07 (nid003997, nid001064, nid003885); gates pending | gates of 400k seeds 1–3 with and without redraw (`fid_gate.sbatch`, snapshot 5d3e948 → `runs/m3/m2r3_set_d256_L6_400k_s{1,2,3}{,_redraw}`) and their high-statistics shifts (`runs/m3/shift_hi_queue_400k.txt`, snapshot 046a3cb). Each job runs through `runs/m3/after_ckpt.sh`, which waits up to 40 min for `checkpoint_mult.pt` (node A ends 15:16, training ends ≈ 14:50) |
-| 2026-10-26 | pT-differential fidelity | interactive node B 60323642, GPUs 1–3 (step 60323642.7; the 3-GPU step .4 was cancelled before computing) | 3 A100 × 50 min | set 400k, set r2 done 14:47 (16/16, ≈ 3 min per point); PET r2 13/16 at the allocation end, last 3 points as 60341127 (shared, 1 A100) | `toy.ptbins run` (snapshot a2e7dba), 16 gate points, redraw, set 400k / set r2 / PET r2 → `runs/m3/ptbins/<model>/` |
+| 2026-10-26 | pT-differential fidelity | interactive node B 60323642, GPUs 1–3 (step 60323642.7; the 3-GPU step .4 was cancelled before computing) | 3 A100 × 50 min | set 400k, set r2 done 14:47 (16/16, ≈ 3 min per point); PET r2 13/16 at the allocation end, last 3 points as 60341127 (shared, 1 A100, done 16:55) | `toy.ptbins run` (snapshot a2e7dba), 16 gate points, redraw, set 400k / set r2 / PET r2 → `runs/m3/ptbins/<model>/` |
 | 2026-10-26 | resumes after node B ended | 60341127 (`ptbins-pet`, shared, 1 A100, 40 min), 60341128 (`gr-pet-r2-resume`, regular, 1 node, 1 h) | ≲ 1.5 GPU-h | submitted 16:35 | PET r2 ptbins points 104–120 (snapshot a2e7dba, `runs/m3/ptbins/run_ptbins_one.sh`); PET r2 redraw gate resume (snapshot 19ac616) |
 
 ## S0: diagnostics on existing results (2026-10-25, login node, analysis only)
@@ -366,7 +366,7 @@ Same method as the partial section: snapshot 046a3cb, cuda A100, redraw, 200 000
 
 ## Surrogate fidelity vs jet pT, `toy.ptbins` (2026-10-26)
 
-`toy.ptbins` (a2e7dba; heatmap label fix in the next commit), redraw, 22 000 clouds at gate points 0, 8, …, 120 (16 points, 13 for PET r2 so far), against the 20 000 direct jets per point of `data/v2_m1_fidelity`.
+`toy.ptbins` (a2e7dba; heatmap label fix in the next commit), redraw, 22 000 clouds at gate points 0, 8, …, 120 (16 points each; PET r2 points 104–120 from job 60341127), against the 20 000 direct jets per point of `data/v2_m1_fidelity`.
 - **Run provenance:** interactive node B 60323642 (nid001021), GPUs 1–3, checkpoints sha256 a297fd9f (set 400k), 1d587f39 (set r2), 7a3f7b5e (PET r2).
 - **Figures** in `runs/m3/ptbins/figs/`:
   - `ptbins_spectrum.png`: pooled spectrum and surrogate/direct in 5 GeV bins;
@@ -381,7 +381,7 @@ Same method as the partial section: snapshot 046a3cb, cuda A100, redraw, 200 000
 |---|---|---|---|---|---|---|---|---|
 | width | 400k | **−0.015** | −0.013 | ≈ 0 | −0.004 | +0.018 | −0.011 | +0.027 |
 | width | r2 | **−0.024** | **−0.020** | ≈ 0 | +0.001 | +0.031 | +0.003 | +0.053 |
-| width | PET | **−0.032** | −0.016 | ≈ 0 | +0.002 | +0.024 | −0.005 | +0.070 |
+| width | PET | **−0.034** | −0.018 | ≈ 0 | +0.001 | +0.024 | −0.008 | +0.078 |
 | outer_fraction | r2 | **−0.022** | −0.015 | ≈ 0 | −0.003 | +0.026 | −0.011 | +0.039 |
 | n_constituents | r2 | 0.000 | −0.005 | −0.01 | +0.007 | +0.031 | **+0.062** | +0.049 |
 | soft8_fraction | r2 | +0.002 | +0.002 | ≈ 0 | −0.009 | **−0.031** | −0.034 | −0.006 |
@@ -392,7 +392,7 @@ Same method as the partial section: snapshot 046a3cb, cuda A100, redraw, 200 000
 |---|---|---|---|---|---|
 | set 400k | 0.983 | 1.01–1.02 | 1.03 | 1.00 | 0.97 |
 | set r2 | 0.975 | 1.02 | 1.05 | 1.02 | 0.94 |
-| PET r2 | 0.977 | 1.02–1.03 | 1.10 | 1.03 | **0.71** |
+| PET r2 | 0.978 | 1.01–1.03 | 1.10 | 1.02 | **0.72** |
 
 - **The largest and most significant defect is at low pT, not at high pT.**
   - Width and outer_fraction are too small at 60–80 GeV (pulls −4 to −8). In the first 5 GeV above the cut the spectrum is 3–5 % short (−2 % for 60–70 overall).
@@ -400,7 +400,7 @@ Same method as the partial section: snapshot 046a3cb, cuda A100, redraw, 200 000
   - Weighted by jet share, for a 1000-jet analysis (e √(1000 f)): the 60–70 GeV width term is ≈ 0.5 se (r2) and 0.3 se (400k); the 140–170 GeV n_constituents term is ≈ 0.27 se.
 - **At high pT the effect sizes are 2–3× larger per jet, but they are diluted and only 2–4 σ significant.**
   - The pattern above 120 GeV is the same in all three models: n_constituents too high (+0.03 to +0.06), soft8_fraction, ptd and lead_fraction too low (−0.02 to −0.04). The surrogate's high-pT jets carry a few too many soft constituents.
-  - The spectrum above 170 GeV is short, slightly for set (−3 to −6 %) and strongly for PET (−29 %).
+  - The spectrum above 170 GeV is short, slightly for set (−3 to −6 %) and strongly for PET (−28 %).
 - **The spread ratios σ_s/σ_d are 0.98–1.02 below 120 GeV.** Above it they are 0.92–1.09, inside the noise.
 - **Consequence for the weighted-sample study (`dev/nle-weighted`):**
   - High-pT fidelity is measurably worse per jet. But at the current analysis selection (60–200 GeV, steeply falling) it is not the leading term, and the integrated shift does not improve with 2× jets per θ (m3a).
