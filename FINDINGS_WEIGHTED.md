@@ -343,3 +343,62 @@ This is consistent with (not contradicted by) the main session's finding that th
 shift does not improve with m3a — the low-pT-dominated integrated metric is insensitive to a
 high-pT-only gain this size. It supports continuing the weighted arm already underway (phases
 1–4 code, probe and the running `v2_w1` generation/training), rather than reopening it.
+
+## Phase 4: production launched at WEXPO = 5 (2026-10-26/27, user decision: "go ahead ... run with the default JEWEL value for WEXPO")
+
+**Decision, overriding the earlier recommendation:** WEXPO = 5, JEWEL's own hardcoded default
+(`weightex = 5.` in `jewel-2.6.0.f`), not the WEXPO = 3 this log had recommended from the ESS
+study and probe (both of which only measured k = 2 and k = 3 in the real binary — **k = 5 itself
+was never probed**, only estimated by reweighting jewel_v1's existing unweighted jets).
+
+**What WEXPO = 5 costs, from the reweighting study (`runs/w4/ess/ess_jewel.json`), pooled over
+all 972 points:**
+- Pooled acceptance ratio (weighted/unweighted) = **3.16×** (vs 2.40× at k = 3) — events needed
+  for a given jet count drop further, so this is cheaper per jet than k = 3.
+- Pooled total ESS/n = **0.14** (vs 0.50 at k = 3): for the *same accepted jet count* as an
+  unweighted sample, only 14 % of the statistical power survives, concentrated at high pT.
+- Per-point median ESS at a fixed 2200 accepted jets, by pT bin (60–70 … 170–200 GeV):
+  **91, 71, 55, 44, 67, 58, 80, 85** (jewel_v1 unweighted at the same count: 912, 509, 295, 175,
+  175, 73, 43, 16). The 60–70 GeV bin — the bin containing the leading, already-identified
+  surrogate defect (width/outer_fraction short, boundary leakage) — loses to **10 % of its
+  unweighted ESS** at matched jet count; 170–200 GeV gains ×5.3.
+- **Weight range w_max/w_min ≈ 31 500** (pooled), far above k = 3's ≈ 500: a small number of
+  very-high-pT-hat jets carry most of the weight. This is a real risk for the weighted loss and
+  for the weighted p(N\|θ) fit (a single extreme-weight jet can dominate a minibatch's gradient);
+  nothing in the code caps it, and no real-binary probe has checked k = 5's behaviour.
+
+**Production design (match jewel_v1's existing per-point jet count, i.e. "option A" scaled to
+k = 5's ratio):** chunks per point = ceil(jewel_v1's own achieved chunk count ÷ 3.16), read
+directly from jewel_v1's final `train/tasks.json` (972 points, 21–50 chunks unweighted →
+7–16 chunks weighted, none at the chunks_per_point cap of 100). **9415 tasks, 9.415 M events
+planned** (vs jewel_v1's 28.3 M), same 972-point grid, same box, `data/jewel_w1/train`. Projected
+cost by the same per-event scaling: **≈ 784 core-h ≈ 6.1 node-h** (unverified at k = 5; the
+probe's 0.97–1.04× s/event-unaffected-by-weighting finding was only measured at k = 2, 3).
+Validation and fidelity are **reused unweighted from `data/jewel_v1`** (no new JEWEL cost),
+per AGENTS.md rule 1 (pseudo data only from the simulator, unbiased).
+
+**Job chain (snapshot 6294671/`629467158d5...`, all via Slurm `--dependency=afterok`, no manual
+step needed to proceed from one stage to the next):**
+
+| stage | job | what | resources |
+|---|---|---|---|
+| 1. generate | **60358270** | `jewel_farm.sbatch`, 12-node array, 128 workers/node, `--wexpo 5`, `data/jewel_w1/train` | `-A alice -C cpu -q regular`, 2.5 h/node |
+| 2. index + merge | **60358284** (afterok 60358270) | `generate index` + `generate merge --shards 16 --workers 4` → `data/jewel_w1/merged` | 1 CPU node, 1.5 h |
+| 3. train | **60358288** (afterok 60358284) | 4 runs on `runs/w5/`: `set_d256_L6_200k`, `--weight-mode loss` seeds 0–2 + `sample` seed 0, trained against `data/jewel_w1/merged` (train) vs `data/jewel_v1/merged` (validation, unweighted), `jewel_multJ.pt` p(N\|θ) attached | `-A alice_g -C gpu -q regular`, 1 node × 4 A100, 4 h |
+
+**Toy arm, unchanged from earlier tonight, also chained:** `v2_w1` generation (60354888, 25/64
+done) → weighted training (60354914, afterok) → **`toy.ptbins` for all 4 w1 models vs jewel_v1...
+[sic, vs the main-session set r2/400k baseline]** (**60358305**, afterok 60354914, 4 GPUs,
+`runs/w1/ptbins/`).
+
+**Not done tonight, blocked on the other session (not this worktree's tree):** a `toy.ptbins`- or
+gate-style fidelity check for the weighted JEWEL models needs `data/jewel_v1`'s **fidelity**
+split merged (7262/7262 tasks complete but not yet `index`ed/merged — owned by `dev/nle-fidelity`).
+Until then, the weighted-JEWEL validation signal available is the trained flow's validation loss
+against `data/jewel_v1/merged`'s unweighted validation split (in each run's `run.json`), compared
+with `runs/jewel_r1b`'s existing unweighted-trained validation losses.
+
+**Open risk to check first thing:** the extreme weight range at k = 5 was never validated in the
+real binary (only k = 2, 3 were probed). If the weighted training's `run.json` ESS or loss curve
+looks unstable, or `generate index`/`merge` reports an implausible per-point ESS, that is the
+first thing to look at — the fallback is WEXPO = 3, already coded and probed.
