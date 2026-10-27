@@ -11,7 +11,7 @@ the main-study trees are read only.
 |---|---|---|---|---|---|
 | 2026-10-26 | 0 | 60353176 (`w0-ptbins-m3a`, gpu shared, 1 A100-40GB, nid001168) | 50 min, 0.21 GPU-node-h (¼ node) | done, 16/16 points | `toy.ptbins` of set m3a → `runs/w0/ptbins/set_m3a/` (snapshot a2e7dba, as the baseline) |
 | 2026-10-26 | 0 | login node, 1 core | ≈ 2 min | done | ESS vs k by reweighting (`runs/w0/ess/ess_reweight.py`) and biased toy draws at 3 points (`ess_direct.py`, snapshot e9b52fe) |
-| 2026-10-26 | 1 | 60354888 (`w1-gen`, cpu shared, 64 tasks × 2 cores, 20 min limit) | ≈ 0.5 core-h expected | submitted | `data/v2_w1`: v2_m2 design and train stream, 6000 jets/point, `--bias-k 3 --bias-cap 250` (snapshot 1bf9fdc) |
+| 2026-10-26 | 1 | 60354888 (`w1-gen`, cpu shared, 64 tasks × 2 cores, 20 min limit) | 0.85 core-h (sum of shard wall times; 80–100 s per task) | done, 64/64 | `data/v2_w1`: v2_m2 design and train stream, 6000 jets/point, `--bias-k 3 --bias-cap 250` (snapshot 1bf9fdc) |
 | 2026-10-26 | 2 | 60354914 (`w1-train4`, gpu regular, 1 node × 4 A100, 4 h limit, afterok 60354888) | ≈ 2 node-h expected | queued | `runs/w1/`: set d256 L6 200k (r2 settings) on v2_w1, `--weight-mode loss` seeds 0–2, `sample` seed 0; multC64 attached (`spec_w1.txt`) |
 | 2026-10-26 | 4 | login node | ≈ 3 min | done | WEXPO from ESS by reweighting jewel_v1 (`runs/w4/ess/ess_jewel.py`) |
 | 2026-10-26 | 0 | 60356967, 60356968 (`w0-ptbins-s1/s2`, gpu shared, 1 A100 each, 1.5 h limit) | ≈ 0.4 GPU-node-h expected | submitted | `toy.ptbins` of set s1 and s2 (main-study checkpoints `runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`), the seed spread for the weighted comparison → `runs/w0/ptbins/set_s{1,2}` (`run_ptbins_one.sbatch`) |
@@ -402,3 +402,12 @@ with `runs/jewel_r1b`'s existing unweighted-trained validation losses.
 real binary (only k = 2, 3 were probed). If the weighted training's `run.json` ESS or loss curve
 looks unstable, or `generate index`/`merge` reports an implausible per-point ESS, that is the
 first thing to look at — the fallback is WEXPO = 3, already coded and probed.
+
+## Phase 1: data `v2_w1` (2026-10-27)
+
+- **Generation:** `$JEST_NLE_ROOT/data/v2_w1`, job 60354888, snapshot 1bf9fdc (clean), CPU (shared QOS).
+  - 64 shards × 16 points × 6000 jets = 6 144 000 jets on the v2_m2 design and training stream (common random numbers with v2_m2), `--bias-k 3 --bias-cap 250 --bias-ref 100`.
+  - The validation files are symlinks to v2_m2's unbiased validation split, so the early-stopping metric is that of set r2.
+- **Acceptance** 0.29–0.54 (v2_m2 0.12–0.18).
+- **ESS per point:** median 3606 of 6000 (0.60, as predicted), range 2493–3765.
+- **Weight range:** max/min ≤ 72.1 per point, the cap's bound (250/60)³.
