@@ -26,7 +26,7 @@ Reference (round 2, `set_d256_L6_200k_multC64`): 1 FAIL, 23 with p < 0.01, const
 | 2026-10-26 | shift, high statistics | node B CPUs (data); node A GPU 3, shared-queue workers 60324273/75/76 (1 A100, 4 h) | ≈ 1 GPU-h per model (≈ 5.5 min per point) | all 7 done 12:22–14:31 | `data/v2_m3_shiftdirect`: 200 000 direct jets at each of the 11 shift points, new indices 1000–1010 of the development_scan stream (independent of the scan), snapshot 5d3e948 (generator unchanged, config sha 2c047d92). `gate shift --direct-dir` (046a3cb), 50 000 surrogate clouds per point, redraw, via `shell/nle/shift_queue.sh` and `runs/m3/shift_hi_queue.txt` → `runs/m3/shift_hi/<name>/`. Expected 11-point se ≈ 0.05σ (was 0.09) |
 | 2026-10-26 | S3 seed check, measurement | gates 60331580/81 (s1), 60331583/84 (s2), 60331586/87 (s3), regular, 1 node × 4 A100, 3 h; shift workers 60331582/85/88, shared, 1 A100, 2 h; all `--begin 14:55` | 6 node × ≤ 3 h, 3 × ≤ 2 GPU-h | shifts done 16:00–16:07 (nid003997, nid001064, nid003885); gates pending | gates of 400k seeds 1–3 with and without redraw (`fid_gate.sbatch`, snapshot 5d3e948 → `runs/m3/m2r3_set_d256_L6_400k_s{1,2,3}{,_redraw}`) and their high-statistics shifts (`runs/m3/shift_hi_queue_400k.txt`, snapshot 046a3cb). Each job runs through `runs/m3/after_ckpt.sh`, which waits up to 40 min for `checkpoint_mult.pt` (node A ends 15:16, training ends ≈ 14:50) |
 | 2026-10-26 | pT-differential fidelity | interactive node B 60323642, GPUs 1–3 (step 60323642.7; the 3-GPU step .4 was cancelled before computing) | 3 A100 × 50 min | set 400k, set r2 done 14:47 (16/16, ≈ 3 min per point); PET r2 13/16 at the allocation end, last 3 points as 60341127 (shared, 1 A100, done 16:55) | `toy.ptbins run` (snapshot a2e7dba), 16 gate points, redraw, set 400k / set r2 / PET r2 → `runs/m3/ptbins/<model>/` |
-| 2026-10-26 | resumes after node B ended | 60341127 (`ptbins-pet`, shared, 1 A100, 40 min), 60341128 (`gr-pet-r2-resume`, regular, 1 node, 1 h) | ≲ 1.5 GPU-h | submitted 16:35 | PET r2 ptbins points 104–120 (snapshot a2e7dba, `runs/m3/ptbins/run_ptbins_one.sh`); PET r2 redraw gate resume (snapshot 19ac616) |
+| 2026-10-26 | resumes after node B ended | 60341127 (`ptbins-pet`, shared, 1 A100, 40 min), 60341128 (`gr-pet-r2-resume`, regular, 1 node, 1 h) | ≲ 1.5 GPU-h | both **done**: 60341127 19:28 (16/16 points); 60341128 done 2026-10-27 07:16 (52 min, nid003141, 128/128 points) | PET r2 ptbins points 104–120 (snapshot a2e7dba, `runs/m3/ptbins/run_ptbins_one.sh`); PET r2 redraw gate resume (snapshot 19ac616) |
 
 ## S0: diagnostics on existing results (2026-10-25, login node, analysis only)
 
@@ -406,4 +406,44 @@ Same method as the partial section: snapshot 046a3cb, cuda A100, redraw, 200 000
   - High-pT fidelity is measurably worse per jet. But at the current analysis selection (60–200 GeV, steeply falling) it is not the leading term, and the integrated shift does not improve with 2× jets per θ (m3a).
   - A weighted sample should therefore be judged in the ≥ 120 GeV bins of `toy.ptbins`, and it matters most for a high-pT analysis or for JEWEL.
   - The low-pT boundary defect needs its own fix (S5b, to be discussed).
+
+## S1 re-gate result: PET r2, 128/128 with redraw (completed 2026-10-27 07:16)
+
+`runs/m3/pet_d256_L6_200k_multC64_redraw/gate/summary.json` (snapshot 19ac616), 128/128
+points complete, α/128 = 3.91e-4.
+
+| | set r2 (reference, round 2) | PET r2, with redraw |
+|---|---|---|
+| FAIL (family-wise p < α/128, relevant) | 1 | 1 (point 72) |
+| significant | — | 1 |
+| p < 0.01 | 23 | **57** |
+| global uniformity (KS of the 128 p-values vs. uniform) | not reported | **D = 0.835, p ≈ 9e-80** |
+
+- **The single FAIL is not the story here; the p-value distribution is.** 57 of 128 points
+  (45 %) have p < 0.01 under the null that p is uniform — the per-point family-wise test
+  before the α/128 Bonferroni correction is failing at roughly the rate you would see from a
+  real, broadly-distributed mismatch, not from a handful of outlier points. This is
+  consistent with (not independent evidence beyond) the `toy.ptbins` finding above that PET's
+  high-pT spectrum is short by 28 % above 170 GeV and its width/outer_fraction residuals at
+  low pT are the largest of the three models (−0.034 vs. −0.015 to −0.024) — PET is uniformly
+  worse, not worse-in-one-place.
+  - This complements, not supersedes, the **high-statistics shift** result in the table above:
+    PET r2's marginal b/T_ref/τ_init shift (+0.17/+0.17/−0.04σ, constrained bias 0.48) is
+    inside 0.2σ and similar to the 200k set models. The gate's family-wise test and the
+    11-point shift answer different questions — the shift integrates many observables toward
+    θ; the gate's per-point p-value is sensitive to any single observable's mismatch,
+    wherever in θ it occurs — and they agree that PET's systematics are broader, even though
+    the part that projects onto θ is not larger.
+- **Reading:** redraw does not fix PET's residual rate the way it fixed the single-point
+  issue in other models (e.g. the 400k seed-0 gate: 1 FAIL without redraw, 0 with redraw,
+  noted in the main thread's job table). PET's higher p<0.01 rate looks like the model
+  itself (architecture or the 200k training length — PET r2 is a 200k-step model, and the
+  400k vs. 200k comparison above shows training length is the dominant lever for the
+  b-shift), not a per-N selection-normalization artifact that redraw would remove.
+  Consistent with the shift table: PET r2 (+0.17, bias 0.48) sits with the 200k set group
+  (+0.06 to +0.14, bias 0.47–0.54), not with the 400k group (−0.02 to −0.05, bias 0.33–0.38).
+- **No action implied beyond what S3 (longer training) already addresses.** Not re-running
+  PET at 400k steps unless the user wants a PET-architecture data point at that length — the
+  d384/m3a capacity and data checks already showed capacity/data are not the lever, and nothing
+  here suggests PET specifically needs separate investigation before training length is tried.
 
