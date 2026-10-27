@@ -263,3 +263,24 @@ acceptance per event, even though per-jet ESS at low pT is worse for the same ac
   both support staging this way.
 - **Not yet decided (pending user):** WEXPO value, which option (A/B/C or a custom target), and
   tranche-first vs. a single commit. No tasks have been planned or submitted for this production.
+
+## Correction: PYTHIA 8 `bias2Selection` reference values (2026-10-27, user-supplied, verified against the manual)
+
+The Pythia 8 analogy cited throughout this log (and in `HANDOFF_WEIGHTED.md`) is
+`PhaseSpace:bias2Selection` / `PhaseSpace:bias2SelectionPow`
+(https://pythia8.web.cern.ch/manuals/pythia8318/PhaseSpaceCuts.html, verified 2026-10-27):
+oversampling by `(pTHat/pTRef)^pow`, a compensating weight `(pTRef/pTHat)^pow` from
+`Info::weight()`. **`bias2SelectionPow` defaults to 4.0** (range 0–10) — no default had been
+recorded here before.
+
+- **JEWEL's own WEXPO lacks the `pTRef` scale:** `PYEVWT` computes `WTXS = pT-hat^WEXPO`
+  directly (`:80201`-area of `pythia6425mod-lhapdf6.f`), and JEWEL's own hardcoded default is
+  **WEXPO = 5** (`jewel-2.6.0.f`: `weightex = 5.`), higher than Pythia 8's own upstream default.
+  Our config sets `WEIGHTED F` explicitly, so neither default applies unless `--wexpo` is used.
+- **The missing `pTRef` does not matter here:** `merge` already renormalises the weights per
+  point to sum to that point's accepted jets, which absorbs any overall scale JEWEL's
+  convention omits.
+- **Corroborates, does not change, the WEXPO = 3 recommendation:** 3 sits below both Pythia 8's
+  own default (4) and JEWEL's hardcoded one (5), i.e. it is conservative relative to existing
+  practice; the number itself was derived independently from the ESS study and the probe for
+  this selection and physics, not from either default.
