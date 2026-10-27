@@ -14,7 +14,7 @@ the main-study trees are read only.
 | 2026-10-26 | 1 | 60354888 (`w1-gen`, cpu shared, 64 tasks × 2 cores, 20 min limit) | ≈ 0.5 core-h expected | submitted | `data/v2_w1`: v2_m2 design and train stream, 6000 jets/point, `--bias-k 3 --bias-cap 250` (snapshot 1bf9fdc) |
 | 2026-10-26 | 2 | 60354914 (`w1-train4`, gpu regular, 1 node × 4 A100, 4 h limit, afterok 60354888) | ≈ 2 node-h expected | queued | `runs/w1/`: set d256 L6 200k (r2 settings) on v2_w1, `--weight-mode loss` seeds 0–2, `sample` seed 0; multC64 attached (`spec_w1.txt`) |
 | 2026-10-26 | 4 | login node | ≈ 3 min | done | WEXPO from ESS by reweighting jewel_v1 (`runs/w4/ess/ess_jewel.py`) |
-| 2026-10-26 | 4 | 60355573 (`w4-jewel-probe`, cpu debug, 1 node, 30 min) | ≤ 0.5 node-h (approved by the user) | submitted | weighted JEWEL probe, 4 grid points × WEXPO 2, 3 × 4 tasks × 1000 events → `runs/w4/probe/wexpo{2,3}` (snapshot 6294671) |
+| 2026-10-26 | 4 | 60355573 (`w4-jewel-probe`, cpu debug, 1 node, 30 min; nid004206) | 9 min 55 s, 0.17 node-h (budget ≤ 0.5 approved by the user) | done, 32/32 tasks rc 0 | weighted JEWEL probe, 4 grid points × WEXPO 2, 3 × 4 tasks × 1000 events → `runs/w4/probe/wexpo{2,3}` (snapshot 6294671) |
 
 ## Phase 0: choice of the bias exponent k (2026-10-26, login node, analysis only)
 
@@ -186,3 +186,40 @@ tasks `rc = 0`. Analysis: `runs/w4/probe/analyze_probe.py` → `probe_results.js
 - **Open before a production budget:** a probe at a few interior grid points (not just corners) to
   confirm the acceptance-ratio trend, and a decision on WEXPO (3 is the current candidate; the
   low-pT cost at weak quenching argues against going higher).
+
+**Weighted JEWEL probe** (job 60355573, snapshot 6294671, CPU, nid004206; `runs/w4/probe/analyze_probe.py` → `probe_summary.json`):
+- **Design:** 4 jewel_v1 grid points (b, TI, TAUI) = (0, 0.9, 0.2), (5, 0.5, 0.6), (7, 0.3, 0.8), (11, 0.1, 1.0) × WEXPO 2 and 3, 4 tasks × 1000 events each.
+- **Comparison:** the jewel_v1 tasks at the same grid points (unweighted; 21 000–35 000 events and 2103–2762 jets per point).
+- **Seeds:** the WEXPO 2 and 3 tasks share NJOB values, so the two settings are correlated with each other but independent of jewel_v1.
+
+| | 60–70 | 70–80 | 80–90 | 90–100 | 100–120 | 120–140 | 140–170 | 170–200 | acceptance per event |
+|---|---|---|---|---|---|---|---|---|---|
+| jewel_v1, jets per 1000 events | 35.6 | 20.6 | 12.2 | 7.1 | 6.7 | 3.0 | 1.6 | 0.6 | 0.061–0.132 |
+| WEXPO 2, ESS per 1000 events | 37.8 | 24.2 | 16.6 | 13.0 | 14.8 | 9.2 | 7.2 | 3.9 | 0.127–0.198 |
+| ratio | 1.06 | 1.17 | 1.36 | 1.82 | 2.22 | 3.1 | 4.6 | 6.1 | |
+| WEXPO 3, ESS per 1000 events | 34.4 | 23.2 | 16.3 | 13.3 | 15.0 | 11.6 | 11.5 | 7.2 | 0.174–0.232 |
+| ratio | **0.97** | 1.13 | 1.34 | 1.86 | 2.25 | **3.9** | **7.3** | **11.0** | |
+
+(Means over the 4 points. The top bins rest on 20–30 weighted jets per point, so they are uncertain to ≈ 20 %.)
+
+- **Weighting does not change the JEWEL time per event:**
+  - WEXPO 2 / 3: 0.404 / 0.403, 0.297 / 0.305, 0.194 / 0.191, 0.029 / 0.029 s at the four points;
+  - jewel_v1: 0.400, 0.300, 0.187, 0.030 s.
+  - CPU therefore scales with events. Biasing to higher pT-hat raises the acceptance (fewer events below the 60 GeV cut) and offsets the weight dilution.
+- **Per CPU-hour, WEXPO 3 is free at low pT and gives ×4–11 above 120 GeV.** WEXPO 2 gives ×3–6 at no low-pT cost.
+  - This supersedes the fixed-jet-count reading of the reweighting table above. That table is right per stored jet, but in JEWEL the cost is per event, not per jet.
+- **Weighted moments vs the unweighted jets** (pull z = Δ/se per point; "combined" = Σz/2):
+
+| WEXPO | ⟨jet pT⟩ pulls | combined | ⟨N⟩ pulls | combined |
+|---|---|---|---|---|
+| 2 | +0.73, −0.46, +0.35, −0.16 | +0.23 | +1.53, +0.07, −0.81, +1.03 | +0.91 |
+| 3 | −0.26, −1.14, −0.52, −0.79 | −1.35 | −1.13, −0.47, −1.65, −0.30 | −1.77 |
+
+  - Shares of jets ≥ 120 GeV agree within 0.006.
+  - The WEXPO 3 means are all slightly low, but < 2σ combined. They need a larger check before relying on them, e.g. a weighted fidelity sample against the unweighted one in `toy.ptbins`-style bins.
+- **Production estimate** (WEXPO 3, the 972-point grid, the same events per point as jewel_v1, ≈ 29 000):
+  - CPU equals jewel_v1: 2356 core-h ≈ 18 CPU node-h;
+  - ≈ 2× the stored jets (≈ 4.5 M);
+  - the same low-pT statistics and ×4–11 above 120 GeV;
+  - with event stores, ≈ 600 GB more on CFS (jewel_v1: 601 GB); without them (`--no-events`), ≈ 2 GB of jets.
+  - It needs a budget approved by the user (rule 8).
