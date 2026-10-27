@@ -69,3 +69,34 @@ handoff's "w = (P0/P_ref)^k" has the sign inverted; phase 1 uses w = (P0/P_ref)^
 ## Phase 0: set m3a in `toy.ptbins` (pending)
 
 Job 60353176 (gpu shared, 1 A100): set m3a (`runs/m2r3/set_d256_L6_200k_m3a/checkpoint_mult.pt`, multC64 attached), same settings and snapshot as the main-study baseline (a2e7dba: redraw, 22 000 clouds, gate points 0, 8, …, 120) → `runs/w0/ptbins/set_m3a/`. The decision rule is from the handoff: if m3a is better than set r2 in the ≥ 120 GeV bins, high pT is data-limited and the weighted arm is the fix.
+
+## Phases 1–2: code (2026-10-26)
+
+**Weighted toy generation** (`toy/simulator_v2.py`, `toy/config.py`, `toy/datasets.py`):
+- **Bias option:** `PtBias(exponent k, ref_GeV, cap_GeV)` is a sampling option, not part of `[toy]`, so the config file, `toy_config_sha256` and the backend id stay those of v2. It is selected with `datasets generate --bias-k K [--bias-cap C] [--bias-ref R]`; `gen_toy_array.sbatch` forwards extra arguments.
+- **Draw:** `draw_hard_pt` samples pT^-(n−k) below the cap and pT^-n above it, by a piecewise inverse transform with a log-uniform branch for n − k = 1. Unbiased, it evaluates the old expression, so the records are bit-identical (cross-host test passes).
+- **Weights:** per selected jet, w = 1/b(P0), normalised so that Σw = number of jets at each point. The records carry `weight` and `pthat`.
+- **Shards:** optional datasets `weight` and `pthat`, plus attrs `sampling_bias` (JSON). The bias is also recorded in the shard manifest (with per-point ESS and weight range in each point's `toy.sampling_bias`) and in the index (`sampling_bias`).
+- **Reader:** `read_shards` returns `weight`, as ones for old shards. Counts-only shards refuse a bias.
+
+**Weighted training** (`sbi/flow.py`, `sbi/multiplicity.py`, `toy/train.py`):
+- **Options:** `TrainOptions.weight_mode` / `toy.train --weight-mode none|loss|sample`.
+  - `loss`: Σwℓ/Σw per minibatch.
+  - `sample`: minibatch indices ∝ w through a precomputed CDF (`searchsorted`); with length buckets, a bucket is drawn ∝ its weight sum and the events inside it ∝ w.
+- **Validation and p(N|θ):** the validation loss is weighted in both modes. The p(N|θ) NLL is weighted whenever the mode is not `none` (the multC64 attach is the production p(N|θ); the weighted NLL is the cross-check).
+- **Unchanged path:** with `none`, nothing changes. With all-ones weights in `loss` mode, the loss equals the mean exactly and training is bit-identical (test).
+- **run.json:** `data.weights` gives the ESS per split, per point and per point × `toy.ptbins` pT bin (median, 10th percentile); `flow_history.weights` gives the mode, ESS and weight range.
+
+**Tests:**
+- `tests/sbi/test_weighted.py`:
+  - P0 histogram against the biased density for 5 (k, cap) settings including k = 4;
+  - weighted P0 moments equal the unbiased ones;
+  - biased toy jets weighted back to the unbiased jet pT, N, P0 and share above 120 GeV;
+  - zero bias equals the unbiased toy;
+  - shard round trip, index, CLI, and old shards reading as unit weights;
+  - the train driver in both modes.
+- `tests/sbi/test_weighted_training.py`:
+  - unit-weight loss exact, and training bit-identical;
+  - weighted minibatch frequencies with and without buckets;
+  - a weighted flow fit on a 1D toy (biased N(1, 1), weights e^−x) recovers N(0, 1) in both modes, while unweighted training gives N(1, 1);
+  - a weighted p(N) fit recovers Poisson(12) from Poisson(13.8) draws.

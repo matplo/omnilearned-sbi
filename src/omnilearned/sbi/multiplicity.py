@@ -93,12 +93,14 @@ class MultiplicityModel(nn.Module):
 
 def train_multiplicity(model, cond, n, val_cond, val_n, steps=4000, batch_size=4096,
                        lr=1e-3, weight_decay=1e-5, seed=0, device="cpu", val_every=250,
-                       log=print):
+                       log=print, weights=None, val_weights=None):
     """Fit by maximum likelihood (cross entropy); keep the best validation state.
 
     Args:
         cond, val_cond: [N, C] float tensors of normalized unknown parameters.
         n, val_n: [N] integer multiplicities.
+        weights, val_weights: optional [N] per-event sampling weights; the NLL is then
+            the weighted mean sum(w nll) / sum(w).
     Returns:
         (best model on CPU, history)
     """
@@ -108,6 +110,8 @@ def train_multiplicity(model, cond, n, val_cond, val_n, steps=4000, batch_size=4
     model = model.to(dev).float()
     cond, n = cond.float().to(dev), torch.as_tensor(n).long().to(dev)
     val_cond, val_n = val_cond.float().to(dev), torch.as_tensor(val_n).long().to(dev)
+    w = None if weights is None else torch.as_tensor(weights, dtype=torch.float32).to(dev)
+    vw = None if val_weights is None else torch.as_tensor(val_weights, dtype=torch.float32).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
     hist = {"step": [], "train_nll": [], "val_nll": []}
@@ -115,7 +119,8 @@ def train_multiplicity(model, cond, n, val_cond, val_n, steps=4000, batch_size=4
     for step in range(steps):
         model.train()
         idx = torch.randint(0, n.shape[0], (min(batch_size, n.shape[0]),), generator=gen).to(dev)
-        loss = -model.log_prob(n[idx], cond[idx]).mean()
+        lp = model.log_prob(n[idx], cond[idx])
+        loss = -lp.mean() if w is None else -(lp * w[idx]).sum() / w[idx].sum()
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
@@ -124,7 +129,8 @@ def train_multiplicity(model, cond, n, val_cond, val_n, steps=4000, batch_size=4
         if (step + 1) % val_every == 0 or step + 1 == steps:
             model.eval()
             with torch.no_grad():
-                vl = float(-model.log_prob(val_n, val_cond).mean())
+                vlp = model.log_prob(val_n, val_cond)
+                vl = float(-vlp.mean() if vw is None else -(vlp * vw).sum() / vw.sum())
             k = (step + 1) % val_every or val_every
             hist["step"].append(step + 1)
             hist["train_nll"].append(running / k)

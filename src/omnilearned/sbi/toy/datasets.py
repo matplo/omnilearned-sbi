@@ -14,7 +14,10 @@ Shards (``generate_shard``): one HDF5 file per job, JEST-like layout
     event_id [n] int64 (stream-tagged), point_id [n] int32
 
 with the hidden generator diagnostics in a separate ``*.diag.h5`` file that
-training and fitting never read. Jets at point ``p`` of split ``s`` come from
+training and fitting never read. Shards drawn with a hard-pT sampling bias
+(``generate --bias-k``) also hold ``weight`` [n] (per-jet, summing to the jets of
+each point) and ``pthat`` [n], and attrs["sampling_bias"]; without them a jet's
+weight is 1. Jets at point ``p`` of split ``s`` come from
 ``rng_for(seed_s, STREAMS[s], p)``, so a shard does not depend on how points
 are grouped into jobs. Each shard has a JSON manifest: per point the toy
 manifest (attempted, accepted, acceptance, rejections), ``array_sha256``
@@ -49,6 +52,7 @@ from omnilearned.sbi.toy.config import (
 )
 from omnilearned.sbi.toy.design import STREAMS, reserved_settings, rng_for
 from omnilearned.sbi.toy.simulator import PARAMETERS
+from omnilearned.sbi.toy.simulator_v2 import PtBias
 
 SHARD_SCHEMA = "toy-shard-v1"
 BOX = {"b": (0.0, 11.0), "T_ref": (0.25, 0.55), "tau_init": (0.2, 1.2)}
@@ -136,8 +140,10 @@ def _dataset(f, name, data, **kw):
     return f.create_dataset(name, data=data, track_times=False, **kw)
 
 
-def write_shard(path, parts, split, backend, toy_config_sha256):
-    """parts: list of (point_id, theta, records). Returns (file sha256, diag sha256)."""
+def write_shard(path, parts, split, backend, toy_config_sha256, sampling_bias=None):
+    """parts: list of (point_id, theta, records). Returns (file sha256, diag sha256).
+
+    Records with ``weight`` (biased draws) also write ``weight`` and ``pthat``."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     cat = lambda k: np.concatenate([r[k] for _, _, r in parts])  # noqa: E731
@@ -152,6 +158,9 @@ def write_shard(path, parts, split, backend, toy_config_sha256):
     glob = np.column_stack([theta, cat("jet_pt"), cat("jet_eta"), cat("jet_phi"),
                             nconst.astype(np.float64)]) if n else np.zeros((0, len(GLOBAL_NAMES)))
     pid = np.concatenate([np.full(r["x"].shape[0], p, np.int32) for p, _, r in parts])
+    weighted = {"weight" in r for _, _, r in parts}
+    if len(weighted) > 1:
+        raise ValueError("all points of a shard must be weighted or none")
     chunk = lambda c: tuple(min(a, b) for a, b in zip(c, x.shape)) if n else None  # noqa: E731
     with h5py.File(path, "w", track_order=False) as f:
         _dataset(f, "data/x", x, compression="gzip", chunks=chunk(X_CHUNK))
@@ -161,6 +170,10 @@ def write_shard(path, parts, split, backend, toy_config_sha256):
         g.attrs["global_names"] = list(GLOBAL_NAMES)
         _dataset(f, "event_id", cat("event_id").astype(np.int64))
         _dataset(f, "point_id", pid)
+        if weighted == {True}:
+            _dataset(f, "weight", cat("weight").astype(np.float64))
+            _dataset(f, "pthat", cat("pthat").astype(np.float64))
+            f.attrs["sampling_bias"] = json.dumps(sampling_bias)
         f.attrs["schema"] = SHARD_SCHEMA
         f.attrs["backend"] = backend
         f.attrs["split"] = split
@@ -210,17 +223,23 @@ def read_counts(paths):
 
 
 def generate_shard(out, split, point_ids, points, jets_per_point, config=V2_CONFIG, log=print,
-                   counts_only=False):
+                   counts_only=False, bias=None):
     """Draw ``jets_per_point`` selected jets at each point and write one shard + manifest.
 
-    ``counts_only`` writes only the multiplicities (``write_counts_shard``)."""
+    ``counts_only`` writes only the multiplicities (``write_counts_shard``). ``bias``
+    (``PtBias``) draws the hard pT with a sampling bias and stores per-jet weights."""
+    if bias is not None and not bias.active:
+        bias = None
+    if bias is not None and counts_only:
+        raise ValueError("counts-only shards have no weights; draw biased jets as full shards")
     cfg, _, _ = load_toy_config(config)
     seed = int(cfg["randomness"][SPLIT_SEED[split]])
     start = time.time()
     parts, per_point = [], []
     for pid, th in zip(point_ids, points):
         t0 = time.time()
-        rec, man = sample_setting(th, jets_per_point, seed, stream=split, index=int(pid), path=config)
+        rec, man = sample_setting(th, jets_per_point, seed, stream=split, index=int(pid), path=config,
+                                  bias=bias)
         if not man["complete"]:
             raise RuntimeError(f"point {pid} {th} incomplete: {man}")
         per_point.append({"point_id": int(pid), "theta": [float(v) for v in th], "toy": man,
@@ -236,7 +255,8 @@ def generate_shard(out, split, point_ids, points, jets_per_point, config=V2_CONF
     if counts_only:
         sha, dsha = write_counts_shard(out, parts, split, cfg["backend"], cfg_sha), None
     else:
-        sha, dsha = write_shard(out, parts, split, cfg["backend"], cfg_sha)
+        sha, dsha = write_shard(out, parts, split, cfg["backend"], cfg_sha,
+                                sampling_bias=None if bias is None else bias.to_dict())
     manifest = {"schema": COUNTS_SCHEMA if counts_only else SHARD_SCHEMA,
                 "file": Path(out).name, "sha256": sha,
                 "diag_file": None if counts_only else Path(out).with_suffix(".diag.h5").name,
@@ -244,6 +264,7 @@ def generate_shard(out, split, point_ids, points, jets_per_point, config=V2_CONF
                 "split": split, "backend": cfg["backend"], "toy_config": str(config),
                 "toy_config_sha256": cfg_sha, "seed": seed, "seed_key": SPLIT_SEED[split],
                 "stream": STREAMS[split], "jets_per_point": int(jets_per_point),
+                "sampling_bias": None if bias is None else bias.to_dict(),
                 "n_jets": int(sum(len(r["event_id"]) for _, _, r in parts)),
                 "points": per_point, "wall_seconds": time.time() - start, "host": host_info()}
     with open(Path(out).with_suffix(".json"), "w") as f:
@@ -272,6 +293,8 @@ def write_index(directory, split, pattern=None):
              "n_points": len(pids), "n_jets": int(sum(m["n_jets"] for m in mans)),
              "acceptance_range": [float(acc.min()), float(acc.max())] if acc.size else None,
              "backend": sorted({m["backend"] for m in mans}),
+             "sampling_bias": [json.loads(b) for b in sorted({json.dumps(m.get("sampling_bias"), sort_keys=True)
+                                                              for m in mans})],
              "toy_config_sha256": sorted({m["toy_config_sha256"] for m in mans})}
     with open(directory / f"index_{split}.json", "w") as f:
         json.dump(index, f, indent=1)
@@ -289,7 +312,9 @@ def shard_paths(directory, split):
 
 
 def read_shards(paths, trim=True):
-    """Concatenated arrays of shard files: x, mask, n_constituents, theta, global, ids."""
+    """Concatenated arrays of shard files: x, mask, n_constituents, theta, global, ids, weight.
+
+    ``weight`` is the per-jet sampling weight; shards without one (unbiased) read as 1."""
     paths = [Path(p) for p in paths]
     width = 1
     for p in paths:
@@ -298,7 +323,7 @@ def read_shards(paths, trim=True):
             width = max(width, int(n.max()) if n.size else 1)
             full = int(f.attrs["max_constituents"])
     w = width if trim else full
-    out = {k: [] for k in ("x", "mask", "n_constituents", "global", "event_id", "point_id")}
+    out = {k: [] for k in ("x", "mask", "n_constituents", "global", "event_id", "point_id", "weight")}
     names = None
     for p in paths:
         with h5py.File(p, "r") as f:
@@ -311,6 +336,8 @@ def read_shards(paths, trim=True):
             names = list(f["global"].attrs["global_names"])
             out["event_id"].append(f["event_id"][...])
             out["point_id"].append(f["point_id"][...])
+            out["weight"].append(f["weight"][...] if "weight" in f
+                                 else np.ones(f["point_id"].shape[0], np.float64))
     out = {k: np.concatenate(v) for k, v in out.items()}
     out["global_names"] = names
     out["theta"] = out["global"][:, :len(PARAMETERS)]
@@ -370,6 +397,11 @@ def _cli(argv=None):
     g.add_argument("--split", default=None, choices=sorted(SPLIT_SEED),
                    help="draw with this split's stream and seed instead of the design's "
                         "(e.g. fidelity samples at validation points)")
+    g.add_argument("--bias-k", type=float, default=0.0,
+                   help="hard-pT sampling bias exponent k: P0 ~ pT^-(n-k), jets weighted by "
+                        "(min(P0, cap)/ref)^-k (0: unbiased)")
+    g.add_argument("--bias-ref", type=float, default=100.0, help="bias reference pT [GeV]")
+    g.add_argument("--bias-cap", type=float, default=None, help="bias saturates above this P0 [GeV]")
     i = sub.add_parser("index", help="merge shard manifests of a split")
     i.add_argument("--dir", required=True)
     i.add_argument("--split", required=True)
@@ -418,7 +450,9 @@ def _cli(argv=None):
         if a.skip_existing and out.with_suffix(".json").exists():
             print(f"shard {k}: exists, skipped")
             return
-        m = generate_shard(out, split, pid[rows], pts[rows], a.jets, a.config, counts_only=a.counts_only)
+        bias = PtBias(a.bias_k, a.bias_ref, a.bias_cap) if a.bias_k else None
+        m = generate_shard(out, split, pid[rows], pts[rows], a.jets, a.config, counts_only=a.counts_only,
+                           bias=bias)
         print(f"shard {k}: {m['n_jets']} jets, {len(rows)} points, {m['wall_seconds']:.1f}s -> {out}")
     else:
         idx = write_index(a.dir, a.split)
