@@ -945,6 +945,68 @@ Revision 81a818c (clean), torch 2.14.1+cu130, CUDA 13.0 available. Report
 **116 passed, 0 failed, 7 skipped** (the 7 MPS tests), exit 0, 9 min 13 s. The 6 CUDA tests
 that the CPU report skipped pass.
 
+### N = 1000 closure: ridge-following lattice scan (option 4), implemented and launched (2026-10-26/27)
+
+User decision (2026-10-26): of the grid-resolution options above, **option 4** — a
+posterior-aligned scan, redesigned here as a ridge-following lattice rather than a nested
+box refinement — and checkpoint **set_d256_L6_400k seed 0**
+(`runs/m2r3/set_d256_L6_400k/checkpoint_mult.pt`, sha `a297fd9f…`).
+
+- **Code** (`src/omnilearned/sbi/ridge.py`, new; `scan.py`, `fit.py`, `toy/closure.py`
+  touched): a lattice θ(s, u) = (s, m(s) + L(s)u) along the long (b) axis, m/L piecewise
+  linear between knots with an exact Jacobian. `locate_ridge` finds the knots by marching
+  outward from a cheap coarse-grid maximum (16-step/2-probe likelihood) rather than reading
+  knot range off the coarse grid directly — a coarse box grid does not stay connected across
+  a strongly curved ridge, so the march starts at small steps, doubles on convergence, halves
+  on failure, and bisects by chord tolerance (0.25σ) for curvature; it stops at the prior
+  bound or a 15-log-post drop. `ridge_scan` then runs a support scan on the (s, u) lattice
+  (u ∈ [−6, 6]σ at h = 1.5σ, s steps of 0.5) with log prior = uniform prior + log|J|.
+  `tests/sbi/test_ridge.py`: analytic curved tube, Jacobian/inverse, locate accuracy against
+  a prior-truncated reference, scan vs. analytic χ²(3) joint levels (lattice-resolution error
+  documented: ≈ ±0.05 in joint level at h = 1.5σ vs. ±0.015 at 1.0σ; marginal credible-interval
+  tails converge from 6 % of σ at a 0.25 step to 1 % at 0.125), 2D lattice vs. dense-grid
+  match, save/load dispatch, `fit.py` ridge-mode cache resume. Full `tests/sbi`: **123
+  passed, 7 skipped**. Committed `54de15b`, pushed, snapshotted.
+- **Near-miss, caught:** the acceptance/numerics job for this campaign (60354745) was
+  launched before the ridge code was committed/snapshotted, against the old snapshot
+  (4112ec2). After I switched `m5.env`'s `SNAP` post-commit, that already-running job would
+  still have used the stale `PYTHONPATH` for the rest of its single continuous script —
+  including phase 3 (fits). The old `fit.py`'s dispatch has no `ridge` branch; its catch-all
+  `elif mode == "fixed_vector":` would have silently run a full dense box-grid `joint_scan`
+  over `[fit.grid]` instead (the already-rejected, too-coarse approach), burning GPU time and
+  sealing wrong results under the real campaign directories. Caught before phase 3; job
+  cancelled at the acceptance-table stage (one shard's output, which is checkpoint/axis data
+  and snapshot-independent, was kept and reused). Relaunched clean (60356724) once `SNAP`
+  pointed at `54de15b` throughout.
+- **Acceptance table:** (6, 4, 4) nodes, range [0.9456, 0.9860].
+- **Numerics check (rule 6): PASS.** Single-seed [0.021, 0.122, 0.030], seed-averaged
+  [0.029, 0.103, 0.267], probe std [0.03, 0.11, 0.291] vs. limit 0.5 (12 test / 12 reference
+  seeds, same Fisher-direction pairs as `dev_N1000_setR2`).
+  `prepare` on both `dev_N1000_set400k_toy` (10 × 1000, direct simulator) and
+  `_control` (10 × 1000, surrogate self-closure) succeeded.
+- **Measured cost (new; supersedes the earlier 15–30 and 25–50 node-h guesses):** phase 3
+  claimed 4 fits (one per GPU, `PER=1`) before the interactive allocation's 3 h limit hit.
+  Throughput matches the known rate, ~21–22 s/candidate on an A100 (e.g. worker g2: 138
+  candidates in 2931 s = 21.2 s/candidate). But the ridge lattice's own size is **1863
+  candidates per fit** at this step/h — above the 700–1500 planning estimate. That is **≈ 11
+  h per fit on one GPU**, so **≈ 220 GPU-h (≈ 55 node-h) for the 20 fits**. This lands inside
+  the 50–200 node-h range already estimated for resolving this ridge by nested box
+  refinement (option 1, previous entry), so the overall budget picture is not changed, but my
+  specific "ridge should be cheaper" estimate was too optimistic; it is not actually cheaper
+  than nested refinement here, just a different way to spend a similar budget while covering
+  the full ridge length rather than a local box.
+- **Status:** no fits sealed yet; all 4 in-flight fits have resumable caches
+  (`logp_cache.npz`, `logp_cache_locate.npz`). Running via `shell/nle/m5_drive.sh
+  runs/m5/dev_N1000_set400k 16` (nohup, PID 1032178, login node), which chains 4 h
+  interactive allocations until `DONE`/`STOP`/two stalled chunks, budgeted for ≈ 64 h of
+  attempts against the ≈ 55 node-h estimate above.
+- **Still open:** the single-fit nested check (finer Δs/h on one fit, lesson 2) has not been
+  run — it was supposed to precede the 20-fit launch but the campaign's fits auto-started in
+  the same chunk once `prepare` finished. Since fits are independently resumable from cache,
+  this does not invalidate what is running; the nested check should still be done (e.g. once
+  `fit_0000` seals, or as a separate finer-resolution rerun of it) before trusting the
+  reported widths/coverage.
+
 ## Open items
 
 ### To do (2026-10-25, user request): surrogate fidelity improvement, `docs/SURROGATE_FIDELITY_PLAN.md`
