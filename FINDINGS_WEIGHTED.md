@@ -100,3 +100,39 @@ Job 60353176 (gpu shared, 1 A100): set m3a (`runs/m2r3/set_d256_L6_200k_m3a/chec
   - weighted minibatch frequencies with and without buckets;
   - a weighted flow fit on a 1D toy (biased N(1, 1), weights e^−x) recovers N(0, 1) in both modes, while unweighted training gives N(1, 1);
   - a weighted p(N) fit recovers Poisson(12) from Poisson(13.8) draws.
+
+## Phase 4 (JEWEL), started in parallel with the toy arm (user, 2026-10-26)
+
+**JEWEL's weighting, from the installed source** (`hepyy_packages/src/jewel-2.6.0-custom-src`):
+- `WEIGHTED T` sets `MSTP(142) = 1`. `PYEVWT` returns WTXS = (pT-hat²)^(WEXPO/2) = pT-hat^WEXPO (`pythia6425mod-lhapdf6.f:80201`).
+- PYTHIA then samples dσ × WTXS and sets `PARI(10) = VINT(100) = 1/WTXS` (`:10246`, `:24912`). This is the HepMC event weight (`custom-partons.patch`), so **w = pT-hat^−WEXPO exactly**, with no running normalisation. It is the toy's bias without a cap; PTMAX = 400 GeV bounds the weights.
+- JEWEL's own defaults are `weighted = .true.` and `WEXPO = 5`. Our cards set `WEIGHTED F` explicitly.
+
+**WEXPO from ESS, by reweighting jewel_v1** (`runs/w4/ess/ess_jewel.py` → `ess_jewel.json`; 2 199 271 training jets, 972 points; acceptance per event and the all-event pT-hat prior from the event stores of 40 random tasks):
+
+| WEXPO k | 60–70 | 70–80 | 80–90 | 90–100 | 100–120 | 120–140 | 140–170 | 170–200 | total ESS / n | within-bin ESS fraction (pooled) | acceptance vs unweighted | w max/min |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 (jewel_v1) | 912 | 509 | 295 | 175 | 175 | 73 | 43 | **16** | 1 | 1 | 1 (0.082) | 1 |
+| 2 | 546 | 364 | 247 | 170 | 210 | 120 | 98 | 53 | 0.73 | 0.75–0.87 | 1.8 | 63 |
+| 3 | 347 | 247 | 179 | 130 | 175 | 117 | 112 | **76** | 0.50 | 0.52–0.73 | 2.4 | 500 |
+| 4 | 191 | 143 | 108 | 83 | 119 | 92 | 105 | 88 | 0.29 | 0.31–0.57 | 3.0 | 4000 |
+| 5 | 91 | 71 | 55 | 44 | 67 | 58 | 80 | 85 | 0.14 | 0.17–0.41 | 3.2 | 31 000 |
+
+(ESS per point for 2200 jets, the jewel_v1 median; medians over points.)
+- **The weights are less efficient than in the toy.** At k = 3 the within-bin ESS fraction is 0.52–0.73 (toy 0.83): pT-hat is spread more widely at fixed jet pT (energy loss, out-of-cone radiation, recoils), and 12.7 % of the selected jets have pT-hat < 60 GeV (the 1/50/99 % quantiles of their pT-hat are 51 / 80 / 180 GeV).
+- **The high-pT gain saturates at k ≈ 3–4:**
+  - 170–200 GeV: ×3.3 (k = 2), ×4.8 (k = 3), ×5.5 (k = 4), ×5.3 (k = 5);
+  - 60–70 GeV: ×0.60, 0.38, 0.21.
+  - **Candidate: WEXPO = 3** (2 as the conservative alternative). JEWEL's default 5 would cost ×10 at low pT for no high-pT gain.
+- **Cost:** jewel_v1 averages 0.30 s/event (0.03–0.60, correlation +0.94 with TI; 2356 core-h for 28.3 M events). Weighting cuts the events per jet by ×2.4 (k = 3), but higher-pT-hat events take longer. The cost per event is measured only by a probe.
+
+**Code** (`jewel/cards.py`, `jewel/generate.py`):
+- **Option:** `generate plan --wexpo K` records `sampling = {"wexpo": K}` in each task (top-ups copy it). `cards.task_cards(..., sampling=)` writes `WEIGHTED T` and `WEXPO K` and refuses WEIGHTED/WEXPO in `extra`. `[jewel]` (with `weighted = false`) is unchanged, so the backend id and config hash stay.
+- **Task shards:** weighted tasks write `weight` (the raw HepMC weight) and `pthat`, plus attrs `sampling_bias`. Unweighted tasks keep the old format exactly.
+- **Merge:** `merge` rescales the weights per point to Σw = n_jets, records the ESS per point in the merged manifest and the bias in the merged index, and refuses to mix weighted and unweighted sources.
+- **Tests** (`tests/sbi/test_jewel.py`; the fake JEWEL writes pT-hat^−WEXPO when weighted):
+  - cards, including the label check against the installed source;
+  - task weights equal to pthat^−3;
+  - per-point normalisation at merge;
+  - the old format unchanged;
+  - the mixed-merge refusal.

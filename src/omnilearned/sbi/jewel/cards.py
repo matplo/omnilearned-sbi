@@ -69,13 +69,20 @@ def njob(cfg, split, point_id, chunk):
     return n
 
 
-def task_cards(cfg, theta, nevent, njob_value, geometry, tables_dir=".", extra=None):
+def task_cards(cfg, theta, nevent, njob_value, geometry, tables_dir=".", extra=None, sampling=None):
     """(params.dat text, medium.dat text, centrality %) for one task at theta = (b, TI, TAUI).
 
     ``extra`` adds main-card lines (e.g. ``{"DOSUBTRACTION": "T", "RSUB": 0.5}`` for the
     probe's cross-check against JEWEL's own subtraction, which suppresses WRITESCATCEN).
+    ``sampling = {"wexpo": k}`` generates weighted events (WEIGHTED T, WEXPO k): PYTHIA
+    samples the hard process with dσ x pT-hat^k (JEWEL's PYEVWT, MSTP(142) = 1) and the
+    HepMC event weight PARI(10) = pT-hat^-k compensates. This is a sampling option: the
+    weighted events follow the law of the config, whose ``[jewel]`` section is unchanged.
     """
     j = cfg["jewel"]
+    if sampling is not None and set(extra or {}) & {"WEIGHTED", "WEXPO"}:
+        raise ValueError("set the weighting through sampling, not extra cards")
+    weighted = j["weighted"] if sampling is None else True
     b, ti, taui = (float(v) for v in theta)
     c = geometry.centrality_for_b(b)
     tdir = Path(tables_dir)
@@ -86,10 +93,11 @@ def task_cards(cfg, theta, nevent, njob_value, geometry, tables_dir=".", extra=N
         f"SPLITINTFILE {tdir / 'splitint.dat'}", f"PDFFILE {tdir / 'pdfs.dat'}",
         f"XSECFILE {tdir / 'xsecs.dat'}", "MEDIUMPARAMS medium.dat",
         f"SQRTS {j['sqrts_GeV']}", f"PTMIN {j['ptmin_GeV']}", f"PTMAX {j['ptmax_GeV']}",
-        f"ETAMAX {j['etamax']}", f"PDFSET {j['pdfset']}", f"WEIGHTED {flag(j['weighted'])}",
+        f"ETAMAX {j['etamax']}", f"PDFSET {j['pdfset']}", f"WEIGHTED {flag(weighted)}",
         f"KEEPRECOILS {flag(j['keeprecoils'])}", f"WRITESCATCEN {flag(j['writescatcen'])}",
         f"WRITEDUMMIES {flag(j['writedummies'])}",
         f"MASS {int(j['mass_number'])}", f"NPROTON {int(j['proton_number'])}",
-    ] + [f"{k} {v}" for k, v in (extra or {}).items()]
+    ] + ([f"WEXPO {float(sampling['wexpo'])}"] if sampling is not None else []) \
+      + [f"{k} {v}" for k, v in (extra or {}).items()]
     medium = [f"TI {ti}", f"TAUI {taui}", f"CENTRMIN {c:.10f}", f"CENTRMAX {c:.10f}"]
     return "\n".join(params) + "\n", "\n".join(medium) + "\n", c
