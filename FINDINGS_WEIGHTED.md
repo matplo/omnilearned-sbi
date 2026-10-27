@@ -9,11 +9,12 @@ the main-study trees are read only.
 
 | date | phase | job | resources | status | what |
 |---|---|---|---|---|---|
-| 2026-10-26 | 0 | 60353176 (`w0-ptbins-m3a`, gpu shared, 1 A100, 1.5 h limit) | submitted | pending | `toy.ptbins` of set m3a → `runs/w0/ptbins/set_m3a/` (snapshot a2e7dba, as the baseline) |
+| 2026-10-26 | 0 | 60353176 (`w0-ptbins-m3a`, gpu shared, 1 A100-40GB, nid001168) | 50 min, 0.21 GPU-node-h (¼ node) | done, 16/16 points | `toy.ptbins` of set m3a → `runs/w0/ptbins/set_m3a/` (snapshot a2e7dba, as the baseline) |
 | 2026-10-26 | 0 | login node, 1 core | ≈ 2 min | done | ESS vs k by reweighting (`runs/w0/ess/ess_reweight.py`) and biased toy draws at 3 points (`ess_direct.py`, snapshot e9b52fe) |
 | 2026-10-26 | 1 | 60354888 (`w1-gen`, cpu shared, 64 tasks × 2 cores, 20 min limit) | ≈ 0.5 core-h expected | submitted | `data/v2_w1`: v2_m2 design and train stream, 6000 jets/point, `--bias-k 3 --bias-cap 250` (snapshot 1bf9fdc) |
 | 2026-10-26 | 2 | 60354914 (`w1-train4`, gpu regular, 1 node × 4 A100, 4 h limit, afterok 60354888) | ≈ 2 node-h expected | queued | `runs/w1/`: set d256 L6 200k (r2 settings) on v2_w1, `--weight-mode loss` seeds 0–2, `sample` seed 0; multC64 attached (`spec_w1.txt`) |
 | 2026-10-26 | 4 | login node | ≈ 3 min | done | WEXPO from ESS by reweighting jewel_v1 (`runs/w4/ess/ess_jewel.py`) |
+| 2026-10-26 | 0 | 60356967, 60356968 (`w0-ptbins-s1/s2`, gpu shared, 1 A100 each, 1.5 h limit) | ≈ 0.4 GPU-node-h expected | submitted | `toy.ptbins` of set s1 and s2 (main-study checkpoints `runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`), the seed spread for the weighted comparison → `runs/w0/ptbins/set_s{1,2}` (`run_ptbins_one.sbatch`) |
 | 2026-10-26 | 4 | 60355573 (`w4-jewel-probe`, cpu debug, 1 node, 30 min; nid004206) | 9 min 55 s, 0.17 node-h (budget ≤ 0.5 approved by the user) | done, 32/32 tasks rc 0 | weighted JEWEL probe, 4 grid points × WEXPO 2, 3 × 4 tasks × 1000 events → `runs/w4/probe/wexpo{2,3}` (snapshot 6294671) |
 
 ## Phase 0: choice of the bias exponent k (2026-10-26, login node, analysis only)
@@ -70,9 +71,28 @@ handoff's "w = (P0/P_ref)^k" has the sign inverted; phase 1 uses w = (P0/P_ref)^
 - k = 4 is flatter per bin but costs another ×0.6 at 60–70 GeV, where the leading defect is.
 - **Option:** generation is ≈ 3× cheaper per jet, so 12 000 jets per point at k = 3 cost less CPU than v2_m2. ESS would be ≈ 2300 at 60–70 GeV (v2_m2: 2744) and ≈ 870 at 170–200 GeV (v2_m2: 48). This changes the stored-jet count against v2_m2, so the handoff's 6000 stays the default.
 
-## Phase 0: set m3a in `toy.ptbins` (pending)
+## Phase 0: set m3a in `toy.ptbins` (2026-10-26)
 
-Job 60353176 (gpu shared, 1 A100): set m3a (`runs/m2r3/set_d256_L6_200k_m3a/checkpoint_mult.pt`, multC64 attached), same settings and snapshot as the main-study baseline (a2e7dba: redraw, 22 000 clouds, gate points 0, 8, …, 120) → `runs/w0/ptbins/set_m3a/`. The decision rule is from the handoff: if m3a is better than set r2 in the ≥ 120 GeV bins, high pT is data-limited and the weighted arm is the fix.
+**Run:** job 60353176 (gpu shared, A100-40GB, nid001168, 50 min).
+- **Model:** set m3a (`runs/m2r3/set_d256_L6_200k_m3a/checkpoint_mult.pt`, sha256 2ed823c76d6fef23, multC64 attached).
+- **Settings:** those of the main-study baseline (snapshot a2e7dba, clean; redraw, 22 000 clouds, gate points 0, 8, …, 120) → `runs/w0/ptbins/set_m3a/`.
+- **Combination:** with `ptbins.combine`, reading the main-tree points of set r2 and set 400k without writing there; summary `runs/w0/ptbins/set_m3a/ptbins_summary.json`.
+
+**Bins ≥ 120 GeV** (6 observables × 3 bins = 18 cells; a perfect surrogate gives Σ pull² ≈ 18 ± 6):
+
+| model | rms Δ/σ_direct | Σ pull² | n_constituents 120–140 / 140–170 / 170–200 | soft8_fraction 120–140 / 140–170 | ptd 170–200 | spectrum 170–200 |
+|---|---|---|---|---|---|---|
+| set r2 (200k, v2_m2) | 0.032 | 57 | +0.031 / +0.062 / +0.049 | −0.031 / −0.034 | −0.034 | 0.937 |
+| set m3a (200k, v2_m3a: 2× jets) | **0.026** | **32** | +0.019 / +0.038 / +0.041 | −0.021 / −0.016 | −0.041 | 0.944 |
+| set 400k (400k, v2_m2) | 0.019 | 21 | +0.016 / +0.040 / +0.037 | −0.017 / −0.020 | −0.010 | 0.972 |
+
+(se per cell 0.013–0.04, so single cells differ by ≤ 1.5σ between models; the direct sample is shared, so model differences are not diluted by it.)
+
+- **m3a is better than r2 in the ≥ 120 GeV bins** (Σ pull² 57 → 32, rms 0.032 → 0.026). By the handoff's rule, **high pT is at least partly data-limited**, and the weighted arm is justified.
+- **Twice the training length (400k) helps as much or more** without new data. Part of the high-pT defect is therefore optimisation-limited.
+- **Low pT also improves with m3a:** width at 60–70 GeV −0.024 → −0.018 (400k −0.015).
+- **The spectrum above 170 GeV does not improve with data** (0.944 vs 0.937; 400k 0.972).
+- **Caveat:** one seed per model. The seed spread of `toy.ptbins` is unmeasured; set s1 and s2 are submitted (jobs 60356967/8). The weighted runs (seeds 0–2) will be compared with r2/s1/s2.
 
 ## Phases 1–2: code (2026-10-26)
 
