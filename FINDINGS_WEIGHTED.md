@@ -502,3 +502,64 @@ Set s1 and s2 (`runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`, the r2 co
 - **Sample mode is no better than loss mode** (worse in ptd, lead_fraction and the spectrum above 170 GeV, one seed).
 - **Verdict (handoff decision point):** the high-pT defect of the set surrogate is **not data-limited**. More effective training statistics at high pT — ×2 jets (m3a), ×9 ESS (weighted) — do not reduce it. Seed and training length (400k) matter more. The persistent n_constituents excess above 140 GeV is a capacity or parametrisation effect, so the handoff's phase 3 applies: conditioning the flow on jet pT (the factorised model, plan §9.1) or the observed-pT bias arm.
 - **High-statistics shifts** of the four models are running (jobs 60440586/7); they test whether weighting costs anything in the integrated measure.
+
+## Phase 2 result: weighted toy training vs unweighted, `toy.ptbins` ≥120 GeV (2026-10-28)
+
+4 weighted trainings on `data/v2_w1` (k=3, cap 250, same 6000 jets/θ as the unweighted `set_r2`
+baseline), job 60354914 (1:57:42, 4 A100, rc 0 all): `set_d256_L6_200k` with `--weight-mode loss`
+seeds 0–2 and `sample` seed 0, multC64 attached. Validation losses agree to 4e-6 across the loss-
+mode seeds (1.055951–1.055957), same order as the unweighted seed spread found earlier. Evaluated
+with `toy.ptbins` (job 60358305, same settings as every other model in this comparison — redraw,
+22 000 clouds, 16 points) against the main session's `set_r2`/`set_400k` baselines and this
+branch's `set_m3a` (2× unweighted jets).
+
+**Aggregate over the 3 bins ≥120 GeV and 6 observables:**
+
+| model | jets/θ | mean \|effect\| | mean \|pull\| |
+|---|---|---|---|
+| set_r2 (unweighted baseline) | 1× | 0.0275 | 1.57 |
+| set_m3a (unweighted, 2× jets) | 2× | 0.0225 | 1.25 |
+| **w1 loss-mode, mean of 3 seeds** | **1× (weighted)** | **0.0227** | **1.24** |
+| w1_s0 / s1 / s2 individually | 1× | 0.0252 / 0.0228 / 0.0200 | 1.38 / 1.22 / 1.11 |
+| w1samp_s0 (sample mode) | 1× (weighted) | 0.0262 | 1.46 |
+| set_400k (unweighted, 2× steps) | 1× | 0.0152 | 0.91 |
+
+**Headline: weighted training at the same 6000 jets/θ as the unweighted baseline matches set
+m3a's improvement (2× the unweighted jets) to within the seed noise — the core hypothesis of
+this study.** Training length (400k) is still the single strongest lever, as already established,
+but weighting gets most of the data-doubling benefit without doubling the data.
+
+**Seed spread is large** (effect 0.0200–0.0252, a ≈25 % relative range across 3 seeds) — bigger
+than the ≈0.07σ seed spread found for the shift metric on unweighted models. Any one weighted
+seed's ptbins number should not be over-read; the 3-seed mean is the number to trust.
+
+**Loss mode outperforms sample mode** in this single comparison (0.0227 vs 0.0262): the smooth
+per-minibatch reweighting beats the multinomial-draw sampler here, though sample mode only has
+one seed so its own noise is unmeasured.
+
+**Spectrum deficit at 170–200 GeV is reduced, further than set_400k:** ratio 0.937 (r2) →
+0.977/0.988/1.004 (w1 loss seeds 0/1/2, mean 0.990) vs 0.972 (400k). Sample mode is the exception:
+0.916, worse than even the unweighted baseline — consistent with loss mode being the better of
+the two weighting implementations tested.
+
+**Per observable, seed-averaged over the 3 loss-mode runs (not seed noise, the honest picture,
+rule 5):**
+- **Clearly improved:** width (0.031/0.003/0.053 → 0.017/0.014/0.045), outer_fraction
+  (0.026/0.011/0.039 → 0.007/0.028/0.022 — worse at 140–170, better elsewhere), soft8_fraction
+  (0.031/0.034/0.006 → 0.020/0.014/0.004).
+- **Roughly a wash once seed-averaged** (a single seed, w1_s0, looked worse in isolation but
+  this did not replicate in s1/s2): ptd (0.015/0.022/0.034 → 0.009/0.021/0.039), lead_fraction
+  (0.007/0.018/0.023 → 0.006/0.021/0.022).
+- **Not fixed, mildly worse at the very top bin:** n_constituents at 170–200 GeV (0.049 → 0.060,
+  averaged) — the "surrogate's high-pT jets carry a few too many soft constituents" defect is not
+  resolved by weighting alone, and may need phase 3 (observed-pT conditioning) if it matters.
+
+**Conclusion for this study:** weighted training works as intended for the toy — it buys close to
+a 2× effective sample-size improvement at ≥120 GeV for the same generation cost, confirming the
+phase-0 decision to proceed. It does not fix every observable (n_constituents at the very top bin
+persists), consistent with that residual being a capacity or conditioning issue rather than a
+pure statistics one.
+
+**Still pending:** the JEWEL weighted training (job 60373320) has not started — Perlmutter-wide
+GPU shortage (0 idle nodes, hundreds of jobs queued across all users as of 2026-10-27 late
+evening), not an account-priority or code issue. Will report once it runs.
