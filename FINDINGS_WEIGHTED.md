@@ -12,8 +12,10 @@ the main-study trees are read only.
 | 2026-10-26 | 0 | 60353176 (`w0-ptbins-m3a`, gpu shared, 1 A100-40GB, nid001168) | 50 min, 0.21 GPU-node-h (¼ node) | done, 16/16 points | `toy.ptbins` of set m3a → `runs/w0/ptbins/set_m3a/` (snapshot a2e7dba, as the baseline) |
 | 2026-10-26 | 0 | login node, 1 core | ≈ 2 min | done | ESS vs k by reweighting (`runs/w0/ess/ess_reweight.py`) and biased toy draws at 3 points (`ess_direct.py`, snapshot e9b52fe) |
 | 2026-10-26 | 1 | 60354888 (`w1-gen`, cpu shared, 64 tasks × 2 cores, 20 min limit) | 0.85 core-h (sum of shard wall times; 80–100 s per task) | done, 64/64 | `data/v2_w1`: v2_m2 design and train stream, 6000 jets/point, `--bias-k 3 --bias-cap 250` (snapshot 1bf9fdc) |
-| 2026-10-26 | 2 | 60354914 (`w1-train4`, gpu regular, 1 node × 4 A100, 4 h limit, afterok 60354888) | ≈ 2 node-h expected | queued | `runs/w1/`: set d256 L6 200k (r2 settings) on v2_w1, `--weight-mode loss` seeds 0–2, `sample` seed 0; multC64 attached (`spec_w1.txt`) |
+| 2026-10-26 | 2 | 60354914 (`w1-train4`, gpu regular, 1 node × 4 A100, 4 h limit, afterok 60354888; nid008196, started 10-27 23:21 after ≈ 23 h in the queue) | 1 h 58 min = 2.0 node-h | done, 4/4 runs | `runs/w1/`: set d256 L6 200k (r2 settings) on v2_w1, `--weight-mode loss` seeds 0–2, `sample` seed 0; multC64 attached (`spec_w1.txt`) |
 | 2026-10-26 | 4 | login node | ≈ 3 min | done | WEXPO from ESS by reweighting jewel_v1 (`runs/w4/ess/ess_jewel.py`) |
+| 2026-10-27 | 2 | 60427776, 60427777 (`w1-shiftq-1/2`, gpu shared, 1 A100 each, 2 h 45 min limit, afterok 60354914) | ≈ 4 GPU-h expected | queued | high-statistics shifts of the 4 w1 models (`runs/w1/shift_hi_queue.txt`, snapshot 046a3cb, `data/v2_m3_shiftdirect`, redraw, 50 000 clouds) → `runs/w1/shift_hi/` |
+| 2026-10-27 | 2 | 60427771/72/74/75 (`w1-ptbins-*`) | 0 | **cancelled by me before start** | duplicates of 60358305 (`w1-ptbins`, `runs/w1/ptbins_w1.sbatch`, 1 node × 4 A100, regular), which another session submitted from this worktree on 10-26 23:42 → `runs/w1/ptbins/w5_{s0,s1,s2}`, `w5samp_s0` |
 | 2026-10-26 | 0 | 60356967, 60356968 (`w0-ptbins-s1/s2`, gpu shared, 1 A100 each; nid008681, nid002257) | 47 min, 49 min | done, 16/16 points each | `toy.ptbins` of set s1 and s2 (main-study checkpoints `runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`), the seed spread for the weighted comparison → `runs/w0/ptbins/set_s{1,2}` (`run_ptbins_one.sbatch`) |
 | 2026-10-26 | 4 | 60355573 (`w4-jewel-probe`, cpu debug, 1 node, 30 min; nid004206) | 9 min 55 s, 0.17 node-h (budget ≤ 0.5 approved by the user) | done, 32/32 tasks rc 0 | weighted JEWEL probe, 4 grid points × WEXPO 2, 3 × 4 tasks × 1000 events → `runs/w4/probe/wexpo{2,3}` (snapshot 6294671) |
 
@@ -453,3 +455,24 @@ Set s1 and s2 (`runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`, the r2 co
 - **One defect persists in every model:** n_constituents too high at 140–170 GeV (+0.037 to +0.062) and 170–200 GeV (+0.035 to +0.049), with seed, data and training length alike. It is a systematic of the surrogate (capacity or parametrisation, phase 3: conditioning on jet pT, or the observed-pT bias arm), not of the training statistics.
 - **Consequence:** the weighted runs (×9 ESS at 170–200 GeV, seeds 0–2, running) are now a direct test of the data-limited hypothesis. They must be compared with the seed spread (r2/s1/s2), not with r2 alone. If they do not remove the n_constituents excess, weighting is not the fix for it.
 - **Low pT** (width 60–70 GeV, −0.007 to −0.024) is also seed-dominated.
+
+## Phase 2: weighted trainings (2026-10-28)
+
+`runs/w1/set_d256_L6_200k_w1_{s0,s1,s2}` (`--weight-mode loss`) and `…_w1samp_s0` (`--weight-mode sample`).
+- **Provenance:** job 60354914, nid008196, A100, snapshot 1bf9fdc (clean); set r2 settings (d256, L6, 200k steps, batch 512, 16 length buckets, TF32) on `data/v2_w1`; multC64 attached (`checkpoint_mult.pt`).
+- **Training ESS** (run.json): 3 570 187 of 6 144 000. Per point and pT bin (median): 1151, 867, 680, 544, 809, 585, 615, **432** (v2_m2: 2744 … **48**).
+
+| run | best step | best val | checkpoint sha256 (flow / with multC64) |
+|---|---|---|---|
+| w1 s0 (loss) | 194 000 | 1.05595 | a14fdab15859 / c66c845f29c1 |
+| w1 s1 (loss) | 200 000 | 1.05596 | 83722f2eba08 / e4f95db2d55e |
+| w1 s2 (loss) | 172 000 | 1.05595 | f0edcb71745f / 42d89d8a9d3a |
+| w1 sample s0 | 184 000 | 1.05594 | 54c86075a010 / 4cb27a1427a9 |
+| baselines r2 / s1 / s2 / m3a / 400k | | 1.05223 / 1.05222 / 1.05222 / 1.05234 / 1.05220 | |
+
+- **The validation loss is not comparable across these two groups,** although the validation jets are the same (v2_m2's unbiased split, unit weights).
+  - The feature transform is fitted, unweighted, on each run's training split. For v2_w1 the log-pT offset is −0.085 instead of −0.278 (scales 1.780 vs 1.785, η/φ equal), because the biased jets are harder.
+  - Model coordinates therefore differ, and the minimum of the flow-matching loss depends on where the data sit relative to the Gaussian base.
+  - The +0.0037 is therefore not a fidelity measure. Fidelity is judged by `toy.ptbins` and the shift (pending).
+  - A weighted fit of the transform (or reusing v2_m2's) would make the losses comparable. Not done here.
+- **Loss and sample modes give the same validation loss** (1.05594–1.05596), and the 3 seeds agree to 1e-5, as the baseline seeds do.
