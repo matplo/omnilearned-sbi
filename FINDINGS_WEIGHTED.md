@@ -14,7 +14,7 @@ the main-study trees are read only.
 | 2026-10-26 | 1 | 60354888 (`w1-gen`, cpu shared, 64 tasks × 2 cores, 20 min limit) | 0.85 core-h (sum of shard wall times; 80–100 s per task) | done, 64/64 | `data/v2_w1`: v2_m2 design and train stream, 6000 jets/point, `--bias-k 3 --bias-cap 250` (snapshot 1bf9fdc) |
 | 2026-10-26 | 2 | 60354914 (`w1-train4`, gpu regular, 1 node × 4 A100, 4 h limit, afterok 60354888) | ≈ 2 node-h expected | queued | `runs/w1/`: set d256 L6 200k (r2 settings) on v2_w1, `--weight-mode loss` seeds 0–2, `sample` seed 0; multC64 attached (`spec_w1.txt`) |
 | 2026-10-26 | 4 | login node | ≈ 3 min | done | WEXPO from ESS by reweighting jewel_v1 (`runs/w4/ess/ess_jewel.py`) |
-| 2026-10-26 | 0 | 60356967, 60356968 (`w0-ptbins-s1/s2`, gpu shared, 1 A100 each, 1.5 h limit) | ≈ 0.4 GPU-node-h expected | submitted | `toy.ptbins` of set s1 and s2 (main-study checkpoints `runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`), the seed spread for the weighted comparison → `runs/w0/ptbins/set_s{1,2}` (`run_ptbins_one.sbatch`) |
+| 2026-10-26 | 0 | 60356967, 60356968 (`w0-ptbins-s1/s2`, gpu shared, 1 A100 each; nid008681, nid002257) | 47 min, 49 min | done, 16/16 points each | `toy.ptbins` of set s1 and s2 (main-study checkpoints `runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`), the seed spread for the weighted comparison → `runs/w0/ptbins/set_s{1,2}` (`run_ptbins_one.sbatch`) |
 | 2026-10-26 | 4 | 60355573 (`w4-jewel-probe`, cpu debug, 1 node, 30 min; nid004206) | 9 min 55 s, 0.17 node-h (budget ≤ 0.5 approved by the user) | done, 32/32 tasks rc 0 | weighted JEWEL probe, 4 grid points × WEXPO 2, 3 × 4 tasks × 1000 events → `runs/w4/probe/wexpo{2,3}` (snapshot 6294671) |
 
 ## Phase 0: choice of the bias exponent k (2026-10-26, login node, analysis only)
@@ -88,7 +88,7 @@ handoff's "w = (P0/P_ref)^k" has the sign inverted; phase 1 uses w = (P0/P_ref)^
 
 (se per cell 0.013–0.04, so single cells differ by ≤ 1.5σ between models; the direct sample is shared, so model differences are not diluted by it.)
 
-- **m3a is better than r2 in the ≥ 120 GeV bins** (Σ pull² 57 → 32, rms 0.032 → 0.026). By the handoff's rule, **high pT is at least partly data-limited**, and the weighted arm is justified.
+- ~~m3a is better than r2 in the ≥ 120 GeV bins … high pT is at least partly data-limited~~. **Withdrawn after the seed spread (next section):** r2 is the worst of three 200k seeds, and m3a lies inside their spread.
 - **Twice the training length (400k) helps as much or more** without new data. Part of the high-pT defect is therefore optimisation-limited.
 - **Low pT also improves with m3a:** width at 60–70 GeV −0.024 → −0.018 (400k −0.015).
 - **The spectrum above 170 GeV does not improve with data** (0.944 vs 0.937; 400k 0.972).
@@ -435,3 +435,21 @@ naturally drains its share of the claim pool before the limit (the uneven start 
 total work, caused the timeout — nodes 2–11 started 3–7 h late due to regular-QOS queue
 contention and found almost nothing left), or add a final `unlock-stale` + short mop-up pass as a
 standard last step of any multi-node JEWEL farm submission, not just on failure.
+
+## Phase 0, corrected: seed spread of `toy.ptbins` (2026-10-27)
+
+Set s1 and s2 (`runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`, the r2 configuration with seeds 1 and 2) → `runs/w0/ptbins/set_s{1,2}` (jobs 60356967/8, snapshot a2e7dba, as the baseline).
+
+| model | ≥ 120 GeV rms Δ/σ | Σ pull² (18 cells) | n_constituents 120–140 / 140–170 / 170–200 | width 60–70 | spectrum 170–200 |
+|---|---|---|---|---|---|
+| set r2 (200k, seed 0) | 0.032 | 57 | +0.031 / +0.062 / +0.049 | −0.024 | 0.937 |
+| set s1 (200k, seed 1) | 0.020 | **21** | +0.011 / +0.037 / +0.035 | −0.007 | 0.975 |
+| set s2 (200k, seed 2) | 0.023 | 29 | +0.020 / +0.038 / +0.044 | −0.016 | 0.972 |
+| set m3a (200k, 2× jets) | 0.026 | 32 | +0.019 / +0.038 / +0.041 | −0.018 | 0.944 |
+| set 400k (seed 0) | 0.019 | 21 | +0.016 / +0.040 / +0.037 | −0.015 | 0.972 |
+
+- **The seed spread of the 200k configuration (Σ pull² 21–57) covers m3a (32) and 400k (21).** r2, the baseline of the main study's `toy.ptbins` and of the phase-0 comparison, is the worst seed.
+- **Corrected verdict: high pT is not shown to be data-limited.** 2× jets per θ is no better than a different seed; the earlier "m3a better" came from comparing with the worst seed.
+- **One defect persists in every model:** n_constituents too high at 140–170 GeV (+0.037 to +0.062) and 170–200 GeV (+0.035 to +0.049), with seed, data and training length alike. It is a systematic of the surrogate (capacity or parametrisation, phase 3: conditioning on jet pT, or the observed-pT bias arm), not of the training statistics.
+- **Consequence:** the weighted runs (×9 ESS at 170–200 GeV, seeds 0–2, running) are now a direct test of the data-limited hypothesis. They must be compared with the seed spread (r2/s1/s2), not with r2 alone. If they do not remove the n_constituents excess, weighting is not the fix for it.
+- **Low pT** (width 60–70 GeV, −0.007 to −0.024) is also seed-dominated.
