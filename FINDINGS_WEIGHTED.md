@@ -623,3 +623,47 @@ weighting (mean 0.990 against 0.961 unweighted, ≈ 1σ). The shifts above agree
 **Standing verdict:** at this model size and training length, high-pT fidelity of the toy surrogate
 is not data-limited. Weighting is safe (it costs nothing in shifts or low-pT fidelity) but does not
 buy fidelity. The persistent n_constituents excess above 140 GeV points to phase 3 (pT conditioning).
+
+## Phase 4 result: weighted JEWEL training complete, stable, lower validation loss (2026-10-28)
+
+Job 60373320 (afterok-chained after the cleanup farm and merge), 4 runs on `data/jewel_w1/merged`
+(WEXPO=5, 2 422 694 weighted events, 972 points) vs `data/jewel_v1/merged`'s unweighted validation
+(146 016 jets, 128 points, unit weights — **ESS = n exactly**, confirmed), `jewel_multJ.pt`
+p(N|θ) attached: `set_d256_L6_200k`, `--weight-mode loss` seeds 0–2 + `sample` seed 0. 2:29:42
+wall, 1 node × 4 A100, **rc 0 on all four**.
+
+**Stability: no problem from the extreme WEXPO=5 weight range flagged last night.** Val loss
+curves fall smoothly (1.39 → 1.163) and converge tightly across all three loss-mode seeds
+(1.16347–1.16348) and sample mode (1.16330) — no blow-up, no divergence. The realised weight
+range in the actual training batches was [0.0007, 77.6] (after `merge`'s per-point Σw = n_jets
+rescaling — far tamer than the raw ≈31 500 pooled max/min ratio estimated from the ESS study,
+because that ratio is the *spread*, not the normalised scale). **Measured train ESS 327 146 of
+2 422 694 (fraction 0.135)** — matches the pooled k=5 prediction (0.14) almost exactly.
+
+**Fair, controlled comparison against the unweighted `jewel_r1b` baseline** (identical
+architecture, dim/depth/batch/lr/steps/length_buckets/ema_decay, identical unweighted validation
+split; the only difference is the training data):
+
+| | train data | events | best val loss |
+|---|---|---|---|
+| jewel_r1b `set_d256_L6_s0`/`s1` (unweighted) | `jewel_v1/merged` train | 28.3 M | 1.19412 / 1.19415 |
+| **w5 `set_d256_L6_200k_w5_s0/s1/s2` (weighted, loss mode)** | `jewel_w1/merged` | **2.42 M** | **1.16347 / 1.16347 / 1.16348** |
+| w5 `..._w5samp_s0` (weighted, sample mode) | `jewel_w1/merged` | 2.42 M | 1.16330 |
+
+**The weighted model, trained on 12× fewer events, has a meaningfully lower validation loss on
+the identical unbiased validation split** (≈0.030 lower, consistent across all 3 loss seeds, and
+the sample-mode run agrees). Since the validation loss is flow-matching error against the true
+unbiased law, this is evidence the weighted sample (concentrated where the surrogate needs more
+statistics) is a more sample-efficient training set overall, not only in the pT tail — though
+this single aggregate number does not say *where* the improvement comes from.
+
+**Not yet possible: a per-pT-bin fidelity check (the `toy.ptbins`-equivalent) for JEWEL**, because
+`data/jewel_v1`'s fidelity split (needed as the direct reference, like `v2_m1_fidelity` for the
+toy) is still unindexed/unmerged — that step belongs to the other session's tree (`dev/nle-
+fidelity`), not something fixable from here. Until it lands, the validation-loss comparison above
+is the strongest signal available for the weighted JEWEL models.
+
+**Status at the end of this overnight run: both arms' production + training are complete.**
+Remaining work: the JEWEL per-pT-bin fidelity check (blocked on the other session), and a
+decision on whether WEXPO=5's small per-observable cost (toy: `n_constituents` at 170–200 GeV)
+needs addressing before using these checkpoints for anything downstream.
