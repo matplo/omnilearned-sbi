@@ -24,7 +24,7 @@ Reference (round 2, `set_d256_L6_200k_multC64`): 1 FAIL, 23 with p < 0.01, const
 | 2026-10-26 | S3 seed check | ~~60322904–06~~ (shared-queue seed 1 + gates) cancelled before start → interactive node A 60323636 (nid003857, 4 h) | 3 × A100 ≈ 3.5 h | done 14:52–14:54 (12 540–12 630 s; final val(ema) 1.05221–1.05222, = seed 0) | 400k seeds 1, 2, 3 (`runs/m2r3/spec_400k_s123.txt`, the seed-0 400k line with `--seed 1/2/3`, multC64 attached) → `runs/m2r3/set_d256_L6_400k_s{1,2,3}`. Gates to be submitted when they finish |
 | 2026-10-26 | gate completion | interactive node B 60323642 (nid001021, 4 h) | 4 A100 | d384 done 12:53, d384 redraw done 14:50; PET r2 redraw stopped at ≈ 119/128 when the allocation ended (15:16), resumed as 60341128 | resume the gates that hit their 3 h limit: d384 (108/128), d384 redraw (101/128), PET r2 redraw (117/128) |
 | 2026-10-26 | shift, high statistics | node B CPUs (data); node A GPU 3, shared-queue workers 60324273/75/76 (1 A100, 4 h) | ≈ 1 GPU-h per model (≈ 5.5 min per point) | all 7 done 12:22–14:31 | `data/v2_m3_shiftdirect`: 200 000 direct jets at each of the 11 shift points, new indices 1000–1010 of the development_scan stream (independent of the scan), snapshot 5d3e948 (generator unchanged, config sha 2c047d92). `gate shift --direct-dir` (046a3cb), 50 000 surrogate clouds per point, redraw, via `shell/nle/shift_queue.sh` and `runs/m3/shift_hi_queue.txt` → `runs/m3/shift_hi/<name>/`. Expected 11-point se ≈ 0.05σ (was 0.09) |
-| 2026-10-26 | S3 seed check, measurement | gates 60331580/81 (s1), 60331583/84 (s2), 60331586/87 (s3), regular, 1 node × 4 A100, 3 h; shift workers 60331582/85/88, shared, 1 A100, 2 h; all `--begin 14:55` | 6 node × ≤ 3 h, 3 × ≤ 2 GPU-h | shifts done 16:00–16:07 (nid003997, nid001064, nid003885); gates pending | gates of 400k seeds 1–3 with and without redraw (`fid_gate.sbatch`, snapshot 5d3e948 → `runs/m3/m2r3_set_d256_L6_400k_s{1,2,3}{,_redraw}`) and their high-statistics shifts (`runs/m3/shift_hi_queue_400k.txt`, snapshot 046a3cb). Each job runs through `runs/m3/after_ckpt.sh`, which waits up to 40 min for `checkpoint_mult.pt` (node A ends 15:16, training ends ≈ 14:50) |
+| 2026-10-26 | S3 seed check, measurement | gates 60331580/81 (s1), 60331583/84 (s2), 60331586/87 (s3), regular, 1 node × 4 A100, 3 h; shift workers 60331582/85/88, shared, 1 A100, 2 h; all `--begin 14:55` | 6 node × ≤ 3 h, 3 × ≤ 2 GPU-h | shifts done 16:00–16:07 (nid003997, nid001064, nid003885); gates **done** 2026-10-27 05:42–20:34 (2 h 12–25 m each; s3_redraw ran separately, done 2026-10-28 01:38) | gates of 400k seeds 1–3 with and without redraw (`fid_gate.sbatch`, snapshot 5d3e948 → `runs/m3/m2r3_set_d256_L6_400k_s{1,2,3}{,_redraw}`) and their high-statistics shifts (`runs/m3/shift_hi_queue_400k.txt`, snapshot 046a3cb). Each job runs through `runs/m3/after_ckpt.sh`, which waits up to 40 min for `checkpoint_mult.pt` (node A ends 15:16, training ends ≈ 14:50) |
 | 2026-10-26 | pT-differential fidelity | interactive node B 60323642, GPUs 1–3 (step 60323642.7; the 3-GPU step .4 was cancelled before computing) | 3 A100 × 50 min | set 400k, set r2 done 14:47 (16/16, ≈ 3 min per point); PET r2 13/16 at the allocation end, last 3 points as 60341127 (shared, 1 A100, done 16:55) | `toy.ptbins run` (snapshot a2e7dba), 16 gate points, redraw, set 400k / set r2 / PET r2 → `runs/m3/ptbins/<model>/` |
 | 2026-10-26 | resumes after node B ended | 60341127 (`ptbins-pet`, shared, 1 A100, 40 min), 60341128 (`gr-pet-r2-resume`, regular, 1 node, 1 h) | ≲ 1.5 GPU-h | both **done**: 60341127 19:28 (16/16 points); 60341128 done 2026-10-27 07:16 (52 min, nid003141, 128/128 points) | PET r2 ptbins points 104–120 (snapshot a2e7dba, `runs/m3/ptbins/run_ptbins_one.sh`); PET r2 redraw gate resume (snapshot 19ac616) |
 
@@ -446,4 +446,31 @@ points complete, α/128 = 3.91e-4.
   PET at 400k steps unless the user wants a PET-architecture data point at that length — the
   d384/m3a capacity and data checks already showed capacity/data are not the lever, and nothing
   here suggests PET specifically needs separate investigation before training length is tried.
+
+## S3 seed check, gate result: all four 400k seeds (completed 2026-10-28 01:38)
+
+128/128 points for all 8 runs (4 seeds × with/without redraw), α/128 = 3.91e-4.
+
+| seed | FAIL, no redraw | FAIL, redraw | p < 0.01, no redraw | p < 0.01, redraw | KS D, no redraw | KS D, redraw |
+|---|---|---|---|---|---|---|
+| 0 | 1 (point 98) | 0 | 6 | 10 | 0.381 | 0.361 |
+| 1 | 0 | 0 | 2 | 4 | 0.255 | 0.233 |
+| 2 | 2 (points 83, 98) | 0 | 9 | 8 | 0.364 | 0.398 |
+| 3 | 0 | 0 | 5 | 5 | 0.366 | 0.337 |
+
+- **Every FAIL is removed by redraw, in both seeds that had one.** Consistent with the
+  seed-0 reading already on record: these are per-N selection-normalization artifacts at
+  N = 1000 (resolved by redrawing at the same N), not real surrogate defects.
+- **Point 98 recurs** (seed 0 and seed 2, both without redraw) — it is the same θ in the
+  fixed 128-point design across all gates (it also appears in the PET r2 redraw table as
+  `['soft8_fraction', 'n_constituents']` relevant, there not reaching FAIL). Its θ
+  (10.546, 0.542, 0.224) sits at a corner of the prior box (b near 11, T_ref near 0.55,
+  τ_init near 0.2) — the sparsest-trained region. Worth keeping an eye on if S5/S6 ever
+  needs per-point robustness, but it is not a blocking issue: redraw removes it every time
+  it appears.
+- **The residual non-uniformity (n_below_0.01, with or without redraw) stays in 2–10 of 128
+  across all four 400k seeds** — markedly better than the 200k reference (23) and PET r2
+  redraw (57). This is a second, independent confirmation (alongside the marginal-shift
+  table above) that **training length, not seed, architecture, data volume or capacity, is
+  what separates the well- from poorly-calibrated models.**
 
