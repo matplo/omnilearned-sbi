@@ -15,6 +15,7 @@ the main-study trees are read only.
 | 2026-10-26 | 2 | 60354914 (`w1-train4`, gpu regular, 1 node × 4 A100, 4 h limit, afterok 60354888; nid008196, started 10-27 23:21 after ≈ 23 h in the queue) | 1 h 58 min = 2.0 node-h | done, 4/4 runs | `runs/w1/`: set d256 L6 200k (r2 settings) on v2_w1, `--weight-mode loss` seeds 0–2, `sample` seed 0; multC64 attached (`spec_w1.txt`) |
 | 2026-10-26 | 4 | login node | ≈ 3 min | done | WEXPO from ESS by reweighting jewel_v1 (`runs/w4/ess/ess_jewel.py`) |
 | 2026-10-27 | 2 | 60427776, 60427777 (`w1-shiftq-1/2`, gpu shared, 1 A100 each, 2 h 45 min limit, afterok 60354914) | 13 s, 8 s | **failed**: snapshot 046a3cb predates `shell/nle/shift_queue.sh`; resubmitted as 60440586/7 (script from snapshot 1bf9fdc, code from 046a3cb, as the main study did) | high-statistics shifts of the 4 w1 models (`runs/w1/shift_hi_queue.txt`, snapshot 046a3cb, `data/v2_m3_shiftdirect`, redraw, 50 000 clouds) → `runs/w1/shift_hi/` |
+| 2026-10-28 | 2 | 60440586, 60440587 (`w1-shiftq-1/2`, gpu shared, 1 A100 each; nid002753, nid003892) | 2 h 01 min, 2 h 02 min (≈ 0.5 GPU-node-h each, ¼ node) | done, 2 models each | high-statistics shifts of the 4 w1 models → `runs/w1/shift_hi/set_w1_{s0,s1,s2}_redraw`, `set_w1samp_s0_redraw` (code snapshot 046a3cb) |
 | 2026-10-28 | 2 | 60358305 (`w1-ptbins`, another session's job, regular, 1 node × 4 A100, nid002896) | 51 min | done, 16/16 points × 4 models → `runs/w1/ptbins/w5_*` (snapshot a2e7dba) |
 | 2026-10-27 | 2 | 60427771/72/74/75 (`w1-ptbins-*`) | 0 | **cancelled by me before start** | duplicates of 60358305 (`w1-ptbins`, `runs/w1/ptbins_w1.sbatch`, 1 node × 4 A100, regular), which another session submitted from this worktree on 10-26 23:42 → `runs/w1/ptbins/w5_{s0,s1,s2}`, `w5samp_s0` |
 | 2026-10-26 | 0 | 60356967, 60356968 (`w0-ptbins-s1/s2`, gpu shared, 1 A100 each; nid008681, nid002257) | 47 min, 49 min | done, 16/16 points each | `toy.ptbins` of set s1 and s2 (main-study checkpoints `runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`), the seed spread for the weighted comparison → `runs/w0/ptbins/set_s{1,2}` (`run_ptbins_one.sbatch`) |
@@ -563,3 +564,62 @@ pure statistics one.
 **Still pending:** the JEWEL weighted training (job 60373320) has not started — Perlmutter-wide
 GPU shortage (0 idle nodes, hundreds of jobs queued across all users as of 2026-10-27 late
 evening), not an account-priority or code issue. Will report once it runs.
+
+## Phase 2 result: high-statistics shifts of the weighted models (2026-10-28, jobs 60440586/7)
+
+Same protocol as the main study's `runs/m3/shift_hi` (`gate shift --direct-dir data/v2_m3_shiftdirect`,
+11 points 1000–1010, redraw, 50 000 clouds, code snapshot 046a3cb, A100). The shift is the
+equivalent θ shift in marginal σ at N = 1000 jets, per parameter (b, T_ref, τ_init). Per-point
+se ≈ 0.05. Baselines are read from `runs/m3/shift_hi/*_redraw/shift.json` (read only).
+
+| model | 11-point mean (b, T_ref, τ_init) | point 1000 (b, T_ref, τ_init) | max \|b\| | points with \|shift\| < 0.2 |
+|---|---|---|---|---|
+| set_r2 | +0.057, +0.057, +0.004 | −0.22, −0.26, +0.26 | 0.43 | 6/11 |
+| set_s1 | +0.126, +0.130, −0.072 | −0.12, −0.14, +0.16 | 0.54 | 7/11 |
+| set_s2 | +0.132, +0.137, −0.067 | −0.02, −0.04, +0.07 | 0.51 | 8/11 |
+| set_m3a (2× jets) | +0.142, +0.146, −0.050 | −0.04, −0.06, +0.11 | 0.50 | 8/11 |
+| set_400k_s0 | −0.035, −0.036, +0.098 | −0.21, −0.23, +0.27 | 0.31 | 10/11 |
+| **w1 loss s0** | +0.041, +0.041, +0.007 | −0.16, −0.19, +0.18 | 0.55 | 7/11 |
+| **w1 loss s1** | +0.220, +0.221, −0.134 | +0.03, +0.00, +0.04 | 0.64 | 6/11 |
+| **w1 loss s2** | −0.030, −0.032, +0.026 | −0.13, −0.16, +0.11 | 0.40 | 9/11 |
+| **w1 sample s0** | +0.055, +0.058, +0.004 | −0.09, −0.11, +0.14 | 0.49 | 8/11 |
+
+Checkpoint sha256 (prefix): r2 1d587f39, s1 7eab17b8, s2 0fa9e414, m3a 2ed823c7, 400k a297fd9f,
+w1 s0/s1/s2 c66c845f/e4f95db2/42d89d8a, w1samp 4cb27a14.
+
+- **Weighting costs nothing in the integrated measure, and gains nothing.** The 11-point mean b
+  shift is +0.077 (seed sd 0.129) for the three weighted seeds against +0.105 (sd 0.042) for the
+  three unweighted seeds; the difference is well inside the seed spread. Points passing 0.2σ: 7/6/9
+  against 6/7/8.
+- **The weighted seeds spread more** (b mean −0.03 to +0.22 against +0.06 to +0.13). With three
+  seeds each, the variance ratio (≈ 9) is not significant (F(2,2) 95 % point 19). w1 loss s1 is the
+  worst single model in this table (mean +0.22, max |b| 0.64), and w1 loss s2 is among the best.
+  This matches the larger seed scatter in `toy.ptbins`.
+- Sample mode (one seed) is indistinguishable from loss mode here.
+
+## Reconciling the two phase-2 `toy.ptbins` verdicts above (2026-10-28)
+
+The two phase-2 sections above disagree: "no high-pT improvement" versus "matches set m3a,
+confirming the core hypothesis". They use the same outputs, and every number in both reproduces
+(mean |effect| and |pull| over the 3 bins ≥ 120 GeV × 6 observables, `ptbins_summary.json`):
+
+| model | mean \|effect\| | mean \|pull\| | Σ pull² |
+|---|---|---|---|
+| set_r2 | 0.0275 | 1.57 | 57 |
+| set_s1 | 0.0173 | 0.94 | 21 |
+| set_s2 | 0.0198 | 1.13 | 29 |
+| **unweighted, mean of 3 seeds** | **0.0215** | **1.21** | 36 |
+| set_m3a (2× jets) | 0.0225 | 1.25 | 32 |
+| **w1 loss, mean of 3 seeds** | **0.0227** | **1.24** | 34 |
+| w1 sample s0 | 0.0262 | 1.46 | 47 |
+
+The "confirming" verdict compares the weighted seed mean with set_r2 alone, but set_r2 is the worst
+of the three unweighted seeds (section "Phase 0, corrected"). Against the unweighted seed mean, the
+weighted models (0.0227, 1.24) and set m3a (0.0225, 1.25) both equal the baseline (0.0215, 1.21)
+within the seed noise. So m3a's apparent gain was itself seed noise, and weighting reproduces it
+only in that sense. The 170–200 GeV spectrum ratio is the one quantity that does move with
+weighting (mean 0.990 against 0.961 unweighted, ≈ 1σ). The shifts above agree: no cost, no gain.
+
+**Standing verdict:** at this model size and training length, high-pT fidelity of the toy surrogate
+is not data-limited. Weighting is safe (it costs nothing in shifts or low-pT fidelity) but does not
+buy fidelity. The persistent n_constituents excess above 140 GeV points to phase 3 (pT conditioning).
