@@ -14,7 +14,8 @@ the main-study trees are read only.
 | 2026-10-26 | 1 | 60354888 (`w1-gen`, cpu shared, 64 tasks × 2 cores, 20 min limit) | 0.85 core-h (sum of shard wall times; 80–100 s per task) | done, 64/64 | `data/v2_w1`: v2_m2 design and train stream, 6000 jets/point, `--bias-k 3 --bias-cap 250` (snapshot 1bf9fdc) |
 | 2026-10-26 | 2 | 60354914 (`w1-train4`, gpu regular, 1 node × 4 A100, 4 h limit, afterok 60354888; nid008196, started 10-27 23:21 after ≈ 23 h in the queue) | 1 h 58 min = 2.0 node-h | done, 4/4 runs | `runs/w1/`: set d256 L6 200k (r2 settings) on v2_w1, `--weight-mode loss` seeds 0–2, `sample` seed 0; multC64 attached (`spec_w1.txt`) |
 | 2026-10-26 | 4 | login node | ≈ 3 min | done | WEXPO from ESS by reweighting jewel_v1 (`runs/w4/ess/ess_jewel.py`) |
-| 2026-10-27 | 2 | 60427776, 60427777 (`w1-shiftq-1/2`, gpu shared, 1 A100 each, 2 h 45 min limit, afterok 60354914) | ≈ 4 GPU-h expected | queued | high-statistics shifts of the 4 w1 models (`runs/w1/shift_hi_queue.txt`, snapshot 046a3cb, `data/v2_m3_shiftdirect`, redraw, 50 000 clouds) → `runs/w1/shift_hi/` |
+| 2026-10-27 | 2 | 60427776, 60427777 (`w1-shiftq-1/2`, gpu shared, 1 A100 each, 2 h 45 min limit, afterok 60354914) | 13 s, 8 s | **failed**: snapshot 046a3cb predates `shell/nle/shift_queue.sh`; resubmitted as 60440586/7 (script from snapshot 1bf9fdc, code from 046a3cb, as the main study did) | high-statistics shifts of the 4 w1 models (`runs/w1/shift_hi_queue.txt`, snapshot 046a3cb, `data/v2_m3_shiftdirect`, redraw, 50 000 clouds) → `runs/w1/shift_hi/` |
+| 2026-10-28 | 2 | 60358305 (`w1-ptbins`, another session's job, regular, 1 node × 4 A100, nid002896) | 51 min | done, 16/16 points × 4 models → `runs/w1/ptbins/w5_*` (snapshot a2e7dba) |
 | 2026-10-27 | 2 | 60427771/72/74/75 (`w1-ptbins-*`) | 0 | **cancelled by me before start** | duplicates of 60358305 (`w1-ptbins`, `runs/w1/ptbins_w1.sbatch`, 1 node × 4 A100, regular), which another session submitted from this worktree on 10-26 23:42 → `runs/w1/ptbins/w5_{s0,s1,s2}`, `w5samp_s0` |
 | 2026-10-26 | 0 | 60356967, 60356968 (`w0-ptbins-s1/s2`, gpu shared, 1 A100 each; nid008681, nid002257) | 47 min, 49 min | done, 16/16 points each | `toy.ptbins` of set s1 and s2 (main-study checkpoints `runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`), the seed spread for the weighted comparison → `runs/w0/ptbins/set_s{1,2}` (`run_ptbins_one.sbatch`) |
 | 2026-10-26 | 4 | 60355573 (`w4-jewel-probe`, cpu debug, 1 node, 30 min; nid004206) | 9 min 55 s, 0.17 node-h (budget ≤ 0.5 approved by the user) | done, 32/32 tasks rc 0 | weighted JEWEL probe, 4 grid points × WEXPO 2, 3 × 4 tasks × 1000 events → `runs/w4/probe/wexpo{2,3}` (snapshot 6294671) |
@@ -476,3 +477,28 @@ Set s1 and s2 (`runs/m2r3/set_d256_L6_200k_s{1,2}/checkpoint_mult.pt`, the r2 co
   - The +0.0037 is therefore not a fidelity measure. Fidelity is judged by `toy.ptbins` and the shift (pending).
   - A weighted fit of the transform (or reusing v2_m2's) would make the losses comparable. Not done here.
 - **Loss and sample modes give the same validation loss** (1.05594–1.05596), and the 3 seeds agree to 1e-5, as the baseline seeds do.
+
+## Phase 2 result: `toy.ptbins` of the weighted models (2026-10-28)
+
+**Run:** job 60358305 (nid002896, A100), snapshot a2e7dba, as the baseline (redraw, 22 000 clouds, gate points 0, 8, …, 120); checkpoints `runs/w1/set_d256_L6_200k_w1*/checkpoint_mult.pt` (sha256 c66c845f…, e4f95db2…, 42d89d8a…, 4cb27a14…) → `runs/w1/ptbins/w5_*`. Combined with `ptbins.combine` against the 200k seeds r2/s1/s2 and 400k.
+
+| model | ≥ 120 GeV rms Δ/σ | Σ pull² ≥ 120 (18 cells) | Σ pull² < 120 (30 cells) | n_constituents 120–140 / 140–170 / 170–200 | spectrum 120–140 / 140–170 / 170–200 |
+|---|---|---|---|---|---|
+| set r2 (v2_m2, s0) | 0.032 | 57 | 129 | +0.031 / +0.062 / +0.049 | 1.053 / 1.023 / 0.937 |
+| set s1 (v2_m2, s1) | 0.020 | 21 | 45 | +0.011 / +0.037 / +0.035 | 1.037 / 1.012 / 0.975 |
+| set s2 (v2_m2, s2) | 0.023 | 29 | 68 | +0.020 / +0.038 / +0.044 | 1.028 / 0.994 / 0.972 |
+| **w1 s0** (v2_w1, loss) | 0.030 | 42 | 73 | +0.022 / +0.046 / +0.063 | 1.034 / 0.995 / 0.977 |
+| **w1 s1** (v2_w1, loss) | 0.028 | 34 | 81 | +0.016 / +0.037 / +0.060 | 1.032 / 1.003 / 0.988 |
+| **w1 s2** (v2_w1, loss) | 0.024 | 27 | 125 | +0.022 / +0.032 / +0.059 | 1.049 / 1.003 / 1.004 |
+| w1 sample s0 (v2_w1, sample) | 0.031 | 47 | 78 | +0.027 / +0.033 / +0.059 | 1.021 / 0.993 / 0.916 |
+| set 400k (v2_m2, s0) | 0.019 | 21 | 57 | +0.016 / +0.040 / +0.037 | 1.027 / 0.996 / 0.972 |
+
+(se per cell ≈ 0.013–0.04 above 120 GeV, mostly from the shared direct sample; spectrum ratio se ≈ 3 % in 170–200.)
+
+- **Weighting does not improve high-pT fidelity.** With ×9 ESS in 170–200 GeV and ×5 in 140–170, the three weighted seeds give Σ pull² 42 / 34 / 27 (mean 34) against 57 / 21 / 29 (mean 36) for the unweighted seeds. The rms effect is 0.024–0.030 against 0.020–0.032.
+- **The n_constituents excess at 170–200 GeV is not reduced.** It is +0.059 to +0.063 in all four weighted models, against +0.035 to +0.049 unweighted; at 140–170 GeV it is +0.032 to +0.046 against +0.037 to +0.062. ptd and lead_fraction above 140 GeV are no better either.
+- **Only the spectrum at 170–200 GeV moves:** 0.977, 0.988, 1.004 against 0.937, 0.975, 0.972 (≈ +0.03, ≈ 1σ of the ratio).
+- **Low pT is unchanged** (Σ pull² < 120: 73–125 against 45–129), despite ×0.42 ESS at 60–70 GeV. The low-pT defect is not data-limited either.
+- **Sample mode is no better than loss mode** (worse in ptd, lead_fraction and the spectrum above 170 GeV, one seed).
+- **Verdict (handoff decision point):** the high-pT defect of the set surrogate is **not data-limited**. More effective training statistics at high pT — ×2 jets (m3a), ×9 ESS (weighted) — do not reduce it. Seed and training length (400k) matter more. The persistent n_constituents excess above 140 GeV is a capacity or parametrisation effect, so the handoff's phase 3 applies: conditioning the flow on jet pT (the factorised model, plan §9.1) or the observed-pT bias arm.
+- **High-statistics shifts** of the four models are running (jobs 60440586/7); they test whether weighting costs anything in the integrated measure.
