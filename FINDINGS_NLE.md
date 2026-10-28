@@ -1007,6 +1007,59 @@ box refinement — and checkpoint **set_d256_L6_400k seed 0**
   `fit_0000` seals, or as a separate finer-resolution rerun of it) before trusting the
   reported widths/coverage.
 
+### N = 1000 closure: campaign DONE, M5 criterion 3 FAILS for τ_init (2026-10-28 03:44)
+
+All 20 fits sealed (`dev_N1000_set400k_toy`, `_control`). 7 chunks of ≤ 4 h interactive
+allocations (60356724 cancelled; 60361689, 60417276, 60425325, 60432486 productive), 2026-10-27
+02:06 → 2026-10-28 03:44, **≈ 28 node-h actual** (well under the ≈ 55 node-h estimate above —
+useful calibration: some fits' ridge lattices needed fewer than 1863 candidates).
+
+**Grid-aliasing fix confirmed:** control fit 3, which aliased to MLE (4.5, 0.25, 1.2) against
+truth (7.5, 0.30, 0.95) on the old box grid (previous campaign `dev_N1000_setR2`), now
+recovers mean (7.05, 0.300, 1.01), pulls (−0.29, +0.00, +0.34). The ridge lattice fixes the
+exact failure mode it was built for.
+
+**M5 pass criteria (fixed in `PLAN_NLE_PERLMUTTER.md` before any v2 result), evaluated
+against `toy/report.json` and `control/report.json` (N = 10 ensembles each, N = 1000 events):**
+
+| criterion | b | T_ref | τ_init |
+|---|---|---|---|
+| 1. joint levels ~ uniform, KS p > 0.01 | toy 0.243, control 0.586 | (shared, 3 params jointly) | — |
+| 2. marginal + joint 68/95% coverage inside Clopper–Pearson 95% | all `nominal_inside: True` (toy and control, both levels, all 3 params + joint) | | |
+| 3. toy − control mean pull within 2 combined SE | diff 0.633, se 0.501, z 1.27 → **pass** | diff 0.757, se 0.502, z 1.51 → **pass** | diff −0.834, se 0.365, **z = −2.29 → FAIL** |
+
+- Mean pulls: toy b +0.28±0.33, T_ref +0.56±0.29, τ_init −0.54±0.32; control b −0.35±0.38,
+  T_ref −0.20±0.41, τ_init +0.30±0.18.
+- **Criterion 3 fails for τ_init by 0.29 combined SE** (z = −2.29 vs. the 2.0 bound). b and
+  T_ref pass. Criteria 1 and 2 pass for everything measured (both campaigns, all parameters,
+  both coverage levels, the joint).
+- **Reading, not yet a verdict:** N = 10 is a low-power test — under pure noise, P(at least
+  one of 3 independent z's exceeds 2 in magnitude) ≈ 13 %, so a single marginal exceedance is
+  not strong evidence by itself. But the criterion was fixed in advance precisely to prevent
+  that kind of post-hoc discounting, so this is recorded as a **FAIL on criterion 3 for
+  τ_init**, not rounded to a pass.
+  - τ_init is a cross-axis (u) coordinate of the ridge lattice, not the long axis (b); the
+    still-open nested check (finer step/h on one fit) bears directly on whether this is a
+    lattice-resolution artifact (h = 1.5σ cross-section spacing) or a genuine surrogate bias,
+    and should be run before drawing a conclusion.
+  - Per the plan's own rule: "If M5 fails while M3 passes, the gate missed something
+    relevant: add it to M3 and iterate M2/M3." The gate (M3) has not flagged τ_init
+    specifically as the problem parameter in the fidelity-thread results so far (the
+    high-statistics shift table has τ_init among the smaller shifts, not the largest), so if
+    the nested check rules out a lattice artifact, this would be a genuinely new signal for
+    the fidelity thread to pick up.
+- **M5 is not fully evaluated yet regardless of this result:** the plan requires ≥ 10
+  ensembles at **both** N = 250 and N = 1000; only N = 1000 has been run on this (400k)
+  checkpoint. The N = 250 closure on record (`dev_N250_setC64`) used the older v1 backend and
+  grid, not this checkpoint — it does not satisfy this requirement for v2/400k.
+- **Not yet run:** the known-b diagnostic (b fixed at truth, 2D T_ref/τ_init scan), listed in
+  the plan as an M5 report item, previews M7.
+- **Recommended next steps, no decision needed yet:** (1) the single-fit nested check, to
+  separate lattice resolution from surrogate bias on τ_init; (2) if the nested check confirms
+  resolution, a finer lattice h and re-run of the affected fits before concluding anything
+  about τ_init; (3) the N = 250 development closure on the 400k checkpoint, needed for M5
+  regardless of (1)/(2).
+
 ## Open items
 
 ### To do (2026-10-25, user request): surrogate fidelity improvement, `docs/SURROGATE_FIDELITY_PLAN.md`
