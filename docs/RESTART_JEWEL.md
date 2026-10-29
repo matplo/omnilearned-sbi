@@ -16,10 +16,14 @@ LAST DONE:    phase 0a/0b/1 pushed; JEWEL closure observation source pushed;
               probe running on an interactive node
 NEXT ACTION:  read the probe out (block below), record in FINDINGS_JEWEL.md,
               then launch Phase 2 with shell/nle/jewel_v2_drive.sh
-RUNNING:      slurm 60481641 jv2-probe (batch, queued) and 60481776
-              jv2-probe-int (interactive). Both serve the SAME task dir;
-              claims are exclusive so they cannot duplicate work. Cancel
-              whichever is still pending once the other finishes.
+RUNNING:      60481776 jv2-probe-int  (4 theta, data/jewel_v2/probe)
+              60482135 jv2-corner     (3 hot/central theta, probe_corner)
+              (batch 60481641 cancelled as redundant once the interactive ran)
+OPEN RISK:    max n_constituents rises steeply with T_ref and centrality
+              (94 at T=0.25 -> 138 at T=0.35). The cap is 256 and the design
+              box reaches T_ref 0.9, which the first probe does NOT cover --
+              hence probe_corner. If the corner exceeds ~200, raise
+              selection.max_constituents BEFORE production and re-snapshot.
 SNAPSHOT:     $JEST_NLE_ROOT/src_snapshots/e67510ff7d0dda7a977b556d5b7fd22b98e0163a
 BLOCKED ON:   nothing
 ```
