@@ -11,22 +11,27 @@ Brief: `docs/PLAN_JEWEL_NLE.md`. Running log: `FINDINGS_JEWEL.md`. Rules: `AGENT
 ## Current state
 
 ```
-PHASE:        2 (production running)
-LAST DONE:    probes complete; max_constituents raised 256 -> 512 from the
-              measured tail; snapshot 0917d16; 3 production drivers launched
-NEXT ACTION:  when a split's merged/index_<split>.json exists, start Phase 3
-              training: shell/nle/jewel_v2_train.sh $SNAP $JEST_NLE_ROOT/runs/w6
-              (inside salloc -A alice_g -C gpu -N 1 --gpus 4)
-SNAPSHOT:     $JEST_NLE_ROOT/src_snapshots/0917d16a921581099d0986a7be09467b0196c9ba
-RUNNING:      drivers (nohup, login node) for train / fidelity / validation,
-              logs $JEST_NLE_ROOT/data/jewel_v2/drive_*.out and
-              data/jewel_v2/<split>/logs/drive.log
-              plus interactive overflow farms on train and fidelity
-TARGETS:      train 6000 jets/pt x 500 Sobol pts; fidelity 20000 x 128;
-              validation 4000 x 128; test split NOT yet planned (4 holdout
-              theta, see the Phase 2 block)
+PHASE:        2 (production running, all four splits)
+LAST DONE:    train 1000/1000 and fidelity 256/256 first-wave tasks done;
+              test split planned (--split test now exists) and farming
+NEXT ACTION:  when merged/index_train.json exists, start Phase 3:
+                salloc -A alice_g -C gpu -q interactive -N 1 --gpus 4 -t 04:00:00 \
+                  srun -N1 -n1 bash shell/nle/jewel_v2_train.sh $SNAP $JEST_NLE_ROOT/runs/w6
+SNAPSHOT:     $JEST_NLE_ROOT/src_snapshots/9d9ea4d617ec5b3a2aca9eda6050932acdca45e3
+              (0917d16 for data generated before the --split test change; both
+               have identical physics settings, only the CLI differs)
+RUNNING:      3 drivers (nohup, login) for train/fidelity/validation + batch
+              waves; interactive farm on the test split
+TARGETS:      train 6000 jets/pt x 500; fidelity 20000 x 128;
+              validation 4000 x 128; test ~29000 jets at each of 4 holdout theta
 BLOCKED ON:   nothing
 ```
+
+**Yield so far** (first wave, ~1.8 jets/event, 0.157 core-s/jet as the probe predicted):
+train 1.82 M jets over 500 points (median 3568/pt, target 6000 -> `topup` adds chunks),
+fidelity 464 k over 128 points (median 3571/pt, target 20000).
+**max N_const reached 255 at 1.8 M jets with 0 capped** -- the 256 cap would have started
+dropping hot-region jets right here, so raising it to 512 was load-bearing, not precautionary.
 
 **Check production:** `tail $JEST_NLE_ROOT/data/jewel_v2/<split>/logs/drive.log` and
 `ls $JEST_NLE_ROOT/data/jewel_v2/<split>/<split>_p*.json | wc -l` against the task count.
