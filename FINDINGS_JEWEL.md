@@ -202,3 +202,41 @@ still returned and added to the manifest's rejection tally, so accounting is unc
 `tests/sbi/test_jewel_inclusive.py` pins the equivalence.
 
 This is why raising the constituent cap could not simply be done on its own.
+
+### Corner probe: the cap is raised to 512 (and "it saturates" was wrong too)
+
+Job 60482135 (second interactive CPU node, run in parallel with the main probe), 3 hot/central
+theta, 1500 events each:
+
+| b | T_ref | tau | jets | jets/event | max N_const | s/event |
+|---|---|---|---|---|---|---|
+| 3.0 | 0.75 | 0.60 | 3298 | 2.20 | 215 | 0.417 |
+| 0.5 | 0.88 | 0.25 | 3109 | 2.08 | 187 | 0.395 |
+| 0.5 | 0.88 | 0.95 | 4130 | 2.76 | **224** | 0.573 |
+
+**Correcting myself twice on the same quantity.** First I extrapolated 94 -> 138 -> 160
+linearly to ~310 at the box edge. Then the T_ref = 0.65 point came back at 154 and I read that
+as saturation. Both were wrong: that point has a *short* `tau_init` (0.35), and the count
+depends on `tau_init` as well as `T_ref` -- at T_ref 0.88 the long-tau point gives 224 against
+187 for the short-tau one. The clean statement is that N_const grows with the amount of medium
+the jet traverses, which is set by both parameters, and no two-point extrapolation along one
+axis was ever going to capture it.
+
+Pooled over all 7 probe points (24 434 jets): max 224, p99.9 = 161, tail **~19.6 constituents
+per e-fold**, so projected maxima of **297 / 318 / 342** over 1e6 / 3e6 / 1e7 jets.
+**`max_constituents` 256 -> 512.** No probe jet was actually capped (`too_many_constituents`
+= 0 at every point), so the probe data is bit-identical to what the new cap would have
+produced and stays valid as a diagnostic.
+
+**Cost, from the full set:** s/event spans 0.096 (peripheral) to 0.573 (hot corner), jets/event
+1.6-2.8; averaged over the box ~0.16 core-s/jet. Projected production:
+
+| split | points x jets/point | jets | ~node-h |
+|---|---|---|---|
+| train | 500 x 6000 | 3.0 M | ~2.1 |
+| fidelity | 128 x 20000 | 2.6 M | ~1.8 |
+| validation | 128 x 4000 | 0.5 M | ~0.4 |
+| test | 4 x 25000 | 0.1 M | ~0.1 |
+
+~4.4 node-h in total, against 10.9 for the smaller `jewel_w1`. Statistics are not the binding
+constraint, so the jets/point targets are set generously rather than minimally.

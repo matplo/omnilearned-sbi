@@ -51,7 +51,11 @@ constituent_abs_eta_max = 2.5   # >= jet_abs_eta_max + R
 constituent_abs_phi_max_rad = 1.2  # after rotating each jet's axis to phi = 0
 constituent_pt_min_GeV = 0.0
 min_constituents = 2
-max_constituents = 256
+max_constituents = 512          # probe: pooled tail ~20 const/e-fold off a 224 max, so a
+                                # 3 M-jet production projects to ~318; 256 would drop jets
+                                # preferentially in the hot central region (theta-dependent
+                                # acceptance hole). Padding is gzipped and readers trim to
+                                # the real max, so the cost of headroom is small.
 exclude_neutrinos = true
 rotate_to_jet_axis = true
 jet_multiplicity = "inclusive"   # inclusive | leading | subleading
