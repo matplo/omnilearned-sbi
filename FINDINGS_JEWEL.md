@@ -253,3 +253,38 @@ backend `jewel-2.6.0-cs-v2`, `jet_multiplicity = inclusive`, **1.82-1.83 jets/ev
 512 cap is doing its job. Targets: train 6000 jets/point x 500 Sobol points, fidelity
 20000 x 128, validation 4000 x 128; the drivers `topup` from measured acceptance until
 each point reaches its target.
+
+## Test split complete and Phase-6 pseudo data verified (2026-10-29)
+
+`--split test` had to be added to the CLI first. It was already wired everywhere else
+(`cards.SPLIT_STREAM["test"]`, `randomness.njob_base.test = 500000`); only the argparse
+`choices` list omitted it. **The tempting workaround would have been a correctness bug**:
+planning the reserved-setting data as `probe` reuses `njob_base.probe = 800000`, which is
+exactly the NJOB range the earlier probes consumed -- identical JEWEL seeds, duplicate events,
+inside the very sample used to validate inference. A test now pins
+`njob_base.test != njob_base.probe`.
+
+64 tasks, 9 min on one interactive node, `index` + `merge` done:
+
+| theta (b, T_ref, tau) | jets | jets/event | max N_const | ensembles @1000 |
+|---|---|---|---|---|
+| 1.5, 0.65, 0.35 | 31075 | 1.95 | 210 | 31 |
+| 4.5, 0.45, 0.65 | 28478 | 1.78 | 197 | 28 |
+| 7.5, 0.35, 0.85 | 25853 | 1.62 | 165 | 25 |
+| 9.5, 0.25, 0.45 | 26337 | 1.65 | 93 | 26 |
+
+`closure.jewel_ensembles` was then run against the real merged shards: **10 disjoint
+ensembles of 1000 jets at every holdout theta**, disjointness verified by exact row
+comparison. The plan asks for >= 10, so there is 2.5-3x headroom for larger N or more
+ensembles.
+
+### A number for the composite-likelihood question
+
+Within an ensemble the draw gives **1.97-2.41 jets per distinct event**. That sets the scale
+of the correction the Phase-6 coverage test is looking for: if an event's jets were perfectly
+correlated the effective sample size would be ~N/2 and credible intervals would come out
+~sqrt(2) = 1.41x too narrow; they are only partially correlated, so the true inflation lies
+between 1 and ~1.41. Small enough that 10 ensembles may not resolve it cleanly, large enough
+that it must be checked rather than assumed -- the one-jet-per-event refit is the
+discriminator, and **the choice of remedy (effective-N correction vs one jet per event at
+inference) is a methodological decision for the user, not one to make silently.**
