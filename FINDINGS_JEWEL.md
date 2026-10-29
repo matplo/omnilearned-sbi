@@ -103,3 +103,28 @@ inputs for this sample definition.
 `tests/sbi` on the login node, revision `e67510f` (clean), CPU: **163 passed, 7 skipped**,
 8 min 28 s. The count rises from 123 on `dev/nle-perlmutter` because the weighted branch's
 tests came in with the merge. The 7 skips are the MPS-only tests, as before.
+
+## Phase 5 started early: what the JEWEL NLE actually needs (2026-10-28)
+
+While the probe was queued, the "how much of the NLE is toy-bound?" question was settled by
+reading rather than guessing. **Almost none of it.**
+
+| component | toy-bound? | action |
+|---|---|---|
+| `fit.py`, `likelihood.py`, `scan.py`, `ridge.py`, `flow.py`, `observations.py` | no toy imports at all | reuse unchanged |
+| `toy/numerics.py` (M4 convergence) | takes only checkpoint + observations + theta pairs; imports the shared `PARAMETERS` | **reuse unchanged** |
+| `toy/gate.py` | already takes `--config` and handles a JEWEL selection | reuse |
+| `closure.report` / fits / sealing | keyed on `PARAMETERS`, which JEWEL imports from the same module | reuse unchanged |
+| `closure.prepare` observation-making | **yes** — the toy runs its simulator on the fly | new `source = "jewel"` branch |
+| `closure.acceptance_part` | **yes** — hardcoded toy selection | `--config` added |
+
+So no separate `jewel/closure.py` was written: duplicating ~400 lines of report/seal logic
+would have been the wrong call when only observation-making differs. `(b, T_ref, tau_init)`
+is literally the same `PARAMETERS` tuple for both backends.
+
+- `closure.jewel_ensembles(dir, split, theta, n, K)`: K **disjoint** ensembles at a theta from
+  merged shards, raising if the split cannot supply `n*K` jets rather than recycling them.
+  Records keep the shared `event_id`, so an inclusive sample's within-event correlation stays
+  visible to the coverage report (the composite-likelihood check).
+- `closure.load_sample_config(path)`: toy or JEWEL config -> `(cfg, Selection)`.
+- Tests: `tests/sbi/test_jewel_closure_source.py` (4), all pass.
