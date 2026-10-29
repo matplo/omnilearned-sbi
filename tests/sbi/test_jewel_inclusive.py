@@ -155,6 +155,21 @@ def test_train_sobol_design_count_and_reservation_margin():
         assert not np.all(rel < 0.02, axis=1).any(), f"training design clashes with holdout {h}"
 
 
+def test_test_split_has_its_own_random_stream():
+    """The reserved-setting pseudo data must not reuse the probe's NJOB base.
+
+    Both map to the same ``SPLIT_STREAM`` entry, so if "test" were planned as "probe" the
+    two would get identical NJOB values -- i.e. identical JEWEL seeds and duplicate events.
+    """
+    cfg = tomllib.load(open(V2, "rb"))
+    bases = cfg["randomness"]["njob_base"]
+    assert bases["test"] != bases["probe"]
+    njob_test = cards.njob(cfg, "test", 0, 0)
+    njob_probe = cards.njob(cfg, "probe", 0, 0)
+    assert njob_test != njob_probe
+    assert njob_test == bases["test"]
+
+
 def test_cartesian_design_still_used_without_train_points():
     """Configs written before ``train_points`` keep the historical Cartesian grid."""
     cfg = tomllib.load(open(V2, "rb"))

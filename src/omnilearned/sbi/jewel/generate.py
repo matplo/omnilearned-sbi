@@ -568,7 +568,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("plan")
-    p.add_argument("--split", required=True, choices=["train", "validation", "fidelity", "probe"])
+    # "test" has its own NJOB base and stream (cards.SPLIT_STREAM, randomness.njob_base) and is
+    # planned from explicit --theta (the reserved settings), not from a design. Planning it as
+    # "probe" instead would reuse the probe NJOB base and hand it the probes' random seeds.
+    p.add_argument("--split", required=True,
+                   choices=["train", "validation", "fidelity", "test", "probe"])
     p.add_argument("--out", required=True)
     p.add_argument("--config", default=str(cards.CONFIG))
     p.add_argument("--chunks", type=int, default=1)
