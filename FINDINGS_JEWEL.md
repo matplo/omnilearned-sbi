@@ -12,6 +12,7 @@ Every entry records the source revision, dirty status and the actual device.
 | date | phase | job | resources | status | what |
 |---|---|---|---|---|---|
 | 2026-10-28 | 0b, 1 | — (login) | — | done | branch, merge, v2 config, inclusive jets, Sobol design, tests |
+| 2026-10-28 | 1p | 60481641 `jv2-probe` | 1 CPU node, 8 workers, 1 h | submitted 22:5x | probe at 4 theta, 2000 events each, `data/jewel_v2/probe` |
 
 ## Phase 0b: branch and consolidation (2026-10-28)
 
@@ -96,3 +97,9 @@ inputs for this sample definition.
   (pT-hat brackets the jet range; constituent eta >= jet eta + R), the Sobol design count and
   **the rule-2 reservation margin against all four holdout settings** (nearest training point
   is 3.3 % of the box away, limit 2 %), and Cartesian back-compatibility.
+
+### Test suite after the merge and the phase-1 changes
+
+`tests/sbi` on the login node, revision `e67510f` (clean), CPU: **163 passed, 7 skipped**,
+8 min 28 s. The count rises from 123 on `dev/nle-perlmutter` because the weighted branch's
+tests came in with the merge. The 7 skips are the MPS-only tests, as before.
