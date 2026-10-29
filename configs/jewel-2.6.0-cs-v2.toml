@@ -1,0 +1,80 @@
+# JEWEL 2.6.0-custom samples for the NLE, recoils on, constituent subtraction at analysis level.
+# v2 (2026-10-28, user decision): the measurable-jet window of a future experiment.
+#   pT-hat 10-600 GeV WEIGHTED (WEXPO via `generate plan --wexpo`, 5 = JEWEL default): the
+#   hat range must bracket the jet window from both sides, or the jet spectrum is truncated
+#   at its ends. Single weighted range, no pT-hat slicing: ESS/n ~ 0.4/ln(range ratio), so
+#   widening 50-400 -> 10-600 costs ~0.19 -> ~0.11, while the large max/min weight ratio is
+#   harmless after the per-point normalisation in `generate merge`.
+#   jets 20-500 GeV, |eta_jet| < 2.0, constituents |eta| < 2.5 (R = 0.4, so a jet at the eta
+#   edge keeps its cone inside the constituent acceptance).
+#   jet_multiplicity = inclusive: experiments measure inclusive jets, and a leading-only
+#   sample is biased towards jets that interacted less with the medium.
+#   training design: 500 scrambled-Sobol points, not the Cartesian grid, so the surrogate
+#   interpolates smoothly in theta.
+# theta = (b via fixed centrality, TI, TAUI); box b 0-11 fm, TI 0.1-0.9 GeV, TAUI 0.2-1.0 fm/c.
+# Changing [jewel], [subtraction] or [selection] defines a new backend id.
+backend = "jewel-2.6.0-cs-v2"
+
+[jewel]
+prefix = "/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv/hepyy_packages/jewel/2.6.0-custom"
+lhapdf_data = "/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv/hepyy_packages/lhapdf/6.5.5/share/LHAPDF"
+# environment of the binary: the installed packages' own env scripts (LHAPDF library, JEWEL);
+# sourced for the JEWEL subprocess only, nothing is modified
+env_scripts = ["/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv/hepyy_packages/lhapdf/6.5.5/env.sh",
+               "/global/cfs/cdirs/alice/ploskon/henv-omni-sbi/.venv/hepyy_packages/jewel/2.6.0-custom/env.sh"]
+variant = "custom-perf-simple"   # partons-v1 + perf-v1: same events as custom-simple, faster
+sqrts_GeV = 5020.0
+ptmin_GeV = 10.0                 # hard-process pT-hat range; brackets the 20-500 GeV jet window
+ptmax_GeV = 600.0
+etamax = 3.1
+pdfset = 904400                  # LHAPDF id; JEWEL reads PDFSET as an integer (a set name is silently ignored)
+pdfset_name = "EPPS21nlo_CT18Anlo_Pb208"  # bound-proton nPDF; JEWEL builds n from p by isospin over its pp/pn/np/nn channels
+weighted = true                  # weighted events; WEXPO is set per plan (`--wexpo 5`)
+keeprecoils = true               # recoils on: medium response, subtracted below
+writescatcen = true              # thermal momenta (status 3) for the subtraction
+writedummies = false             # dummies only serve 4MomSub at jet level; not used
+mass_number = 208
+proton_number = 82
+
+[subtraction]
+method = "constituent"           # Milhano & Zapp 2022 (Rivet SubtractedJewelEvent), omnilearned.sbi.jewel.cs
+dRmax = 0.5
+thermal_pid = "reference"
+leftovers = "keep"               # reference convention (tag 2 added); per-jet leftover pT is recorded
+
+[selection]                      # as toy v2, applied to the subtracted final state
+jet_algorithm = "antikt"
+jet_radius = 0.4
+jet_pt_range_GeV = [20.0, 500.0]
+jet_abs_eta_max = 2.0
+constituent_abs_eta_max = 2.5   # >= jet_abs_eta_max + R
+constituent_abs_phi_max_rad = 1.2  # after rotating each jet's axis to phi = 0
+constituent_pt_min_GeV = 0.0
+min_constituents = 2
+max_constituents = 256
+exclude_neutrinos = true
+rotate_to_jet_axis = true
+jet_multiplicity = "inclusive"   # inclusive | leading | subleading
+
+[design]                         # training grid; parameter order (b, T_ref = TI, tau_init = TAUI)
+b = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
+T_ref = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+tau_init = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+box = { b = [0.0, 11.0], T_ref = [0.1, 0.9], tau_init = [0.2, 1.0] }
+events_per_task = 1000
+train_points = 500               # scrambled Sobol (stream "train"); unset -> the Cartesian axes above
+validation_points = 128          # scrambled Sobol in the box, reservation margin 0.02
+# fidelity: gate samples at the same 128 validation points with their own NJOB streams
+# (njob_base.fidelity), larger tasks (5000 events, so a point needs < chunks_per_point tasks)
+# and no event stores (jets and diagnostics only; NJOB makes every task reproducible)
+
+[holdout]                        # at half steps on every axis: strictly between grid nodes (rule 2)
+development_validation = [7.5, 0.35, 0.85]
+primary_test = [4.5, 0.45, 0.65]
+additional_test_settings = [[1.5, 0.65, 0.35], [9.5, 0.25, 0.45]]
+truth_manifest_access = "report_only_after_fit"
+
+[randomness]                     # PYTHIA MRPY(1) = NJOB * 1000; NJOB = base + chunks_per_point * point + chunk
+design_seed = 20931
+chunks_per_point = 100
+njob_base = { train = 100000, validation = 300000, test = 500000, fidelity = 600000, probe = 800000 }

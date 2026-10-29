@@ -12,6 +12,13 @@ Optional reading (rendered pages; this file stays self-contained):
 
 They are private until the user shares them; ask for access if a link does not open.
 
+> **Superseded for JEWEL (2026-10-28).** The toy track is closed; the project now targets
+> JEWEL only, with a wider measurable-jet window (jets 20-500 GeV, |eta| < 2, inclusive;
+> pT-hat 10-600 weighted). Milestones M5-M8 are replaced by `docs/PLAN_JEWEL_NLE.md` for
+> that work, and `docs/RESTART_JEWEL.md` holds the live state. **Sections 1-6 of this
+> document (goal, ground rules, lessons) still apply in full.** Toy results on record
+> stand as recorded and are not revisited.
+
 ## 1. Goal
 
 Infer (b [fm], T_ref [GeV], τ_init [fm/c]) from sets of jets with a **neural likelihood

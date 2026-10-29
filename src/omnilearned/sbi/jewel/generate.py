@@ -71,8 +71,18 @@ def box(cfg):
 
 
 def design_points(cfg, split):
-    """Points of a split: the Cartesian grid (train), Sobol (validation and fidelity)."""
+    """Points of a split: Sobol if ``design.train_points`` is set, else the Cartesian grid.
+
+    ``design.train_points = N`` selects a continuous scrambled-Sobol training design (the NLE
+    needs the surrogate to interpolate smoothly in theta, and a Cartesian grid leaves
+    axis-aligned structure); without it the historical Cartesian grid is used, so configs
+    written before this option behave exactly as they did.
+    """
     if split == "train":
+        n = cfg["design"].get("train_points")
+        if n:
+            pts, _ = make_design(int(n), "train", cfg, box=box(cfg))
+            return pts
         axes = [np.asarray(cfg["design"][p], float) for p in PARAMETERS]
         return np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, len(PARAMETERS))
     if split in ("validation", "fidelity"):
@@ -286,14 +296,15 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
             all_events = all_events[:-1]  # the last event of an interrupted run may be incomplete
         for ev in all_events:
             events.append(ev)
-            rec, why, d = jets.event_jet(ev, cfg, sel)
-            if rec is None:
+            evrecs, why, evdiags = jets.event_jets(ev, cfg, sel)
+            if not evrecs:
                 pre_reject[why] += 1
                 continue
-            d.update({"number": ev["number"], "centrality_record": ev["centrality"],
-                      "weight": ev["weight"], "pthat": ev["scale"]})
-            recs.append(rec)
-            diags.append(d)
+            for rec, d in zip(evrecs, evdiags):  # jets of one event share its number -> event_id
+                d.update({"number": ev["number"], "centrality_record": ev["centrality"],
+                          "weight": ev["weight"], "pthat": ev["scale"]})
+                recs.append(rec)
+                diags.append(d)
         if recs:
             ok, why, r, x, mask = jets.select_records(recs, sel)
         else:
@@ -333,7 +344,10 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
                "theta": dict(zip(PARAMETERS, task["theta"])), "centrality_percent": cent,
                "b_of_centrality": geom.b_of_centrality(cent), "jewel_rc": rc,
                "events_generated": len(events), "jets_selected": int(len(keep)),
+               # jets per event: > 1 is normal for jet_multiplicity = inclusive
                "acceptance": len(keep) / max(1, len(events)), "rejections": reject,
+               "jet_multiplicity": cfg["selection"].get("jet_multiplicity", "inclusive"),
+               "events_with_a_jet": int(len(np.unique(num))) if len(keep) else 0,
                "n_constituents_range": [int(nc.min()), int(nc.max())] if len(nc) else None,
                "seconds_jewel": t_gen, "seconds_processing": t_proc,
                "seconds_per_event": t_gen / max(1, len(events)),

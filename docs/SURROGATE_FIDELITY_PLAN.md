@@ -1,3 +1,6 @@
+> **CLOSED (2026-10-28).** Toy track stopped; superseded by `docs/PLAN_JEWEL_NLE.md`.
+> Kept as the record of S0-S6 and their results.
+
 # Surrogate fidelity: plan for the additional steps (toy v2, then JEWEL)
 
 Status 2026-10-25. Branch `dev/nle-perlmutter`; the brief is `PLAN_NLE_PERLMUTTER.md`

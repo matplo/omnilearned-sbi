@@ -29,8 +29,22 @@ from omnilearned.sbi.flow import json_dumps
 from omnilearned.sbi.toy.observables import jet_observables, ks_statistic
 
 KEYS = ("width", "outer_fraction", "n_constituents", "ptd", "lead_fraction", "soft8_fraction")
-PT_EDGES = np.array([60.0, 70, 80, 90, 100, 120, 140, 170, 200])
+# toy v2 / JEWEL v1 window (jets 60-200 GeV)
+PT_EDGES_60_200 = np.array([60.0, 70, 80, 90, 100, 120, 140, 170, 200])
+# JEWEL v2 window (jets 20-500 GeV): roughly geometric, so each bin spans a similar
+# fraction of the steeply falling spectrum
+PT_EDGES_20_500 = np.array([20.0, 30, 40, 60, 80, 100, 140, 200, 300, 500])
+PT_EDGES = PT_EDGES_60_200          # default: unchanged for existing callers
 SPECTRUM_EDGES = np.arange(60.0, 200.01, 5.0)
+SPECTRUM_EDGES_20_500 = np.arange(20.0, 500.01, 10.0)
+
+
+def edges_for(lo, hi):
+    """Binning for a jet-pT window: the named sets above when they match, else geometric."""
+    for e in (PT_EDGES_60_200, PT_EDGES_20_500):
+        if np.isclose(e[0], lo) and np.isclose(e[-1], hi):
+            return e
+    return np.unique(np.round(np.geomspace(float(lo), float(hi), 10), 1))
 
 
 def pt_binned(pt_d, obs_d, pt_s, obs_s, edges=PT_EDGES, keys=KEYS, min_count=10):
