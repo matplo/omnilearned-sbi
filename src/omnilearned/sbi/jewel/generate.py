@@ -296,7 +296,9 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
             all_events = all_events[:-1]  # the last event of an interrupted run may be incomplete
         for ev in all_events:
             events.append(ev)
-            evrecs, why, evdiags = jets.event_jets(ev, cfg, sel)
+            evrecs, why, evdiags, pre = jets.event_jets(ev, cfg, sel)
+            for reason_, count_ in pre.items():  # dropped before packing, still accounted for
+                pre_reject[reason_] += count_
             if not evrecs:
                 pre_reject[why] += 1
                 continue

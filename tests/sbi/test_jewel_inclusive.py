@@ -50,7 +50,12 @@ def _two_jet_event():
 
 
 def _cfg(mode):
-    cfg = json.loads(json.dumps(cards.load_config()))
+    """The v2 backend (jets 20-500 GeV, |eta| < 2) with a given jet_multiplicity.
+
+    Explicitly v2, not ``cards.load_config()``: the v1 default is the old 60-200 GeV window,
+    under which a 60 GeV test jet sits exactly on the boundary and is cut.
+    """
+    cfg = json.loads(json.dumps(cards.load_config(V2)))
     cfg["selection"]["jet_multiplicity"] = mode
     return cfg
 
@@ -59,9 +64,9 @@ def test_event_jets_inclusive_contains_leading_and_subleading():
     pytest.importorskip("hepyy")
     ev = _two_jet_event()
     sel = jets.selection_from_config(_cfg("inclusive"))
-    inc, _, dinc = jets.event_jets(ev, _cfg("inclusive"), sel)
-    lead, _, dlead = jets.event_jets(ev, _cfg("leading"), sel)
-    sub, _, dsub = jets.event_jets(ev, _cfg("subleading"), sel)
+    inc, _, dinc, _ = jets.event_jets(ev, _cfg("inclusive"), sel)
+    lead, _, dlead, _ = jets.event_jets(ev, _cfg("leading"), sel)
+    sub, _, dsub, _ = jets.event_jets(ev, _cfg("subleading"), sel)
 
     assert len(inc) >= 2, "the two hard jets must both be clustered"
     assert len(lead) == 1 and len(sub) == 1
@@ -86,11 +91,36 @@ def test_event_jets_inclusive_contains_leading_and_subleading():
         assert np.abs(np.asarray(r["phi"])).max() < 1.0
 
 
+def test_sub_threshold_jets_are_dropped_before_packing_without_changing_acceptance():
+    """The pre-filter must remove only jets ``select_sets`` would reject anyway.
+
+    Inclusive clustering yields ~99 jet candidates per event, most of them single thermal
+    particles; packing those into [n, max_constituents] arrays dominated worker memory.
+    Dropping ``count < min_constituents`` early is exactly the cut ``select_sets`` applies,
+    so the accepted set must be identical -- that equivalence is what this test pins.
+    """
+    pytest.importorskip("hepyy")
+    from omnilearned.sbi.jewel.jets import select_records
+
+    ev, cfg = _two_jet_event(), _cfg("inclusive")
+    sel = jets.selection_from_config(cfg)
+    recs, _, _, pre = jets.event_jets(ev, cfg, sel)
+
+    # every returned record already satisfies the constituent-count cut
+    assert all(len(r["pt"]) >= sel.min_constituents for r in recs)
+    # and whatever was skipped is reported, so the manifest's tally stays complete
+    assert set(pre) <= {"too_few_constituents"}
+    # the surviving records contain no jet that select_sets rejects for too few constituents
+    ok, why, _, _, _ = select_records(recs, sel)
+    assert "too_few_constituents" not in [w for w in why if w]
+    assert ok.sum() >= 2  # the two hard jets still pass the full selection
+
+
 def test_event_jet_single_form_matches_first_inclusive_jet():
     pytest.importorskip("hepyy")
     ev, cfg = _two_jet_event(), _cfg("inclusive")
     sel = jets.selection_from_config(cfg)
-    recs, _, _ = jets.event_jets(ev, cfg, sel)
+    recs, _, _, _ = jets.event_jets(ev, cfg, sel)
     one, why, _ = jets.event_jet(ev, cfg, sel)
     assert why is None
     np.testing.assert_allclose(one["pt"], recs[0]["pt"])

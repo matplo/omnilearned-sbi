@@ -100,18 +100,29 @@ def event_jets(ev, cfg, sel):
     base = {"n_thermal": int((ev["status"] == 3).sum()),
             "thermal_pt": float(np.hypot(ev["px"], ev["py"])[ev["status"] == 3].sum())}
     if len(s["px"]) == 0:
-        return [], "no_jet", []
+        return [], "no_jet", [], {}
     r = _cluster(s["px"], s["py"], s["pz"], s["e"], sel.jet_radius)
     idx = jet_indices(int(r["njets"][0]), mode)
     if not idx:
-        return [], "no_jet", []
+        return [], "no_jet", [], {}
     # unsubtracted leading jet: event-level context, repeated on every jet (diagnostics only)
     raw = raw_final_state(ev) & ~np.isin(np.abs(ev["pid"]), NEUTRINOS)
     rr, rm = _leading(ev["px"][raw], ev["py"][raw], ev["pz"][raw], ev["e"][raw], sel.jet_radius)
     recs, diags, reason = [], [], None
+    skipped = 0
     for j in idx:
         member = r["membership"][0] == j
-        if not member.any():
+        nmemb = int(member.sum())
+        if not nmemb:
+            continue
+        # Drop sub-threshold jets before packing. ``select_sets`` rejects exactly
+        # ``count < min_constituents`` on the same constituent count, so this changes no
+        # accepted jet -- it only avoids materialising them. Inclusive clustering yields
+        # ~99 jet candidates per event, ~60 % of them single thermal particles, and packing
+        # those into [n, max_constituents] arrays dominates a worker's memory (measured:
+        # ~198 k candidates per 2000-event task).
+        if nmemb < sel.min_constituents:
+            skipped += 1
             continue
         pt = np.hypot(s["px"], s["py"])[member]
         eta = np.arcsinh(s["pz"][member] / pt)
@@ -133,12 +144,13 @@ def event_jets(ev, cfg, sel):
                       "n_leftover_in_jet": int((tag == cs.TAG_THERMAL_LEFT).sum()),
                       "unsubtracted_jet_pt": float(rr["jet_pt"][0]) if rr["njets"][0] else 0.0,
                       "unsubtracted_n": int(rm.sum())})
-    return recs, (reason if not recs else None), diags
+    pre = {"too_few_constituents": skipped} if skipped else {}
+    return recs, (reason if not recs else None), diags, pre
 
 
 def event_jet(ev, cfg, sel):
     """Single-jet form of :func:`event_jets` (first kept jet), for callers that want one."""
-    recs, why, diags = event_jets(ev, cfg, sel)
+    recs, why, diags, _ = event_jets(ev, cfg, sel)
     if not recs:
         return None, why or "no_jet", (diags[0] if diags else {})
     return recs[0], None, diags[0]

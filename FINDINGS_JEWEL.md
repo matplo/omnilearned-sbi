@@ -180,3 +180,25 @@ the hot, central region where the quenching signal is strongest** -- a theta-dep
 the acceptance, which is exactly the kind of defect an NLE cannot absorb. Raising the cap is
 cheap: shards are zero-padded (gzip absorbs it) and `read_shards(trim=True)` trims to the
 actual maximum, so training cost follows the real N, not the cap.
+
+### Memory: inclusive clustering had to be pre-filtered before packing
+
+The probe's rejection tally exposed a scaling problem that only appears with inclusive jets.
+Per 2000-event task the clusterer yields **~198 000 jet candidates** (~99 per event), of which
+**120 630 (61 %) are single thermal particles** rejected as `too_few_constituents`. All of them
+were being packed into `[n, max_constituents]` arrays before the selection saw them, which is
+what sets a worker's peak memory:
+
+| cap | candidates packed | peak/worker | x128 workers/node |
+|---|---|---|---|
+| 256, unfiltered | 198 k | ~2.5-3 GB | ~320-380 GB (a 512 GB node, tight) |
+| 512, unfiltered | 198 k | ~5-6 GB | **OOM** |
+| 512, pre-filtered | 77 k | ~1.9 GB | ~240 GB |
+
+`select_sets` rejects exactly `count < min_constituents` on the same constituent count that
+`event_jets` already has, so dropping those jets before packing is **provably equivalent** --
+it cannot change the accepted set, only avoid materialising rejects. The skipped jets are
+still returned and added to the manifest's rejection tally, so accounting is unchanged.
+`tests/sbi/test_jewel_inclusive.py` pins the equivalence.
+
+This is why raising the constituent cap could not simply be done on its own.
