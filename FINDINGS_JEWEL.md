@@ -12,7 +12,10 @@ Every entry records the source revision, dirty status and the actual device.
 | date | phase | job | resources | status | what |
 |---|---|---|---|---|---|
 | 2026-10-28 | 0b, 1 | — (login) | — | done | branch, merge, v2 config, inclusive jets, Sobol design, tests |
-| 2026-10-28 | 1p | 60481641 `jv2-probe` | 1 CPU node, 8 workers, 1 h | submitted 22:5x | probe at 4 theta, 2000 events each, `data/jewel_v2/probe` |
+| 2026-10-28 | 1p | 60481641 `jv2-probe` | 1 CPU node, 8 workers, 1 h | **cancelled** (batch queue congested; interactive took the tasks) | probe at 4 theta, 2000 events each, `data/jewel_v2/probe` |
+| 2026-10-28 | 1p | 60481776 `jv2-probe-int` | 1 interactive CPU node, 16 workers | done, 15 min | the 4-theta probe, via interactive overflow |
+| 2026-10-28 | 1p | 60482135 `jv2-corner` | 1 interactive CPU node, 8 workers | done, ~20 min | 3 hot/central theta, sizes the constituent cap |
+| 2026-10-28 | 2 | 60482494/98/99 (batch waves) + 60482535/36 (interactive) | 8+6+2 nodes x 64 workers; 2 interactive | **running** from 23:24 | production train/fidelity/validation, snapshot `0917d16`, via `jewel_v2_drive.sh` |
 
 ## Phase 0b: branch and consolidation (2026-10-28)
 
@@ -240,3 +243,13 @@ produced and stays valid as a diagnostic.
 
 ~4.4 node-h in total, against 10.9 for the smaller `jewel_w1`. Statistics are not the binding
 constraint, so the jets/point targets are set generously rather than minimally.
+
+### Production started cleanly (2026-10-28 23:30)
+
+First tasks out ~4 min after launch (the lag is the per-node cppyy PCH build), 128 workers
+in flight across the two interactive farms. Spot check of the first 14 task manifests:
+backend `jewel-2.6.0-cs-v2`, `jet_multiplicity = inclusive`, **1.82-1.83 jets/event**
+(matching the probe's 1.6-2.8 across the box), max N_const 79-84 with **0 capped** -- the
+512 cap is doing its job. Targets: train 6000 jets/point x 500 Sobol points, fidelity
+20000 x 128, validation 4000 x 128; the drivers `topup` from measured acceptance until
+each point reaches its target.
