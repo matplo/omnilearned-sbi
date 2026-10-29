@@ -696,3 +696,26 @@ fidelity against the correct seed-mean baseline, and training length is what mat
 weighted models most likely show the **same null result** once a real fidelity check is possible,
 not the apparent win this section originally reported. That should be the working assumption
 until the JEWEL fidelity split is available.
+
+## JEWEL fidelity split unblocked: index/merge + `ptbins` check launched (2026-10-28, user go-ahead)
+
+Checked `data/jewel_v1/fidelity`: all 7262/7262 planned task shards present on disk, 0 active
+claims, no running Slurm jobs touching it — generation (the other study's responsibility) is
+complete, it was just never indexed/merged. Per `HANDOFF_WEIGHTED.md` ("the two studies exchange
+findings and nothing else") this worktree had not acted on it; got explicit user sign-off to run
+the index/merge step itself (additive only — writes `index_fidelity.json` and merged
+`fidelity_*.h5` into `data/jewel_v1/merged/`, touches no existing train/validation file).
+
+Snapshot `dff34f4` (clean tree). Chain:
+- **60479003** (`-A alice -C cpu -q regular`, 1 node, 1 h): `generate index` + `generate merge
+  --shards 32 --workers 32` of `data/jewel_v1/fidelity` -> `data/jewel_v1/merged`.
+- **60479042** (afterok 60479003, `-A alice_g -C gpu -q regular`, 1 node x 4 A100, 2.5 h):
+  `omnilearned.sbi.toy.ptbins run --config configs/jewel-2.6.0-cs-v1.toml` (the module is
+  backend-generic, confirmed via `sample_setup`/`jets.selection_from_config`) against
+  `data/jewel_v1/merged` as `--fidelity-dir`, 16 evenly-spaced gate points of the 128 available
+  (0, 8, …, 120 — same point stride as the toy gate grid), `--n-generate 22000 --nsteps 128`,
+  for 6 checkpoints in two waves of up to 4 GPUs: the 4 weighted `runs/w5/set_d256_L6_200k_w5*`
+  models, and the unweighted `jewel_r1b` baseline (`set_d256_L6_s{0,1}_multJ.pt`) for a like-for-
+  like comparison against the correct seed-pair baseline (not a single seed, per the toy-side
+  lesson above). Output: `runs/w5/ptbins/{w5_s0,w5_s1,w5_s2,w5samp_s0,unweighted_s0,unweighted_s1}/`.
+This is the first `ptbins`-style per-pT-bin fidelity check ever run for JEWEL (weighted or not).
