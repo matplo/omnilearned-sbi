@@ -11,21 +11,23 @@ Brief: `docs/PLAN_JEWEL_NLE.md`. Running log: `FINDINGS_JEWEL.md`. Rules: `AGENT
 ## Current state
 
 ```
-PHASE:        2 (production running, all four splits)
-LAST DONE:    train 1000/1000 and fidelity 256/256 first-wave tasks done;
-              test split planned (--split test now exists) and farming
-NEXT ACTION:  when merged/index_train.json exists, start Phase 3:
-                salloc -A alice_g -C gpu -q interactive -N 1 --gpus 4 -t 04:00:00 \
-                  srun -N1 -n1 bash shell/nle/jewel_v2_train.sh $SNAP $JEST_NLE_ROOT/runs/w6
-SNAPSHOT:     $JEST_NLE_ROOT/src_snapshots/9d9ea4d617ec5b3a2aca9eda6050932acdca45e3
-              (0917d16 for data generated before the --split test change; both
-               have identical physics settings, only the CLI differs)
-RUNNING:      3 drivers (nohup, login) for train/fidelity/validation + batch
-              waves; interactive farm on the test split
-TARGETS:      train 6000 jets/pt x 500; fidelity 20000 x 128;
-              validation 4000 x 128; test ~29000 jets at each of 4 holdout theta
+PHASE:        3 (training submitted) + 2 test top-up
+DATASET:      data/jewel_v2k3  <-- USE THIS ONE (WEXPO 3, ESS/n 0.130)
+              data/jewel_v2 is the WEXPO 5 reference, ESS/n 0.0065, do NOT train on it
+SNAPSHOT:     $JEST_NLE_ROOT/src_snapshots/64d4f303bf9114c25a8363a0800420ed235c7586
+RUNNING:      60518035 jv2k3-train (400k x seeds 0-2 + 200k control, 4 GPUs, 10 h)
+                 -> $JEST_NLE_ROOT/runs/w6_k3
+              60518043 k3-test2   (test split top-up to 15000 jets/theta)
+NEXT ACTION:  when runs/w6_k3/mult/*_multJ.pt exist -> Phase 4:
+                gate run --checkpoint <ckpt> --fidelity-dir data/jewel_v2k3/merged
+                  --config <snap>/configs/jewel-2.6.0-cs-v2.toml --redraw
+                toy.ptbins with PT_EDGES_20_500
 BLOCKED ON:   nothing
 ```
+
+**Submit GPU work through `runs/jv2k3_train.sbatch`**, which execs the *snapshot's* copy of
+the training script. Passing a worktree path to `sbatch` lets the script change while the job
+is queued -- that killed job 60488240.
 
 **Yield so far** (first wave, ~1.8 jets/event, 0.157 core-s/jet as the probe predicted):
 train 1.82 M jets over 500 points (median 3568/pt, target 6000 -> `topup` adds chunks),
@@ -49,7 +51,8 @@ safe and races harmlessly to whichever starts first.
 | 0b | branch `dev/nle-jewel`, merge `dev/nle-weighted` | **done** (merge `5a5e859`) |
 | 1 | v2 config, Sobol train design, inclusive jets, tests | **done** (`e67510f`, pushed) |
 | 1p | probe (4 theta + 3 hot corner) | **done**: 1.6-2.8 jets/ev, ~0.16 core-s/jet, cap raised to 512 |
-| 2 | production train/fidelity/validation | **running** (drivers + interactive overflow) |
+| 2 | production, all splits | **done**: `jewel_v2k3` (WEXPO 3) 6.64 M jets, 7.92 node-h; `jewel_v2` (WEXPO 5) kept as reference |
+| 3 | surrogate training | **submitted** 60518035 |
 | 3 | surrogate training (weighted loss, 400k steps, seeds) | not started |
 | 4 | gate + ptbins fidelity, incl. withheld theta | not started |
 | 5 | JEWEL closure driver + numerics | **observation source done** (`closure.jewel_ensembles`, `source = "jewel"`, `acceptance --config`); numerics check not started |
