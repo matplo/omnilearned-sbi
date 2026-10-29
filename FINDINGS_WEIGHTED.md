@@ -667,3 +667,32 @@ is the strongest signal available for the weighted JEWEL models.
 Remaining work: the JEWEL per-pT-bin fidelity check (blocked on the other session), and a
 decision on whether WEXPO=5's small per-observable cost (toy: `n_constituents` at 170–200 GeV)
 needs addressing before using these checkpoints for anything downstream.
+
+## Correction: the JEWEL validation-loss comparison above is confounded, same issue as the toy (2026-10-28)
+
+The "Phase 4 result" section above claims the weighted model's lower validation loss (1.1635 vs
+1.1941) is evidence of a better fit. **This is confounded, by the same mechanism already found
+and reported for the toy** ("Phase 2: weighted trainings" above): `build_surrogate` fits the
+feature transform on each run's own *training* split, unweighted over its rows. Checked directly
+on the saved checkpoints:
+
+| | `log_pt_over_GeV` shift | scale |
+|---|---|---|
+| w5_s0 (weighted train) | **−0.0797** | 1.6176 |
+| jewel_r1b set_s0 (unweighted train) | **−0.0204** | 1.5552 |
+
+(η, φ transforms agree to the 4th digit — only the pT feature, which the WEXPO bias directly
+reshapes, differs.) The two runs' "model coordinates" are therefore different spaces, and the
+flow-matching loss minimum is not on a common scale — exactly the toy's finding ("the validation
+loss is not comparable across these two groups... fidelity is judged by `toy.ptbins` and the
+shift"). **Withdrawn: the 1.1635-vs-1.1941 comparison is not evidence of anything.** No valid
+fidelity comparison exists yet for the weighted JEWEL models; it needs either a `toy.ptbins`-
+style per-pT-bin check (blocked on the other session's fidelity merge) or a shift-style test
+(not yet run for JEWEL at all, weighted or not, in this log).
+
+**This also means the toy arm's own standing verdict should have been cross-checked here first.**
+Given the toy's reconciled result — 2× effective jets (weighted or m3a) does not improve ≥120 GeV
+fidelity against the correct seed-mean baseline, and training length is what matters — the JEWEL
+weighted models most likely show the **same null result** once a real fidelity check is possible,
+not the apparent win this section originally reported. That should be the working assumption
+until the JEWEL fidelity split is available.
