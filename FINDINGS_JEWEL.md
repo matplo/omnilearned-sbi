@@ -322,3 +322,50 @@ is the first thing to fix if this is run again.
 The self-correcting part worked exactly as intended: train 1000 -> 2009 -> 2020 tasks,
 fidelity 256 -> 1564 -> 1569, validation 256 -> 368, every step sized from the acceptance
 actually measured per point rather than from a prediction.
+
+## WEXPO = 5 is mismatched to a 20 GeV jet floor; regenerating at WEXPO = 3 (2026-10-29)
+
+Measured on the finished `jewel_v2` train split (`merged/train_00000.h5`, 234 438 jets):
+**ESS/n = 0.006**, normalised max/mean weight 1615 -- against 0.138 in `jewel_w1` and the
+~0.11 I projected. Effective training set ~21 600 of 3.6 M jets, i.e. **~43 effective jets per
+theta point**, which cannot support a conditional density over 500 points.
+
+Where it goes, by pT-hat (the weight is the physical cross-section, the jets are what was
+generated):
+
+| pT-hat | jets generated | share of physical weight | ESS/n in bin |
+|---|---|---|---|
+| 10-50 | 4 % | **84 %** | 0.50-0.64 |
+| 50-100 | 17 % | 15 % | 0.39 |
+| 100-600 | 79 % | 1.2 % | 0.42-0.65 |
+
+and by jet pT: **72 % of the physical weight sits in jet_pT 20-30 GeV, whose in-bin ESS/n is
+0.019.** Generated pT-hat has median 184 GeV; only 50 jets of 234 k came from pT-hat < 20.
+
+**Cause.** With `WEIGHTED T`, JEWEL samples the hard process ∝ dσ/dp × p^WEXPO and weights by
+p^-WEXPO. Reading the exponent straight off the generated distribution, the true spectrum here
+goes as **dσ/dp ~ p^-4**, so at WEXPO = 5 the sampled density is ∝ p^+2 per unit ln p -- it
+piles up at high pT-hat while the physically dominant low-pT-hat region is starved.
+
+**Why it did not bite before.** At the old 60 GeV jet cut, low-pT-hat events were rejected
+anyway, so the accepted sample spanned only ~[50, 400] and WEXPO = 5 was well matched (ESS
+0.138). **The 20 GeV floor is what exposes the full pT-hat range**, and it changes which
+exponent is correct. The two decisions are coupled; nothing was wrong with WEXPO = 5 for the
+window it was chosen for.
+
+| WEXPO | sampled dN/dln p | ESS/n (log-flat model) |
+|---|---|---|
+| 2 | p^-1 | 0.244 |
+| **3** | **p^0 (log-flat)** | **0.163** |
+| 5 | p^+2 | 0.098 model / **0.006 measured** |
+
+**WEXPO = 3 gives log-flat pT-hat coverage** -- uniform statistics per decade across 20-500
+GeV, which is exactly what this analysis wants -- and ~27x the effective sample size. It is
+also what this project's own earlier ESS study recommended before JEWEL's default of 5 was
+adopted for the 60 GeV window.
+
+**Action.** All four splits are being regenerated into `data/jewel_v2k3` at WEXPO = 3 (the
+backend id is unchanged -- WEXPO is per-task `sampling`, not part of `[jewel]`). Production is
+only ~2.4 node-h, so this is cheap. In parallel, a **control training on the WEXPO = 5 data**
+(`runs/w6_k5ctl`, 200k steps) is running on the otherwise-idle GPU, so the decision is settled
+by comparing two trained surrogates rather than by this argument alone.

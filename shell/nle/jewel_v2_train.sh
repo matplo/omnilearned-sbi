@@ -25,7 +25,8 @@ SNAP=$1; OUT=$2; STEPS=${3:-400000}
 export JEST_NLE_ROOT=${JEST_NLE_ROOT:-/global/cfs/cdirs/alice/ploskon/jest-nle}
 export CLING_STANDARD_PCH=${TMPDIR:-/tmp}/cling-$USER-${SLURM_JOB_ID:-local}/allDict.cxx.pch
 export PYTHONPATH=$SNAP/src OMP_NUM_THREADS=8 PYTHONUNBUFFERED=1
-M=$JEST_NLE_ROOT/data/jewel_v2/merged
+DATASET=${DATASET:-jewel_v2k3}   # data/<DATASET>/merged; k3 = WEXPO 3 (log-flat pT-hat)
+M=$JEST_NLE_ROOT/data/$DATASET/merged
 CFG=$SNAP/configs/jewel-2.6.0-cs-v2.toml
 PY="henv -n omni-sbi -x python"
 mkdir -p "$(dirname "$CLING_STANDARD_PCH")" "$OUT/mult"
@@ -33,7 +34,7 @@ log() { echo "[$(date -Is) $(hostname) job ${SLURM_JOB_ID:-local}] $*" | tee -a 
 $PY -c "import omnilearned,sys; sys.exit(0 if omnilearned.__file__.startswith('$SNAP') else 1)" \
   || { log "FATAL: not importing from the snapshot $SNAP"; exit 1; }
 [ -f "$M/index_train.json" ] || { log "FATAL: no $M/index_train.json -- run Phase 2 first"; exit 1; }
-log "start, snapshot $(cat "$SNAP/SOURCE_REVISION"), $STEPS steps, data $M"
+log "start, snapshot $(cat "$SNAP/SOURCE_REVISION"), $STEPS steps, dataset $DATASET, data $M"
 nvidia-smi -L | tee -a "$OUT/chunk.log"
 
 COMMON=(--data-dir "$M" --val-dir "$M" --config "$CFG" --arch set --dim 256 --depth 6
