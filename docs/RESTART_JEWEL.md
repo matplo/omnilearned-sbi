@@ -11,18 +11,21 @@ Brief: `docs/PLAN_JEWEL_NLE.md`. Running log: `FINDINGS_JEWEL.md`. Rules: `AGENT
 ## Current state
 
 ```
-PHASE:        1 (config + code changes)   <-- update me
-LAST DONE:    inclusive jets + Sobol train design + v2 config, tests green
-NEXT ACTION:  commit, write docs/journal, then launch the probe (Phase 1 probe below)
+PHASE:        1p (probe running)
+LAST DONE:    phase 0a/0b/1 committed and pushed (e67510f); probe submitted
+NEXT ACTION:  read the probe out (block below), record in FINDINGS_JEWEL.md,
+              size and launch Phase 2 production
+RUNNING:      slurm 60481641  jv2-probe   (4 tasks, data/jewel_v2/probe)
+SNAPSHOT:     $JEST_NLE_ROOT/src_snapshots/e67510ff7d0dda7a977b556d5b7fd22b98e0163a
 BLOCKED ON:   nothing
 ```
 
 | phase | what | status |
 |---|---|---|
-| 0a | docs + journal entry | **in progress** |
-| 0b | branch `dev/nle-jewel`, merge `dev/nle-weighted` | **done** (merge commit `5a5e859`) |
-| 1 | v2 config, Sobol train design, inclusive jets, tests | **done, uncommitted** |
-| 1p | probe at 4 theta -> acceptance, n_const, ESS | not started |
+| 0a | docs + journal entry | **done** (journal pushed) |
+| 0b | branch `dev/nle-jewel`, merge `dev/nle-weighted` | **done** (merge `5a5e859`) |
+| 1 | v2 config, Sobol train design, inclusive jets, tests | **done** (`e67510f`, pushed) |
+| 1p | probe at 4 theta -> acceptance, n_const, ESS | **running** (60481641) |
 | 2 | production (train 500 Sobol / validation+fidelity 128 / test 4 holdout) | not started |
 | 3 | surrogate training (weighted loss, 400k steps, seeds) | not started |
 | 4 | gate + ptbins fidelity, incl. withheld theta | not started |
@@ -90,8 +93,30 @@ PYTHONPATH=$SNAP/src henv -n omni-sbi -x python -m omnilearned.sbi.jewel.generat
   --theta 1.5 0.65 0.35  4.5 0.45 0.65  7.5 0.35 0.85  9.5 0.25 0.45
 sbatch shell/nle/jewel_farm.sbatch $SNAP $P       # or run `generate work --dir $P` on a CPU node
 ```
-Read out: jets/event (now >= 1, inclusive), s/event, max `n_constituents`, weight range,
-ESS per jet-pT bin. Record all of it in `FINDINGS_JEWEL.md` before Phase 2.
+**Probe read-out** (run this once the job finishes; it is the input to Phase-2 sizing):
+```bash
+P=$JEST_NLE_ROOT/data/jewel_v2/probe
+henv -n omni-sbi -x python - <<'EOF'
+import json, glob, numpy as np, h5py
+ms = [json.load(open(f)) for f in sorted(glob.glob(f"{__import__('os').environ['JEST_NLE_ROOT']}/data/jewel_v2/probe/probe_*.json"))]
+for m in ms:
+    print(m["theta"], "jets/ev %.3f" % m["acceptance"], "jets", m["jets_selected"],
+          "ev_with_jet", m.get("events_with_a_jet"), "nconst", m["n_constituents_range"],
+          "s/ev %.3f" % m["seconds_per_event"], "rej", {k: v for k, v in m["rejections"].items() if v})
+tot = sum(m["jets_selected"] for m in ms); ev = sum(m["events_generated"] for m in ms)
+print(f"TOTAL jets {tot} events {ev} jets/event {tot/max(1,ev):.3f} "
+      f"core-s/jet {sum(m['seconds_jewel'] for m in ms)/max(1,tot):.3f}")
+for f in sorted(glob.glob(f"{__import__('os').environ['JEST_NLE_ROOT']}/data/jewel_v2/probe/probe_*.h5")):
+    with h5py.File(f) as h:
+        g = h["global"][...]; w = h["weight"][...] if "weight" in h else None
+        pt = g[:, 3]
+        print(f.split('/')[-1], "jet_pt", np.round([pt.min(), np.median(pt), pt.max()], 1),
+              "ESS/n %.3f" % ((w.sum()**2/ (w**2).sum())/len(w)) if w is not None else "")
+EOF
+```
+Decide from it: `--target-jets` per point for Phase 2, and **whether
+`selection.max_constituents` (256) must be raised** — if `n_constituents_range` touches 256
+anywhere, raise it and re-snapshot *before* production.
 
 ### Phase 2 — production
 
