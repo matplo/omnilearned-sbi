@@ -128,3 +128,55 @@ is literally the same `PARAMETERS` tuple for both backends.
   visible to the coverage report (the composite-likelihood check).
 - `closure.load_sample_config(path)`: toy or JEWEL config -> `(cfg, Selection)`.
 - Tests: `tests/sbi/test_jewel_closure_source.py` (4), all pass.
+
+## Phase 1p: probe at PTMIN = 10, inclusive jets, 20-500 GeV (2026-10-28)
+
+Snapshot `e67510f`, job 60481776 (1 interactive CPU node, 16 workers, 15 min), 4 theta x 2000
+events, `data/jewel_v2/probe`. **The batch queue was oversubscribed** (`jv2-probe` 60481641 sat
+in `PENDING`), so the same task directory was also served by an interactive allocation, which
+started in ~20 s; claims are exclusive, so the two cannot duplicate work. The batch job was
+cancelled once the interactive one had the tasks. Worth reusing: **an interactive allocation
+is a drop-in overflow for a congested batch queue on any claim-based task directory.**
+
+| b | T_ref | tau | jets | jets/event | max N_const | s/event | capped |
+|---|---|---|---|---|---|---|---|
+| 9.5 | 0.25 | 0.45 | 3244 | 1.62 | 94 | 0.096 | 0 |
+| 7.5 | 0.35 | 0.85 | 3130 | 1.57 | 138 | 0.190 | 0 |
+| 4.5 | 0.45 | 0.65 | 3598 | 1.80 | 160 | 0.251 | 0 |
+| 1.5 | 0.65 | 0.35 | 3925 | 1.97 | 154 | 0.319 | 0 |
+
+- **Inclusive selection works**: 1.6-2.0 jets/event, against 0.26 for leading-only at the old
+  60 GeV / |eta| < 1 window. Clustering produces ~60 candidate jets per event, nearly all
+  rejected as `too_few_constituents` (single thermal particles); that costs 9 % of task time
+  (17.7 s processing against 192 s of JEWEL), so it is not worth optimising.
+- **~23x cheaper per jet than `jewel_w1`**: 0.059 core-s/jet at the peripheral point and
+  ~0.18 averaged over the box, against ~1.36 for w1 (leading-only, PTMIN 50). Both effects
+  contribute: more jets kept per event, and low-pT-hat events are individually cheap.
+  Projected production cost is **~3 node-h**, against 10.9 for w1 -- statistics are not the
+  binding constraint here.
+- **JEWEL regenerates its xsec/PDF tables per task** in a fresh scratch dir, so they always
+  match the card's pT-hat range; changing PTMIN carries no stale-table risk.
+
+### The 256-constituent cap has to be raised (and my first extrapolation of it was wrong)
+
+From the first three points (94 -> 138 -> 160 at T_ref 0.25/0.35/0.45) I extrapolated linearly
+to ~310 at the box edge T_ref = 0.9. **That was wrong**: the fourth point (T_ref 0.65) came
+back at 154, i.e. the count *saturates* rather than growing linearly. The probe was worth
+running precisely because it contradicted the extrapolation.
+
+The cap is still too small, for a different and more careful reason -- **a 3.5 k-jet probe
+underestimates the maximum of a 3 M-jet production**. Fitting the tail instead of reading off
+the max: the top decile decays with a scale of **~17 constituents per e-fold**, so
+
+| jets in sample | expected max N_const |
+|---|---|
+| 1.4e4 (this probe) | 160 (observed) |
+| 1e6 | 233 |
+| 3e6 (planned train split) | **252** |
+
+That lands on the 256 cap before the hotter corner of the box is counted at all. A capped jet
+is dropped (recorded as `too_many_constituents`), and it would be dropped **preferentially in
+the hot, central region where the quenching signal is strongest** -- a theta-dependent hole in
+the acceptance, which is exactly the kind of defect an NLE cannot absorb. Raising the cap is
+cheap: shards are zero-padded (gzip absorbs it) and `read_shards(trim=True)` trims to the
+actual maximum, so training cost follows the real N, not the cap.
