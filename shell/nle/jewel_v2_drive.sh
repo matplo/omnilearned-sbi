@@ -12,8 +12,13 @@
 # is killed mid-task and leaves claim locks behind. `afterok` then never fires and the whole
 # chain stalls silently (this cost the weighted run a full chain, 2026-10-27). The driver
 # runs `unlock-stale` after *every* wave, so a timed-out element costs one wave, not the run.
+#
+# WORKERS defaults to 64, not the farm's 128. Inclusive clustering packs ~77 k jet candidates
+# per task even after the sub-threshold pre-filter, ~1.9 GB per worker at max_constituents
+# 512; 128 workers would sit near a 512 GB node's limit. Production is only a few node-hours
+# of work, so it is not CPU-bound and the headroom is free.
 set -uo pipefail
-SNAP=$1; SPLIT=$2; TARGET=$3; NODES=${4:-8}; WAVES=${5:-4}
+SNAP=$1; SPLIT=$2; TARGET=$3; NODES=${4:-8}; WAVES=${5:-4}; WORKERS=${6:-64}
 export JEST_NLE_ROOT=${JEST_NLE_ROOT:-/global/cfs/cdirs/alice/ploskon/jest-nle}
 D=$JEST_NLE_ROOT/data/jewel_v2/$SPLIT
 CFG=$SNAP/configs/jewel-2.6.0-cs-v2.toml
@@ -23,7 +28,7 @@ export PYTHONPATH=$SNAP/src
 mkdir -p "$D/logs"
 log() { echo "[$(date -Is) drive $SPLIT] $*" | tee -a "$D/logs/drive.log"; }
 
-log "start: snapshot $(cat "$SNAP/SOURCE_REVISION") target ${TARGET} jets/point, ${NODES} nodes, <= ${WAVES} waves"
+log "start: snapshot $(cat "$SNAP/SOURCE_REVISION") target ${TARGET} jets/point, ${NODES} nodes x ${WORKERS} workers, <= ${WAVES} waves"
 
 if [ ! -f "$D/tasks.json" ]; then
   log "plan $SPLIT"
@@ -41,7 +46,7 @@ for w in $(seq 1 "$WAVES"); do
   log "wave $w/$WAVES: $before/$total tasks done, submitting ${NODES}-node farm"
   JID=$(sbatch --parsable -A alice -C cpu -q regular -t 04:00:00 -N 1 \
         --array=0-$((NODES - 1)) -J "jv2-$SPLIT" \
-        "$(dirname "$0")/jewel_farm.sbatch" "$SNAP" "$D" 128 14000)
+        "$(dirname "$0")/jewel_farm.sbatch" "$SNAP" "$D" "$WORKERS" 14000)
   [ -z "$JID" ] && { log "sbatch FAILED"; break; }
   log "wave $w: job $JID submitted, waiting"
   while squeue -h -j "$JID" 2>/dev/null | grep -q .; do sleep 120; done
