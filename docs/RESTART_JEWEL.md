@@ -11,22 +11,27 @@ Brief: `docs/PLAN_JEWEL_NLE.md`. Running log: `FINDINGS_JEWEL.md`. Rules: `AGENT
 ## Current state
 
 ```
-PHASE:        1p (probe running) + 5 (closure source done early)
-LAST DONE:    phase 0a/0b/1 pushed; JEWEL closure observation source pushed;
-              probe running on an interactive node
-NEXT ACTION:  read the probe out (block below), record in FINDINGS_JEWEL.md,
-              then launch Phase 2 with shell/nle/jewel_v2_drive.sh
-RUNNING:      60481776 jv2-probe-int  (4 theta, data/jewel_v2/probe)
-              60482135 jv2-corner     (3 hot/central theta, probe_corner)
-              (batch 60481641 cancelled as redundant once the interactive ran)
-OPEN RISK:    max n_constituents rises steeply with T_ref and centrality
-              (94 at T=0.25 -> 138 at T=0.35). The cap is 256 and the design
-              box reaches T_ref 0.9, which the first probe does NOT cover --
-              hence probe_corner. If the corner exceeds ~200, raise
-              selection.max_constituents BEFORE production and re-snapshot.
-SNAPSHOT:     $JEST_NLE_ROOT/src_snapshots/e67510ff7d0dda7a977b556d5b7fd22b98e0163a
+PHASE:        2 (production running)
+LAST DONE:    probes complete; max_constituents raised 256 -> 512 from the
+              measured tail; snapshot 0917d16; 3 production drivers launched
+NEXT ACTION:  when a split's merged/index_<split>.json exists, start Phase 3
+              training: shell/nle/jewel_v2_train.sh $SNAP $JEST_NLE_ROOT/runs/w6
+              (inside salloc -A alice_g -C gpu -N 1 --gpus 4)
+SNAPSHOT:     $JEST_NLE_ROOT/src_snapshots/0917d16a921581099d0986a7be09467b0196c9ba
+RUNNING:      drivers (nohup, login node) for train / fidelity / validation,
+              logs $JEST_NLE_ROOT/data/jewel_v2/drive_*.out and
+              data/jewel_v2/<split>/logs/drive.log
+              plus interactive overflow farms on train and fidelity
+TARGETS:      train 6000 jets/pt x 500 Sobol pts; fidelity 20000 x 128;
+              validation 4000 x 128; test split NOT yet planned (4 holdout
+              theta, see the Phase 2 block)
 BLOCKED ON:   nothing
 ```
+
+**Check production:** `tail $JEST_NLE_ROOT/data/jewel_v2/<split>/logs/drive.log` and
+`ls $JEST_NLE_ROOT/data/jewel_v2/<split>/<split>_p*.json | wc -l` against the task count.
+A driver that died can simply be relaunched with the same arguments — planning, farming,
+`unlock-stale`, `topup` and `merge` are all idempotent.
 
 **Tip that worked:** the batch queue was oversubscribed and `jv2-probe` sat in `PENDING`,
 while an interactive allocation for the same task directory started in ~20 s. Because workers
@@ -38,8 +43,8 @@ safe and races harmlessly to whichever starts first.
 | 0a | docs + journal entry | **done** (journal pushed) |
 | 0b | branch `dev/nle-jewel`, merge `dev/nle-weighted` | **done** (merge `5a5e859`) |
 | 1 | v2 config, Sobol train design, inclusive jets, tests | **done** (`e67510f`, pushed) |
-| 1p | probe at 4 theta -> acceptance, n_const, ESS | **running** (60481641) |
-| 2 | production (train 500 Sobol / validation+fidelity 128 / test 4 holdout) | not started |
+| 1p | probe (4 theta + 3 hot corner) | **done**: 1.6-2.8 jets/ev, ~0.16 core-s/jet, cap raised to 512 |
+| 2 | production train/fidelity/validation | **running** (drivers + interactive overflow) |
 | 3 | surrogate training (weighted loss, 400k steps, seeds) | not started |
 | 4 | gate + ptbins fidelity, incl. withheld theta | not started |
 | 5 | JEWEL closure driver + numerics | **observation source done** (`closure.jewel_ensembles`, `source = "jewel"`, `acceptance --config`); numerics check not started |
