@@ -288,3 +288,37 @@ between 1 and ~1.41. Small enough that 10 ensembles may not resolve it cleanly, 
 that it must be checked rather than assumed -- the one-jet-per-event refit is the
 discriminator, and **the choice of remedy (effective-N correction vs one jet per event at
 inference) is a methodological decision for the user, not one to make silently.**
+
+## Phase 2 complete: `data/jewel_v2` (2026-10-29 ~03:20)
+
+| split | tasks | jets | points | jets/point (median) | core-h | max N_const | capped |
+|---|---|---|---|---|---|---|---|
+| train | 2009 | 3 600 591 | 500 | 7207 | 152.8 | 255 | 0 |
+| fidelity | 1569 | 2 808 129 | 128 | 21 820 | 119.4 | 243 | 0 |
+| validation | 368 | 660 405 | 128 | 5181 | 28.1 | 242 | 0 |
+| test | 64 | 111 743 | 4 | 27 407 | 4.5 | 210 | 0 |
+
+**7.18 M jets for 305 core-h = 2.38 node-h**, against 2.42 M jets for 10.9 node-h in
+`jewel_w1`: **~14x more cost-efficient per jet**, and about half the ~4.4 node-h projected
+from the probe (the probe's theta sample was weighted toward the expensive hot corner). Every
+split overshot its jets/point target, because `topup` sizes from measured acceptance with a
+5 % margin and the acceptance it measures is per point.
+
+**The constituent cap decision is now settled by the full sample: max 255 with 0 capped
+across 7.18 M jets.** The old 256 cap would have begun dropping jets -- preferentially in the
+hot central region, i.e. a theta-dependent acceptance hole. 512 leaves ~2x headroom.
+
+### Operational lesson for the next production
+
+Three times, the interactive farms cleared a wave so much faster than the congested batch
+queue that the wave's batch array ended up queueing to do **nothing**, while the driver sat in
+`while squeue ...` waiting for it and so could not reach `topup`/`merge`. Each time the fix
+was to `scancel` the idle array, after which the driver advanced immediately. **The driver
+should poll for "all tasks done" and cancel its own wave early** rather than waiting for the
+array to drain; as written it serialises on the slowest scheduler path even when the work is
+finished. Not changed now (production is done and the script is recorded as it ran), but it
+is the first thing to fix if this is run again.
+
+The self-correcting part worked exactly as intended: train 1000 -> 2009 -> 2020 tasks,
+fidelity 256 -> 1564 -> 1569, validation 256 -> 368, every step sized from the acceptance
+actually measured per point rather than from a prediction.
