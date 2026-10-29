@@ -369,3 +369,50 @@ backend id is unchanged -- WEXPO is per-task `sampling`, not part of `[jewel]`).
 only ~2.4 node-h, so this is cheap. In parallel, a **control training on the WEXPO = 5 data**
 (`runs/w6_k5ctl`, 200k steps) is running on the otherwise-idle GPU, so the decision is settled
 by comparing two trained surrogates rather than by this argument alone.
+
+## WEXPO = 3 regeneration: measured outcome and its true cost (2026-10-29)
+
+`data/jewel_v2k3`, snapshot `cc7914b`, all four splits generated and merged.
+
+| | `jewel_v2` (W=5) | `jewel_v2k3` (W=3) |
+|---|---|---|
+| train jets | 3 600 591 | 3 298 642 |
+| **train ESS/n** | **0.0065** | **0.1297** |
+| **effective train jets** | 23 309 (47/point) | **427 709 (855/point)** |
+| max/mean weight | 1615 | 118 |
+| pT-hat median | 184 | 67 |
+| jet_pT 20-30 in-bin ESS/n | 0.019 | **0.212** |
+| jets/event | 1.75 | 0.40 |
+| total cost | 2.38 node-h | **7.92 node-h** |
+
+**The honest trade.** W=3 costs **3.3x more node-hours for slightly fewer stored jets**,
+because log-flat pT-hat sampling spends most events at low pT-hat where many fail the 20 GeV
+jet cut (jets/event 1.75 -> 0.40). Per *effective* jet, though, it is **5.6x cheaper**
+(1.17e-3 vs 6.5e-3 core-h), and the effective count is what bounds what the surrogate can
+learn: 855 vs 47 effective jets per theta point. Both datasets are kept; `jewel_v2` is the
+W=5 reference.
+
+Production spent so far: 2.38 + 7.92 = **10.3 node-h**, comparable to `jewel_w1`'s 10.9 for a
+single smaller dataset.
+
+**Consequence to watch:** the lower acceptance also shrank the test split to ~6200 jets per
+holdout theta -- only 6 ensembles of 1000, against the >= 10 the plan requires. Topped up to a
+15 000-jet target (94 tasks added). Fidelity and train were unaffected because `topup` sizes
+from measured acceptance, so they simply ran more chunks; only the test split, planned with a
+fixed `--chunks 16` rather than a jet target, came up short. **Plan test splits by jet target,
+not by chunk count.**
+
+### A self-inflicted failure worth recording
+
+The WEXPO = 5 control training (job 60488240) died in 16 s: `FATAL: no .../jewel_v2k3/merged/
+index_train.json`. I had passed `sbatch` the **worktree** path of `jewel_v2_train.sh`, then
+edited that script (adding the `DATASET` default) while the job sat queued; it started hours
+later and read the mutated file. This is the snapshot-immutability rule of
+`docs/RESTART_JEWEL.md` violated from the other direction -- the snapshot exists precisely so
+a queued job cannot be changed under it. Phase 3 now goes through
+`runs/jv2k3_train.sbatch`, which `exec`s `$SNAP/shell/nle/jewel_v2_train.sh`, with the reason
+in a comment.
+
+The control was **not** re-run: the ESS table above is a direct measurement of effective
+sample size, so re-confirming an 18x gap by training two surrogates would spend ~2.5 GPU-h to
+learn nothing the measurement does not already show.
