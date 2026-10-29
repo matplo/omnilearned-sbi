@@ -11,14 +11,23 @@ Brief: `docs/PLAN_JEWEL_NLE.md`. Running log: `FINDINGS_JEWEL.md`. Rules: `AGENT
 ## Current state
 
 ```
-PHASE:        1p (probe running)
-LAST DONE:    phase 0a/0b/1 committed and pushed (e67510f); probe submitted
+PHASE:        1p (probe running) + 5 (closure source done early)
+LAST DONE:    phase 0a/0b/1 pushed; JEWEL closure observation source pushed;
+              probe running on an interactive node
 NEXT ACTION:  read the probe out (block below), record in FINDINGS_JEWEL.md,
-              size and launch Phase 2 production
-RUNNING:      slurm 60481641  jv2-probe   (4 tasks, data/jewel_v2/probe)
+              then launch Phase 2 with shell/nle/jewel_v2_drive.sh
+RUNNING:      slurm 60481641 jv2-probe (batch, queued) and 60481776
+              jv2-probe-int (interactive). Both serve the SAME task dir;
+              claims are exclusive so they cannot duplicate work. Cancel
+              whichever is still pending once the other finishes.
 SNAPSHOT:     $JEST_NLE_ROOT/src_snapshots/e67510ff7d0dda7a977b556d5b7fd22b98e0163a
 BLOCKED ON:   nothing
 ```
+
+**Tip that worked:** the batch queue was oversubscribed and `jv2-probe` sat in `PENDING`,
+while an interactive allocation for the same task directory started in ~20 s. Because workers
+claim tasks exclusively, running a batch job and an interactive job against one directory is
+safe and races harmlessly to whichever starts first.
 
 | phase | what | status |
 |---|---|---|
@@ -29,7 +38,7 @@ BLOCKED ON:   nothing
 | 2 | production (train 500 Sobol / validation+fidelity 128 / test 4 holdout) | not started |
 | 3 | surrogate training (weighted loss, 400k steps, seeds) | not started |
 | 4 | gate + ptbins fidelity, incl. withheld theta | not started |
-| 5 | JEWEL closure driver + numerics | not started |
+| 5 | JEWEL closure driver + numerics | **observation source done** (`closure.jewel_ensembles`, `source = "jewel"`, `acceptance --config`); numerics check not started |
 | 6 | NLE fits at withheld theta (pulls, coverage) | not started |
 
 ---
@@ -120,20 +129,43 @@ anywhere, raise it and re-snapshot *before* production.
 
 ### Phase 2 — production
 
-Size `--target-jets` from the probe, then per split:
-```bash
-D=$JEST_NLE_ROOT/data/jewel_v2
-for SP in train validation fidelity; do
-  PYTHONPATH=$SNAP/src henv -n omni-sbi -x python -m omnilearned.sbi.jewel.generate plan \
-    --split $SP --out $D/$SP --config $SNAP/configs/jewel-2.6.0-cs-v2.toml --wexpo 5 --no-events
-done
-# test split: the 4 reserved holdout theta, many ensembles each, via --theta
-```
-Then `generate index` + `generate merge --shards 16 --workers 4` per split.
+**Use the driver; it plans, runs waves, un-sticks stale locks, tops up from the *measured*
+per-point acceptance, and ends with index+merge.** One per split, in parallel:
 
-**Always finish a multi-node farm with `generate unlock-stale --dir <split>` plus a short
-mop-up pass.** A timed-out array element leaves claim locks that silently block every
-`afterok` dependent (this cost the weighted run a full chain, 2026-10-27).
+```bash
+cd /global/cfs/cdirs/alice/ploskon/henv-omni-sbi/omnilearned-sbi-jewel
+export JEST_NLE_ROOT=/global/cfs/cdirs/alice/ploskon/jest-nle
+SNAP=$JEST_NLE_ROOT/src_snapshots/<rev>          # snapshot.sh, must be a committed rev
+L=$JEST_NLE_ROOT/data/jewel_v2
+mkdir -p $L
+nohup shell/nle/jewel_v2_drive.sh $SNAP train      2500 8 4 > $L/drive_train.out 2>&1 &
+nohup shell/nle/jewel_v2_drive.sh $SNAP fidelity   8000 4 3 > $L/drive_fidelity.out 2>&1 &
+nohup shell/nle/jewel_v2_drive.sh $SNAP validation 2000 2 3 > $L/drive_validation.out 2>&1 &
+```
+Targets are jets *per point*: train 500 points, fidelity/validation 128 points. The fidelity
+split needs many jets per point because the gate compares distributions there.
+
+**Test split** (the 4 reserved holdout theta, >= 10 ensembles each) is planned by `--theta`
+rather than a design, so it is not driven by the script:
+```bash
+PYTHONPATH=$SNAP/src henv -n omni-sbi -x python -m omnilearned.sbi.jewel.generate plan \
+  --split probe --out $L/test --config $SNAP/configs/jewel-2.6.0-cs-v2.toml --wexpo 5 \
+  --chunks 40 --no-events \
+  --theta 7.5 0.35 0.85  4.5 0.45 0.65  1.5 0.65 0.35  9.5 0.25 0.45
+```
+then farm it the same way and `index` + `merge`.
+
+**Never rely on `--dependency=afterok` alone for a farm**: a timed-out array element is killed
+mid-task and leaves claim locks, so the dependent never fires and the chain stalls silently
+(this cost the weighted run a full chain, 2026-10-27). The driver runs `unlock-stale` after
+every wave for exactly this reason.
+
+**If the batch queue is oversubscribed**, start an interactive allocation against the same
+task directory — claims are exclusive, so it is safe and usually starts in seconds:
+```bash
+nohup salloc -A alice -C cpu -q interactive -t 04:00:00 -N 1 -J jv2-int \
+  srun -N1 -n1 bash shell/nle/jewel_farm.sbatch $SNAP $L/<split> 128 14000 > /dev/null 2>&1 &
+```
 
 ### Phase 3 — training
 
