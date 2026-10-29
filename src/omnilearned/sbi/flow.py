@@ -66,6 +66,12 @@ class TrainOptions:
     # overall probability); batches are cut to the active width, so short
     # clouds no longer pay for the longest one in the set.
     length_buckets: int = 0
+    # Per-event sampling weights (``w`` in the train/val dicts, e.g. a hard-pT biased
+    # sample): "none" ignores them; "loss" uses the weighted mean sum(w l) / sum(w) in
+    # the training loss; "sample" draws minibatches with probability proportional to w
+    # (within the length buckets, if any). Both target the unweighted law; the
+    # validation loss is weighted in either mode.
+    weight_mode: str = "none"
 
     def to_dict(self):
         return asdict(self)
@@ -78,10 +84,11 @@ def active_width(mask):
     return int(idx.max()) + 1 if idx.numel() else 1
 
 
-def flow_matching_loss(model, x, mask, cond, base, generator=None, t=None, eps=None):
+def flow_matching_loss(model, x, mask, cond, base, generator=None, t=None, eps=None, weight=None):
     """Masked conditional flow-matching loss (mean over real coordinates).
 
     Padded slots beyond the batch's active width are cut first (no value changes).
+    ``weight`` [B]: per-event weights, giving sum(w l) / sum(w) instead of the mean.
     """
     w = active_width(mask)
     x, mask = x[:, :w], mask[:, :w]
@@ -98,7 +105,11 @@ def flow_matching_loss(model, x, mask, cond, base, generator=None, t=None, eps=N
     v = model(z, t, cond, mask)
     err = ((v - target) ** 2 * mask_f).reshape(x.shape[0], -1).sum(-1)
     ncoord = mask_f.reshape(x.shape[0], -1).sum(-1) * x.shape[-1]
-    return (err / ncoord.clamp(min=1)).mean()
+    per = err / ncoord.clamp(min=1)
+    if weight is None:
+        return per.mean()
+    weight = weight.to(per.dtype)
+    return (per * weight).sum() / weight.sum()
 
 
 class FlowSurrogate:
@@ -233,7 +244,8 @@ class FlowSurrogate:
         """Physical-coordinate samples at one candidate.
 
         ``num_particles`` fixes the multiplicity (returns ``x`` [n, P, F], or
-        ``(x, mask)`` with ``return_mask``). With ``num_particles=None`` N is
+        ``(x, mask)`` with ``return_mask``); an array of n counts fixes N per cloud
+        (returns ``(x, mask)``, as for drawn N). With ``num_particles=None`` N is
         drawn from the multiplicity model and ``(x, mask)`` is returned:
         left-packed, zero-padded to ``pad_to`` (default: the largest N drawn).
         ``sort_by_length`` integrates the clouds in order of N (each batch is cut
@@ -251,13 +263,18 @@ class FlowSurrogate:
                 self.multiplicity.layout.assemble(np.repeat(cand, n, 0), candidate_names)
             ).to(self.device)
             counts = self.multiplicity.sample(mcond, gen).numpy()
+        elif np.ndim(num_particles):
+            counts = np.asarray(num_particles, dtype=np.int64)
+            if counts.shape != (n,) or counts.min(initial=1) < 1:
+                raise ValueError("num_particles needs n positive counts")
         else:
             counts = np.full(n, int(num_particles))
+        variable = num_particles is None or np.ndim(num_particles) > 0
         width = int(pad_to or max(1, counts.max() if n else 1))
         if counts.max(initial=0) > width:
             raise ValueError("pad_to is smaller than a drawn multiplicity")
         order = None
-        if sort_by_length and num_particles is None:
+        if sort_by_length and variable:
             order = np.argsort(counts, kind="stable")
             counts = counts[order]
         xs, ms = [], []
@@ -285,7 +302,7 @@ class FlowSurrogate:
             inv = np.empty_like(order)
             inv[order] = np.arange(order.size)
             x, mask = x[inv], mask[inv]
-        if num_particles is not None and not return_mask:
+        if not variable and not return_mask:
             return x
         return x, mask
 
@@ -347,7 +364,20 @@ def _lr_lambda(warmup, total):
     return f
 
 
-def minibatch_sampler(lengths, batch_size, buckets=0, generator=None):
+def _weighted_draw(weights, size, generator):
+    """``size`` indices with probability proportional to ``weights`` (a precomputed CDF)."""
+    cdf = torch.cumsum(torch.as_tensor(weights, dtype=torch.float64), 0)
+    cdf = cdf / cdf[-1]
+    last = cdf.numel() - 1
+
+    def draw():
+        u = torch.rand(size, generator=generator, dtype=torch.float64)
+        return torch.searchsorted(cdf, u, right=True).clamp_(max=last)
+
+    return draw
+
+
+def minibatch_sampler(lengths, batch_size, buckets=0, generator=None, weights=None):
     """Callable returning minibatch indices (CPU) over events with real ``lengths``.
 
     ``buckets`` <= 1: uniform over all events (the original stream). Otherwise the
@@ -356,9 +386,31 @@ def minibatch_sampler(lengths, batch_size, buckets=0, generator=None):
     uniformly inside it, so each event keeps probability 1/n per draw while a
     batch spans a narrow range of lengths. ``.edges`` lists the largest length
     per group.
+
+    ``weights``: draw each event with probability proportional to its weight instead
+    (groups chosen by their weight sum, events inside a group by weight).
     """
     lengths = torch.as_tensor(lengths)
     n = lengths.numel()
+    if weights is not None:
+        weights = torch.as_tensor(weights, dtype=torch.float64)
+        if weights.shape != (n,) or not bool(torch.all(weights >= 0)) or not float(weights.sum()) > 0:
+            raise ValueError("weights must be [n], non-negative, with a positive sum")
+        if buckets <= 1:
+            draw = _weighted_draw(weights, (batch_size,), generator)
+            draw.edges = None
+            return draw
+        order = torch.argsort(lengths, stable=True)
+        groups = [g for g in torch.tensor_split(order, buckets) if g.numel()]
+        gw = torch.stack([weights[g].sum() for g in groups])
+        inside = [_weighted_draw(weights[g], (batch_size,), generator) for g in groups]
+
+        def wdraw():
+            k = int(torch.multinomial(gw, 1, generator=generator))
+            return groups[k][inside[k]()]
+
+        wdraw.edges = [int(lengths[g[-1]]) for g in groups]
+        return wdraw
     if buckets <= 1:
         def draw():
             return torch.randint(0, n, (batch_size,), generator=generator)
@@ -400,6 +452,13 @@ def train_flow(model, base, train, val, options, log=print, on_best=None):
     tr = {k: v.to(device) for k, v in train.items()}
     va = {k: v.to(device) for k, v in val.items()}
     ntr, nva = tr["u"].shape[0], va["u"].shape[0]
+    mode = options.weight_mode
+    if mode not in ("none", "loss", "sample"):
+        raise ValueError(f"weight_mode must be none, loss or sample, not {mode!r}")
+    if mode != "none" and "w" not in tr:
+        raise ValueError(f"weight_mode {mode!r} needs per-event weights 'w' in the training data")
+    wtr = tr.get("w") if mode == "loss" else None
+    wva = va.get("w") if mode != "none" else None
 
     # Fixed validation noise/time so the selection metric is comparable.
     vgen = torch.Generator(device="cpu").manual_seed(options.val_seed)
@@ -418,8 +477,14 @@ def train_flow(model, base, train, val, options, log=print, on_best=None):
     )
     history = {"step": [], "train_loss": [], "val_loss": [], "seconds": [],
                "device": info.to_dict()}
+    if mode != "none":
+        w = tr["w"].double()
+        history["weights"] = {"mode": mode, "ess_train": float(w.sum() ** 2 / (w ** 2).sum()),
+                              "n_train": ntr, "range": [float(w.min()), float(w.max())],
+                              "val_weighted": wva is not None}
     draw = minibatch_sampler(tr["mask"].sum(1).cpu(), options.batch_size,
-                             options.length_buckets, gen)
+                             options.length_buckets, gen,
+                             weights=tr["w"].cpu() if mode == "sample" else None)
     history["length_buckets"] = draw.edges
     best = (float("inf"), -1)
     best_state = None
@@ -435,7 +500,8 @@ def train_flow(model, base, train, val, options, log=print, on_best=None):
             torch.zeros((options.batch_size,) + tuple(tr["u"].shape[1:])), None, gen
         ).to(device)
         loss = flow_matching_loss(model, tr["u"][idx], tr["mask"][idx],
-                                  tr["cond"][idx], base, t=t, eps=eps)
+                                  tr["cond"][idx], base, t=t, eps=eps,
+                                  weight=None if wtr is None else wtr[idx])
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), options.grad_clip)
@@ -449,7 +515,8 @@ def train_flow(model, base, train, val, options, log=print, on_best=None):
             with torch.no_grad():
                 vl = np.mean([
                     float(flow_matching_loss(ema, va["u"][i], va["mask"][i],
-                                             va["cond"][i], base, t=t_, eps=e_))
+                                             va["cond"][i], base, t=t_, eps=e_,
+                                             weight=None if wva is None else wva[i]))
                     for i, t_, e_ in val_sets
                 ])
             synchronize(device)

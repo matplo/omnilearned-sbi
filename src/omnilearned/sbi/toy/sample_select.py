@@ -32,19 +32,46 @@ from omnilearned.sbi.toy.simulator import PARAMETERS
 from omnilearned.sbi.toy.simulator_v2 import REJECTION_REASONS
 
 
+REDRAW_SEED_STRIDE = 1 << 24  # redraw round r uses seed + r * stride (gate seeds are seed + point)
+
+
 def sample_and_select(surrogate, theta, n, sel, seed=0, nsteps=128, solver="midpoint",
-                      batch=4096, sort_by_length=True):
-    """Selected surrogate clouds at ``theta``: (x, mask, report)."""
+                      batch=4096, sort_by_length=True, redraw=False, max_rounds=50):
+    """Selected surrogate clouds at ``theta``: (x, mask, report).
+
+    Default: N from p(N | theta), the cloud from q(x | N, theta), rejected clouds dropped,
+    so the selected sample follows p(N) Pr_q(S | N) / Pr_q(S). With ``redraw`` (per-N
+    selection normalization, fidelity plan S1) each rejected cloud is drawn again at the same
+    N until it passes (at most ``max_rounds``), so the selected sample keeps p(N | theta) and
+    follows q(x | N, theta) 1_S(x) / Pr_q(S | N, theta). The report's acceptance is always the
+    first-pass Pr_q(S | theta); ``acceptance_by_n`` holds the first-pass counts per N.
+    """
     t0 = time.time()
-    x, mask = surrogate.sample(np.asarray(theta, np.float64), n, None, seed=seed, nsteps=nsteps,
+    theta = np.asarray(theta, np.float64)
+    x, mask = surrogate.sample(theta, n, None, seed=seed, nsteps=nsteps,
                                solver=solver, candidate_names=list(PARAMETERS), batch=batch,
                                sort_by_length=sort_by_length)
-    t_sample = time.time() - t0
     ok, reason, _ = select_clouds(x.astype(np.float64), sel, mask)
+    counts = mask.sum(1)
     rep = {"generated": int(n), "selected": int(ok.sum()), "acceptance": float(ok.mean()),
            "rejections": {r: int((reason[~ok] == k).sum()) for k, r in enumerate(REJECTION_REASONS)},
            "nsteps": nsteps, "solver": solver, "seed": seed, "sort_by_length": sort_by_length,
-           "sample_seconds": t_sample, "select_seconds": time.time() - t0 - t_sample}
+           "acceptance_by_n": {"generated": np.bincount(counts).tolist(),
+                               "accepted": np.bincount(counts[ok], minlength=counts.max(initial=0) + 1).tolist()}}
+    if redraw:
+        rounds, redrawn = 0, int((~ok).sum())
+        while (~ok).any() and rounds < max_rounds:
+            rounds += 1
+            idx = np.flatnonzero(~ok)
+            xr, mr = surrogate.sample(theta, idx.size, counts[idx], seed=seed + rounds * REDRAW_SEED_STRIDE,
+                                      nsteps=nsteps, solver=solver, candidate_names=list(PARAMETERS),
+                                      batch=batch, sort_by_length=sort_by_length, pad_to=mask.shape[1])
+            okr, _, _ = select_clouds(xr.astype(np.float64), sel, mr)
+            x[idx[okr]], mask[idx[okr]], ok[idx[okr]] = xr[okr], mr[okr], True
+        rep["redraw"] = {"rounds": rounds, "redrawn": redrawn, "unfilled": int((~ok).sum()),
+                         "max_rounds": max_rounds, "seed_stride": REDRAW_SEED_STRIDE}
+        rep["selected"] = int(ok.sum())
+    rep["sample_seconds"] = time.time() - t0
     return x[ok], mask[ok], rep
 
 

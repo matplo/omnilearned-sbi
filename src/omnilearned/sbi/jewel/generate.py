@@ -23,6 +23,10 @@ number of workers on any number of nodes can share one directory, and reruns res
     python -m omnilearned.sbi.jewel.generate work --dir DIR
     python -m omnilearned.sbi.jewel.generate merge --dir DIR --out MERGED --shards 64
 
+Weighted samples (``plan --wexpo K``: WEIGHTED T, WEXPO K, a sampling option recorded per task)
+add the per-jet ``weight`` (the raw HepMC event weight pT-hat^-K) and ``pthat`` to the task
+shards; ``merge`` rescales the weights per point so that they sum to the point's jets.
+
 ``merge`` concatenates the per-task jet shards of a split (tens of thousands of small files,
 slow to open on CFS) into a few point-major shards with the same layout, plus diagnostics, a
 manifest per merged shard listing its source tasks with their hashes, and an
@@ -78,10 +82,11 @@ def design_points(cfg, split):
 
 
 def plan(cfg, split, out, chunks=1, points=None, theta=None, keep_hepmc=(), extra=None,
-         nevent=None, keep_events=True):
+         nevent=None, keep_events=True, sampling=None):
     """Write ``tasks.json``: every (point, chunk) of the split (or explicit ``theta`` rows),
     chunk-major. ``chunks`` is a number for every point or a dict point -> number of chunks.
-    ``keep_events=False`` writes jets and diagnostics but no raw event store."""
+    ``keep_events=False`` writes jets and diagnostics but no raw event store.
+    ``sampling = {"wexpo": k}``: weighted events (``cards.task_cards``)."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     pts = np.atleast_2d(np.asarray(theta, float)) if theta is not None else design_points(cfg, split)
@@ -98,7 +103,8 @@ def plan(cfg, split, out, chunks=1, points=None, theta=None, keep_hepmc=(), extr
                        "chunk": c, "theta": [float(v) for v in pts[pid]], "nevent": nev,
                        "njob": cards.njob(cfg, split, pid, c),
                        "keep_hepmc": task_name(split, pid, c) in set(keep_hepmc),
-                       "keep_events": bool(keep_events), "extra_cards": extra or {}})
+                       "keep_events": bool(keep_events), "extra_cards": extra or {},
+                       **({"sampling": dict(sampling)} if sampling else {})})
     doc = {"schema": TASKS_SCHEMA, "backend": cfg["backend"], "split": split,
            "parameters": list(PARAMETERS), "tasks": tl, "config": cfg, "host": host_info()}
     with open(out / "tasks.json", "w") as f:
@@ -249,7 +255,8 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
     work = Path(tempfile.mkdtemp(prefix=f"jewel_{name}_", dir=scratch))
     try:
         params, medium, cent = cards.task_cards(cfg, task["theta"], task["nevent"], task["njob"],
-                                                geom, tables_dir=".", extra=task.get("extra_cards"))
+                                                geom, tables_dir=".", extra=task.get("extra_cards"),
+                                                sampling=task.get("sampling"))
         (work / "params.dat").write_text(params)
         (work / "medium.dat").write_text(medium)
         exe = cards.inspect_installation(cfg)["executable"] if not cfg["jewel"].get("executable") \
@@ -306,9 +313,13 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
                "diag": {**{k: np.array([diags[i][k] for i in keep], dtype=np.float64) for k in dkeys},
                         "number": num, "b_requested": np.full(len(keep), task["theta"][0]),
                         "centrality": np.full(len(keep), cent)}}
+        bias = None
+        if task.get("sampling"):  # raw HepMC weights; merge normalises them per point
+            rec["weight"], rec["pthat"] = rec["diag"]["weight"].copy(), rec["diag"]["pthat"].copy()
+            bias = sampling_record(task["sampling"])
         cfg_sha = cfg.get("_sha256", "unknown")  # of the config the task list was planned from
         sha, dsha = write_shard(out_dir / f"{name}.h5", [(task["point_id"], task["theta"], rec)],
-                                task["split"], cfg["backend"], cfg_sha)
+                                task["split"], cfg["backend"], cfg_sha, sampling_bias=bias)
         keep_ev = task.get("keep_events", True)
         esha = _write_events(out_dir / f"{name}.events.h5", events, stream, task["point_id"],
                              task["chunk"], task["nevent"]) if keep_ev else None
@@ -412,6 +423,12 @@ def write_index(directory):
     return index
 
 
+def sampling_record(sampling):
+    """The shard's ``sampling_bias`` attribute of a weighted JEWEL task."""
+    return {"generator": "jewel", "weighted": True, "wexpo": float(sampling["wexpo"]),
+            "weight": "HepMC event weight PARI(10) = pthat^-wexpo"}
+
+
 def _merge_one(job):
     """Write one merged shard from its source task shards (worker of ``merge``)."""
     src_dir, out, sources = Path(job["src"]), Path(job["out"]), job["sources"]
@@ -423,13 +440,14 @@ def _merge_one(job):
         with h5py.File(path, "r") as f:
             a = {k: f.attrs[k] for k in ("schema", "backend", "split", "toy_config_sha256")}
             a = {k: (v.item() if hasattr(v, "item") else v) for k, v in a.items()}
+            a["sampling_bias"] = f.attrs.get("sampling_bias")
             if attrs is None:
                 attrs = a
                 feat, width = list(f.attrs["feature_names"]), int(f.attrs["max_constituents"])
             elif a != attrs or int(f.attrs["max_constituents"]) != width:
                 raise ValueError(f"{path}: attributes differ from the first source")
             parts.append({k: f[k][...] for k in ("data/x", "data/mask", "data/n_constituents", "global",
-                                                 "event_id", "point_id")})
+                                                 "event_id", "point_id", "weight", "pthat") if k in f})
         with h5py.File(path.with_name(path.name[:-3] + ".diag.h5"), "r") as f:
             diags.append({k: f[k][...] for k in f.keys()})
     cat = lambda k: np.concatenate([q[k] for q in parts])  # noqa: E731
@@ -444,8 +462,16 @@ def _merge_one(job):
         g.attrs["global_names"] = list(GLOBAL_NAMES)
         _dataset(f, "event_id", cat("event_id"))
         _dataset(f, "point_id", cat("point_id"))
+        if attrs["sampling_bias"] is not None:  # weights rescaled to sum to each point's jets
+            w, pid_ = cat("weight").astype(np.float64), cat("point_id")
+            for p in np.unique(pid_):
+                s = pid_ == p
+                w[s] *= s.sum() / w[s].sum()
+            _dataset(f, "weight", w)
+            _dataset(f, "pthat", cat("pthat"))
         for k, v in attrs.items():
-            f.attrs[k] = v
+            if v is not None:
+                f.attrs[k] = v
         f.attrs["feature_names"] = feat
         f.attrs["parameter_names"] = list(PARAMETERS)
         f.attrs["max_constituents"] = width
@@ -459,9 +485,15 @@ def _merge_one(job):
     theta = cat("global")[:, :len(PARAMETERS)]
     points = [{"point_id": int(p), "theta": theta[pid == p][0].tolist(), "n_jets": int((pid == p).sum()),
                "n_tasks": sum(1 for s in sources if s["point_id"] == p)} for p in sorted({s["point_id"] for s in sources})]
+    if attrs["sampling_bias"] is not None:
+        w = cat("weight")
+        for q in points:
+            ws = w[pid == q["point_id"]]
+            q["ess"] = float(ws.sum() ** 2 / np.sum(ws ** 2)) if ws.size else 0.0
     man = {"schema": MERGED_SCHEMA, "file": out.name, "sha256": file_sha256(out), "diag_file": dpath.name,
            "diag_sha256": file_sha256(dpath), "split": attrs["split"], "backend": attrs["backend"],
            "toy_config_sha256": attrs["toy_config_sha256"], "n_jets": int(n), "points": points,
+           "sampling_bias": None if attrs["sampling_bias"] is None else json.loads(attrs["sampling_bias"]),
            "sources": sources, "host": host_info()}
     with open(out.with_suffix(".json"), "w") as f:
         json.dump(man, f, indent=1)
@@ -503,7 +535,10 @@ def merge(directory, out, shards, workers=1, log=print):
              "shards": [{"file": m["file"], "sha256": m["sha256"], "n_jets": m["n_jets"],
                          "point_ids": [q["point_id"] for q in m["points"]]} for m in mans],
              "n_points": len(pids), "n_jets": int(sum(m["n_jets"] for m in mans)),
-             "n_tasks": len(idx["shards"]), "events": idx.get("events"), "host": host_info()}
+             "n_tasks": len(idx["shards"]), "events": idx.get("events"),
+             "sampling_bias": [json.loads(b) for b in sorted({json.dumps(m["sampling_bias"], sort_keys=True)
+                                                              for m in mans})],
+             "host": host_info()}
     if index["n_jets"] != idx["n_jets"]:
         raise ValueError(f"merged {index['n_jets']} jets, source index has {idx['n_jets']}")
     with open(out / f"index_{split}.json", "w") as f:
@@ -531,6 +566,9 @@ def main(argv=None):
     p.add_argument("--no-events", action="store_true", help="no raw event stores (jets and diagnostics only)")
     p.add_argument("--keep-hepmc", nargs="*", default=[])
     p.add_argument("--extra", default=None, help="JSON object of extra main-card lines")
+    p.add_argument("--wexpo", type=float, default=None,
+                   help="weighted events: WEIGHTED T, WEXPO K (hard process sampled with pT-hat^K, "
+                        "event weight pT-hat^-K; per-jet weights in the shards)")
     w = sub.add_parser("work")
     w.add_argument("--dir", required=True)
     w.add_argument("--scratch", default=None)
@@ -563,7 +601,8 @@ def main(argv=None):
                 chunks = {p: chunks[p] for p in a.points}
             a.points = sorted(chunks)
         doc = plan(cfg, a.split, a.out, chunks, a.points, theta, a.keep_hepmc,
-                   json.loads(a.extra) if a.extra else None, a.nevent, keep_events=not a.no_events)
+                   json.loads(a.extra) if a.extra else None, a.nevent, keep_events=not a.no_events,
+                   sampling=None if a.wexpo is None else {"wexpo": a.wexpo})
         print(f"{len(doc['tasks'])} tasks -> {a.out}/tasks.json")
     elif a.cmd == "work":
         print(f"worker ran {work(a.dir, a.scratch, a.timeout, max_tasks=a.max_tasks)} tasks")

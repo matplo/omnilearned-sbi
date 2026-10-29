@@ -40,13 +40,20 @@ def load_toy_config(path=DEFAULT_CONFIG):
             mod.Selection.from_config(cfg["selection"]))
 
 
-def sample_setting(theta, n, seed, stream="predictive", index=0, path=DEFAULT_CONFIG):
-    """Selected direct toy jets at one setting; generator (seed, stream, index)."""
+def sample_setting(theta, n, seed, stream="predictive", index=0, path=DEFAULT_CONFIG, bias=None):
+    """Selected direct toy jets at one setting; generator (seed, stream, index).
+
+    ``bias``: optional hard-pT sampling bias (``simulator_v2.PtBias``, v2 only)."""
     cfg, c, s = load_toy_config(path)
     mod = simulator_for(cfg.get("backend", simulator.BACKEND))
     rng = rng_for(seed, STREAMS[stream], index)
+    kw = {}
+    if bias is not None:
+        if mod is not simulator_v2:
+            raise ValueError("a hard-pT sampling bias needs toy-quenching-v2")
+        kw["bias"] = bias
     return mod.sample_toy(np.asarray(theta, dtype=np.float64), int(n), rng, c, s,
-                          stream=STREAMS[stream], index=index)
+                          stream=STREAMS[stream], index=index, **kw)
 
 
 def array_sha256(rec):

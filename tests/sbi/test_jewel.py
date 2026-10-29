@@ -104,7 +104,8 @@ FAKE = textwrap.dedent('''\
         f.write("HepMC::Version 2.06.09\\nHepMC::IO_GenEvent-START_EVENT_LISTING\\n")
         for ev in range(1, n + 1):
             pthat = 80 + 40 * rng.random()
-            f.write(f"E {{ev}} -1 {{pthat:.4f}} 0 0 0 0 1 1 2 0 1 1\\nU GEV MM\\nC 12.5 0.1\\n")
+            wt = "1" if card.get("WEIGHTED", "F").strip() != "T" else f"{{pthat ** -float(card['WEXPO']):.6e}}"
+            f.write(f"E {{ev}} -1 {{pthat:.4f}} 0 0 0 0 1 1 2 0 1 {{wt}}\\nU GEV MM\\nC 12.5 0.1\\n")
             f.write("H 0 0 0 0 0 0 0 0 0 0.0876 0 0 0\\n")
             rows = [(2212, 0, 0, 2.5e3, 2.5e3, 0.938, 4), (2212, 0, 0, -2.5e3, 2.5e3, 0.938, 4)]
             rows += [(21, pthat, 0, 0, pthat, 0, 23), (21, -pthat, 0, 0, pthat, 0, 23)]
@@ -353,3 +354,67 @@ def test_gate_selection_reads_toy_and_jewel_configs():
 
     assert selection(str(cards.CONFIG)) == jets.selection_from_config(cards.load_config(cards.CONFIG))
     assert selection(str(V2_CONFIG)) == load_toy_config(V2_CONFIG)[2]
+
+
+def test_weighted_cards_set_weighted_and_wexpo():
+    params, _, _ = cards.task_cards(CFG, (4.5, 0.45, 0.65), 1000, 800001, JewelGeometry(), sampling={"wexpo": 3})
+    assert "WEIGHTED T" in params and "WEXPO 3.0" in params and "WEIGHTED F" not in params
+    plain, _, _ = cards.task_cards(CFG, (4.5, 0.45, 0.65), 1000, 800001, JewelGeometry())
+    assert "WEIGHTED F" in plain and "WEXPO" not in plain
+    if (SRC / "jewel-2.6.0.f").exists():
+        assert {line.split()[0] for line in params.splitlines()} <= _labels(SRC / "jewel-2.6.0.f",
+                                                                             r'label\.eq\."([A-Z0-9]+)"')
+    with pytest.raises(ValueError, match="sampling"):
+        cards.task_cards(CFG, (4.5, 0.45, 0.65), 10, 800001, JewelGeometry(), extra={"WEXPO": 4},
+                         sampling={"wexpo": 3})
+
+
+def test_weighted_jewel_tasks_carry_weights_and_merge_normalises_per_point(fake_cfg, tmp_path):
+    pytest.importorskip("hepyy")
+    from omnilearned.sbi.jewel import generate
+    from omnilearned.sbi.toy.datasets import read_shards, shard_paths
+
+    def farm(name, sampling):
+        d = tmp_path / name
+        doc = generate.plan(fake_cfg, "probe", d, chunks=2, theta=[[4.5, 0.45, 0.65], [8.0, 0.8, 0.3]],
+                            nevent=20, sampling=sampling)
+        doc["split"] = "train"
+        for t in doc["tasks"]:
+            t["split"], t["name"] = "train", t["name"].replace("probe", "train")
+        (d / "tasks.json").write_text(json.dumps(doc))
+        generate.work(d, scratch=str(tmp_path), log=lambda m: None)
+        return d, generate.write_index(d)
+
+    d, idx = farm("w", {"wexpo": 3.0})
+    assert all(t["sampling"] == {"wexpo": 3.0} for t in generate.load(d)["tasks"])
+    man = json.loads((d / "train_p00000_c000.json").read_text())
+    assert "WEIGHTED T" in man["cards"]["params"] and "WEXPO 3.0" in man["cards"]["params"]
+    with h5py.File(d / "train_p00000_c000.h5") as f:
+        assert json.loads(f.attrs["sampling_bias"])["wexpo"] == 3.0
+        w, ph = f["weight"][...], f["pthat"][...]
+    np.testing.assert_allclose(w, ph ** -3.0, rtol=1e-4)  # raw HepMC weight = pthat^-WEXPO
+    with h5py.File(d / "train_p00000_c000.diag.h5") as f:
+        np.testing.assert_array_equal(f["pthat"][...], ph)
+    order = sorted(idx["shards"], key=lambda q: (q["point_id"], q["chunk"]))  # merged order
+    raw = read_shards([d / q["file"] for q in order])
+    out = tmp_path / "merged"
+    midx = generate.merge(d, out, shards=1, log=lambda m: None)
+    assert midx["sampling_bias"][0]["wexpo"] == 3.0
+    m = read_shards(shard_paths(out, "train"))
+    np.testing.assert_array_equal(m["event_id"], raw["event_id"])
+    for p in (0, 1):  # rescaled per point to sum to its jets, relative weights unchanged
+        s = m["point_id"] == p
+        np.testing.assert_allclose(m["weight"][s], raw["weight"][s] * s.sum() / raw["weight"][s].sum(), rtol=1e-12)
+    assert all("ess" in q for q in json.loads((out / "train_00000.json").read_text())["points"])
+    # unweighted tasks keep the old format (no weight dataset; unit weights on reading)
+    u, uidx = farm("u", None)
+    with h5py.File(u / "train_p00000_c000.h5") as f:
+        assert "weight" not in f and "sampling_bias" not in f.attrs
+    assert np.all(read_shards([u / s["file"] for s in uidx["shards"]])["weight"] == 1)
+    # weighted and unweighted sources are not merged together
+    import shutil
+    for p in u.glob("train_p00001_c001*"):
+        shutil.copy(p, d / p.name)
+    generate.write_index(d)
+    with pytest.raises(ValueError, match="attributes differ"):
+        generate.merge(d, tmp_path / "mixed", shards=1, log=lambda m: None)

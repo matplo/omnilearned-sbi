@@ -131,8 +131,72 @@ def _padded_dirichlet(alpha, counts, rng):
     return np.divide(g, s, out=np.zeros_like(g), where=s > 0), live
 
 
-def generate_attempts(theta, n, rng, c, b_per_event=None):
-    """Raw (unselected) events; particle arrays padded to the largest count."""
+@dataclass(frozen=True)
+class PtBias:
+    """Sampling bias of the hard pT ``P0``: a sampling option, not part of the toy law.
+
+    ``P0`` is drawn from the generator law times b(P0) = (min(P0, cap_GeV) / ref_GeV)^exponent,
+    i.e. pT^-(n - k) below the cap and pT^-n above it, and each selected jet carries the weight
+    1 / b(P0), normalised so that the weights sum to the number of selected jets at the point
+    (as in Pythia ``PhaseSpace:bias2Selection``). Weighted jets follow the unbiased law. It is
+    kept out of ``[toy]``, so the backend id and the config hash are those of the toy.
+    """
+
+    exponent: float = 0.0
+    ref_GeV: float = 100.0
+    cap_GeV: float = None
+
+    @property
+    def active(self):
+        return self.exponent != 0
+
+    def factor(self, p0):
+        cap = np.inf if self.cap_GeV is None else self.cap_GeV
+        return (np.minimum(p0, cap) / self.ref_GeV) ** self.exponent
+
+    def to_dict(self):
+        return {"exponent": float(self.exponent), "ref_GeV": float(self.ref_GeV),
+                "cap_GeV": None if self.cap_GeV is None else float(self.cap_GeV)}
+
+
+def _power_law_mass(lo, hi, a):
+    """Integral of x^-a over [lo, hi]."""
+    return np.log(hi / lo) if a == 1 else (hi ** (1 - a) - lo ** (1 - a)) / (1 - a)
+
+
+def _power_law_inverse(u, lo, hi, a):
+    """Inverse CDF of x^-a on [lo, hi] at u in [0, 1)."""
+    if a == 1:
+        return lo * (hi / lo) ** u
+    l, h = lo ** (1 - a), hi ** (1 - a)
+    return (l + u * (h - l)) ** (1 / (1 - a))
+
+
+def draw_hard_pt(u, c, bias=None):
+    """Hard pT ``P0`` from uniforms ``u``: pT^-n on [min, max], times the bias if active."""
+    nexp = c.power_law_exponent
+    if bias is None or not bias.active:
+        lo, hi = c.hard_pt_min_GeV ** (1 - nexp), c.hard_pt_max_GeV ** (1 - nexp)
+        return (lo + u * (hi - lo)) ** (1 / (1 - nexp))
+    lo, hi, k = c.hard_pt_min_GeV, c.hard_pt_max_GeV, bias.exponent
+    cap = hi if bias.cap_GeV is None else min(float(bias.cap_GeV), hi)
+    if cap <= lo:
+        raise ValueError("the bias cap must lie above the hard-pT minimum")
+    m1 = _power_law_mass(lo, cap, nexp - k)  # below the cap: pT^-(n-k) (ref cancels)
+    m2 = cap ** k * _power_law_mass(cap, hi, nexp) if cap < hi else 0.0
+    t = u * (m1 + m2)
+    below = t < m1
+    p = _power_law_inverse(np.where(below, t / m1, 0.0), lo, cap, nexp - k)
+    if m2 > 0:
+        p = np.where(below, p, _power_law_inverse(np.where(below, 0.0, (t - m1) / m2), cap, hi, nexp))
+    return p
+
+
+def generate_attempts(theta, n, rng, c, b_per_event=None, bias=None):
+    """Raw (unselected) events; particle arrays padded to the largest count.
+
+    ``bias`` (``PtBias``) changes only the hard-pT draw; the weights are set by ``sample_toy``.
+    """
     theta = tuple(float(v) for v in theta)
     b, T_ref, tau = theta
     if b_per_event is not None:
@@ -148,9 +212,7 @@ def generate_attempts(theta, n, rng, c, b_per_event=None):
     I = path_moments(x0, y0, nx, ny, L, theta, c)
     b_event = np.broadcast_to(b, (n,)).astype(np.float64)
 
-    nexp = c.power_law_exponent
-    lo, hi = c.hard_pt_min_GeV ** (1 - nexp), c.hard_pt_max_GeV ** (1 - nexp)
-    P0 = (lo + rng.uniform(0, 1, n) * (hi - lo)) ** (1 / (1 - nexp))
+    P0 = draw_hard_pt(rng.uniform(0, 1, n), c, bias)
     s = c.loss_lognormal_sigma
     Z = np.exp(s * rng.standard_normal(n) - s ** 2 / 2)
     P_vis = P0 * np.exp(-c.loss_coefficient * I[:, 2] * Z)
@@ -291,12 +353,14 @@ def apply_selection(ev, sel):
 
 
 def sample_toy(theta, count, rng, constants, selection, stream=0, index=0,
-               batch=None, attempt_cap=None, b_sampler=None):
+               batch=None, attempt_cap=None, b_sampler=None, bias=None):
     """Generate ``count`` selected jets at ``theta``.
 
     Returns (records, manifest). Records: ``x`` [n, max_constituents, 3]
     (eta, phi, log pT; zeros where padded), ``mask``, ``n_constituents``,
-    jet kinematics, event ids and the hidden ``diag`` store.
+    jet kinematics, event ids and the hidden ``diag`` store. With an active
+    ``bias`` (``PtBias``) they also carry ``weight`` (1 / b(P0), summing to the
+    number of selected jets) and ``pthat`` (= P0).
     """
     sel = selection
     W = sel.max_constituents
@@ -307,7 +371,7 @@ def sample_toy(theta, count, rng, constants, selection, stream=0, index=0,
     while n_acc < count and attempts < cap:
         m = int(min(batch, cap - attempts))
         bvec = None if b_sampler is None else b_sampler(m, rng)
-        ev = generate_attempts(theta, m, rng, constants, b_per_event=bvec)
+        ev = generate_attempts(theta, m, rng, constants, b_per_event=bvec, bias=bias)
         ok, reason, r, jets = apply_selection(ev, sel)
         for k in range(len(REJECTION_REASONS)):
             reasons[k] += int((reason == k).sum())
@@ -326,6 +390,15 @@ def sample_toy(theta, count, rng, constants, selection, stream=0, index=0,
         attempts += m
     rec = _concat(parts, count)
     accepted = rec["event_id"].shape[0]
+    weighting = None
+    if bias is not None and bias.active:
+        rec["pthat"] = rec["diag"]["P0"].copy()
+        w = 1.0 / bias.factor(rec["pthat"])
+        rec["weight"] = w * (accepted / w.sum()) if accepted else w
+        w = rec["weight"]
+        weighting = {**bias.to_dict(), "weight_sum": float(w.sum()),
+                     "ess": float(w.sum() ** 2 / np.sum(w ** 2)) if accepted else 0.0,
+                     "weight_range": [float(w.min()), float(w.max())] if accepted else None}
     manifest = {
         "backend": BACKEND,
         "theta": dict(zip(PARAMETERS, map(float, theta))),
@@ -345,6 +418,8 @@ def sample_toy(theta, count, rng, constants, selection, stream=0, index=0,
         "stream": int(stream),
         "index": int(index),
     }
+    if weighting is not None:
+        manifest["sampling_bias"] = weighting
     return rec, manifest
 
 

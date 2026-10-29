@@ -8,7 +8,10 @@ checkpoint holding both, plus ``run.json`` (options, data hashes, history,
 source revision, device, matmul precision).
 
 The flow condition is theta mapped to [-1, 1] over the box plus N / 100 as
-known context (``layout_with_multiplicity``). Training may use TF32 matmuls
+known context (``layout_with_multiplicity``). Weighted samples (hard-pT biased
+shards, per-jet ``weight``) are trained with ``--weight-mode loss|sample``; the
+multiplicity NLL is then weighted too, and run.json records the effective sample
+size per point and jet-pT bin. Training may use TF32 matmuls
 (``--tf32``, recorded); evaluation always runs in IEEE float32.
 
     python -m omnilearned.sbi.toy.train --data-dir DATA --out RUN --steps 1000
@@ -42,10 +45,30 @@ from omnilearned.sbi.velocity import SetFlowVelocity
 from omnilearned.sbi.velocity_pet import SmoothPETVelocity
 
 FEATURES = ["eta", "phi", "log_pt_over_GeV"]
+PT_EDGES = (60.0, 70, 80, 90, 100, 120, 140, 170, 200)  # as toy.ptbins
 
 
-def prepare(data, transform, layout, chunk=200_000):
-    """Model-coordinate tensors for ``train_flow``: u, mask, cond.
+def weight_summary(data, edges=PT_EDGES):
+    """Effective sample size (sum w)^2 / sum w^2 of a split: total, per point, per jet-pT bin."""
+    w, pid = np.asarray(data["weight"], np.float64), data["point_id"]
+    pt = data["global"][:, list(data["global_names"]).index("jet_pt")]
+    nb = len(edges) - 1
+    _, p = np.unique(pid, return_inverse=True)
+    key = p * nb + np.clip(np.digitize(pt, edges) - 1, 0, nb - 1)
+    size = (p.max() + 1) * nb if p.size else nb
+    s1, s2 = np.bincount(key, w, size), np.bincount(key, w * w, size)
+    ess = lambda a, b: np.divide(a ** 2, b, out=np.zeros_like(a), where=b > 0)  # noqa: E731
+    per_bin = ess(s1, s2).reshape(-1, nb)
+    per_point = ess(s1.reshape(-1, nb).sum(1), s2.reshape(-1, nb).sum(1))
+    return {"n": int(w.size), "ess": float(w.sum() ** 2 / np.sum(w * w)), "unit": bool(np.all(w == 1)),
+            "range": [float(w.min()), float(w.max())],
+            "per_point_median": float(np.median(per_point)), "edges": list(edges),
+            "per_point_bin_median": np.median(per_bin, 0).tolist(),
+            "per_point_bin_p10": np.percentile(per_bin, 10, 0).tolist()}
+
+
+def prepare(data, transform, layout, chunk=200_000, weights=False):
+    """Model-coordinate tensors for ``train_flow``: u, mask, cond (and w if ``weights``).
 
     The transform runs in float64 on chunks of ``chunk`` events into a preallocated
     float32 array, so host memory stays near the size of the data (6 M jets × 81 slots
@@ -58,7 +81,10 @@ def prepare(data, transform, layout, chunk=200_000):
         u[s:s + chunk] = transform.forward(x, mask[s:s + chunk])[0].float()
     cond = layout.assemble(data["theta"], list(PARAMETERS),
                            context=data["n_constituents"][:, None].astype(np.float64))
-    return {"u": u, "mask": mask, "cond": torch.from_numpy(cond)}
+    out = {"u": u, "mask": mask, "cond": torch.from_numpy(cond)}
+    if weights:
+        out["w"] = torch.as_tensor(np.asarray(data["weight"]), dtype=torch.float32)
+    return out
 
 
 def sample_setup(config):
@@ -99,9 +125,13 @@ def build_surrogate(args, train, val, out, log=print):
                              depth=args.mult_depth)
     mult.layout = mlayout
     mcond = lambda d: torch.from_numpy(mlayout.assemble(d["theta"], list(PARAMETERS)))  # noqa: E731
+    weighted = getattr(args, "weight_mode", "none") != "none"
     mult, mhist = train_multiplicity(mult, mcond(train), train["n_constituents"], mcond(val),
                                      val["n_constituents"], steps=args.mult_steps,
-                                     device=dev.device, log=log)
+                                     device=dev.device, log=log,
+                                     weights=train["weight"] if weighted else None,
+                                     val_weights=val["weight"] if weighted else None)
+    mhist["weighted"] = weighted
     mhist["seconds"] = time.time() - t0
 
     if args.arch == "set":
@@ -112,7 +142,7 @@ def build_surrogate(args, train, val, out, log=print):
                                   local_dim=args.local_dim)
     opts = TrainOptions(**{f.name: getattr(args, f.name) for f in fields(TrainOptions)
                            if hasattr(args, f.name)})
-    tr, va = prepare(train, transform, layout), prepare(val, transform, layout)
+    tr, va = prepare(train, transform, layout, weights=weighted), prepare(val, transform, layout, weights=weighted)
     train.pop("x", None)  # the float32 model coordinates replace the physical ones
     val.pop("x", None)
     meta = {"backend": backend, "arch": args.arch, "parameters": list(PARAMETERS), "box": box,
@@ -162,6 +192,9 @@ def main(argv=None):
     ap.add_argument("--val-batches", dest="val_batches", type=int, default=8)
     ap.add_argument("--length-buckets", dest="length_buckets", type=int, default=0,
                     help="draw each minibatch inside one of k multiplicity quantile buckets")
+    ap.add_argument("--weight-mode", dest="weight_mode", default="none", choices=["none", "loss", "sample"],
+                    help="per-jet sampling weights of the shards: weighted loss, or minibatches drawn "
+                         "proportional to the weight (both target the unweighted law)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--tf32", action="store_true", help="TF32 matmuls during training only")
@@ -195,7 +228,13 @@ def main(argv=None):
             "validation": [{"file": str(p), "sha256": file_sha256(p)} for p in vp],
             "n_train": int(train["x"].shape[0]), "n_val": int(val["x"].shape[0]),
             "train_points": int(np.unique(train["point_id"]).size),
-            "val_points": int(np.unique(val["point_id"]).size)}
+            "val_points": int(np.unique(val["point_id"]).size),
+            "weights": {"train": weight_summary(train), "validation": weight_summary(val)}}
+    for split, ws in data["weights"].items():
+        log(f"weights {split}: ESS {ws['ess']:.0f} of {ws['n']} (unit={ws['unit']}), per point "
+            f"{ws['per_point_median']:.0f}, per point and pT bin {np.round(ws['per_point_bin_median']).tolist()}")
+    if args.weight_mode == "none" and not data["weights"]["train"]["unit"]:
+        log("WARNING: the training shards carry non-unit weights but --weight-mode is none")
     sha, hist, mhist, meta = build_surrogate(args, train, val, out, log)
     dev = hist["device"]
     run = {"checkpoint": str(out / "checkpoint.pt"), "checkpoint_sha256": sha, "args": vars(args),
