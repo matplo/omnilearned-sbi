@@ -92,6 +92,56 @@ def _load_toml(path):
 # prepare
 # ---------------------------------------------------------------------------
 
+def load_sample_config(path):
+    """(config dict, Selection) of a toy *or* JEWEL sample configuration."""
+    import tomllib
+
+    with open(path, "rb") as f:
+        backend = tomllib.load(f).get("backend", "")
+    if str(backend).startswith("jewel"):
+        from omnilearned.sbi.jewel import cards, jets
+
+        cfg = cards.load_config(path)
+        return cfg, jets.selection_from_config(cfg)
+    cfg, _, sel = load_toy_config(path)
+    return cfg, sel
+
+
+def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6):
+    """``n_ensembles`` disjoint ensembles of ``n`` JEWEL jets at ``theta``, from merged shards.
+
+    JEWEL pseudo data cannot be made on the fly the way the toy's can, so it is drawn from a
+    split generated at the reserved settings (rule 1: the simulator, never the surrogate).
+    Ensembles are consecutive disjoint slices in file order, so they share no jet.
+
+    Returns (list of records, info). Each record has x, mask, event_id — and jets of one
+    JEWEL event share their ``event_id``, which is what makes the within-event correlation
+    of an inclusive sample visible to the closure report.
+    """
+    from omnilearned.sbi.toy.datasets import read_shards, shard_paths
+
+    paths = shard_paths(jewel_dir, split)
+    d = read_shards(paths, trim=True)
+    want = np.asarray(theta, float)
+    sel = np.all(np.abs(d["theta"] - want) <= atol, axis=1)
+    idx = np.flatnonzero(sel)
+    have, need = idx.size, n * n_ensembles
+    if have < need:
+        raise ValueError(f"{jewel_dir} split {split} has {have} jets at theta={want.tolist()}, "
+                         f"need {need} ({n_ensembles} x {n}); generate more of this split")
+    recs = []
+    for k in range(n_ensembles):
+        take = idx[k * n:(k + 1) * n]
+        recs.append({"x": d["x"][take], "mask": d["mask"][take],
+                     "event_id": d["event_id"][take]})
+    ev = d["event_id"][idx[:need]]
+    info = {"source": "jewel", "split": split, "jewel_dir": str(jewel_dir),
+            "jets_available_at_theta": int(have), "jets_used": int(need),
+            "distinct_events": int(np.unique(ev).size),
+            "jets_per_event": float(need / max(1, np.unique(ev).size))}
+    return recs, info
+
+
 def _surrogate_ensemble(sur, sel, theta, n, seed, index, nsteps=128, redraw=False):
     """Self-closure control: n selected clouds drawn from the surrogate at theta.
 
@@ -128,11 +178,13 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
         raise FileExistsError(f"{out} already holds a campaign")
     for d in ("obs", "fits", "truth"):
         (out / d).mkdir(parents=True, exist_ok=True)
-    cfg, _, sel = load_toy_config(config)
+    cfg, sel = load_sample_config(config)
     theta = reserved_settings(cfg)[spec["setting"]]
     source = spec.get("source", "toy")
-    if source not in ("toy", "surrogate"):
-        raise ValueError("source must be 'toy' or 'surrogate'")
+    if source not in ("toy", "surrogate", "jewel"):
+        raise ValueError("source must be 'toy', 'jewel' or 'surrogate'")
+    if source == "jewel" and not spec.get("jewel_dir"):
+        raise ValueError("source 'jewel' needs spec['jewel_dir'] (a merged JEWEL directory)")
     n, K, off = int(spec["n_events"]), int(spec["n_ensembles"]), int(spec.get("index_offset", 0))
     ck = str(Path(spec["checkpoint"]).resolve())
     ck_sha = file_sha256(ck)
@@ -149,6 +201,14 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
         raise ValueError("per-N selection normalization needs an acceptance_table (per-N table)")
     if table and list(spec["fit"]["grid"]) != list(PARAMETERS):
         raise ValueError(f"with an acceptance table the grid must be ordered {list(PARAMETERS)}")
+    jewel_recs = jewel_info = None
+    if source == "jewel":  # drawn once, so the K ensembles are disjoint by construction
+        jewel_recs, jewel_info = jewel_ensembles(
+            spec["jewel_dir"], spec.get("jewel_split", "test"), theta, n, K)
+        log(f"  jewel: {jewel_info['jets_used']} jets of "
+            f"{jewel_info['jets_available_at_theta']} at theta={list(theta)}, "
+            f"{jewel_info['distinct_events']} distinct events "
+            f"({jewel_info['jets_per_event']:.2f} jets/event)")
     tasks = []
     for k in range(K):
         obs = out / "obs" / f"obs_{k:04d}.h5"
@@ -156,6 +216,13 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
         if source == "toy":
             split = SETTING_SPLIT.get(spec["setting"], "test")
             sha, _ = make_observations(obs, truth, theta, n, split, off + k, config)
+        elif source == "jewel":
+            sha = write_observation_file(obs, jewel_recs[k],
+                                         attrs={"source": "jewel", "n_events": int(n)})
+            write_truth(truth, {"observations": str(obs), "observations_sha256": sha,
+                                "theta": [float(v) for v in theta], "source": "jewel",
+                                "index": off + k, "ensemble": k, **jewel_info,
+                                "host": host_info()})
         else:
             rec, info = _surrogate_ensemble(sur, sel, theta, n, int(spec.get("seed", 0)) + off + k, off + k,
                                             redraw=per_n)
@@ -506,13 +573,16 @@ def _axes(spec):
 
 
 def acceptance_part(checkpoint, axes, n_samples, seed, nsteps, shard, num_shards, out, device="cuda",
-                    log=print):
-    """Acceptance at the grid points ``shard::num_shards`` (same base seed everywhere: CRN)."""
+                    config=V2_CONFIG, log=print):
+    """Acceptance at the grid points ``shard::num_shards`` (same base seed everywhere: CRN).
+
+    ``config`` is the sample configuration whose selection defines acceptance -- the toy's or
+    a JEWEL backend's; it must be the one the surrogate was trained for."""
     from omnilearned.sbi.flow import FlowSurrogate
     from omnilearned.sbi.toy.selection import select_clouds
 
     sur = FlowSurrogate.load(checkpoint, device=device)
-    _, _, sel = load_toy_config(V2_CONFIG)
+    _, sel = load_sample_config(config)
     pts = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, len(axes))
     idx = np.arange(len(pts))[shard::num_shards]
     acc = np.full(len(pts), np.nan)
@@ -606,6 +676,8 @@ def main(argv=None):
     a1.add_argument("--shard", type=int, default=0)
     a1.add_argument("--num-shards", type=int, default=1)
     a1.add_argument("--device", default="cuda")
+    a1.add_argument("--config", default=str(V2_CONFIG),
+                    help="sample config whose selection defines acceptance (toy or JEWEL)")
     a1.add_argument("--out", required=True)
     a2 = sub.add_parser("acceptance-merge")
     a2.add_argument("--parts", nargs="+", required=True)
@@ -642,7 +714,7 @@ def main(argv=None):
                   "levels KS p", agg["levels_ks"]["ks_p"])
     elif a.cmd == "acceptance":
         acceptance_part(a.checkpoint, _axes(a.axis), a.n_samples, a.seed, a.nsteps, a.shard,
-                        a.num_shards, a.out, a.device)
+                        a.num_shards, a.out, a.device, a.config)
     else:
         acc = acceptance_merge(a.parts, a.out, a.per_n_out, a.n_knots)
         print(f"acceptance table {acc.shape}, range [{acc.min():.4f}, {acc.max():.4f}] -> {a.out}")
