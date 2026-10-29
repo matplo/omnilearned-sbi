@@ -19,8 +19,10 @@
 # of work, so it is not CPU-bound and the headroom is free.
 set -uo pipefail
 SNAP=$1; SPLIT=$2; TARGET=$3; NODES=${4:-8}; WAVES=${5:-4}; WORKERS=${6:-64}
+WEXPO=${WEXPO:-3}            # pT-hat sampling exponent; 3 = log-flat over 10-600 GeV
+DATASET=${DATASET:-jewel_v2} # data/<DATASET>/<split>
 export JEST_NLE_ROOT=${JEST_NLE_ROOT:-/global/cfs/cdirs/alice/ploskon/jest-nle}
-D=$JEST_NLE_ROOT/data/jewel_v2/$SPLIT
+D=$JEST_NLE_ROOT/data/$DATASET/$SPLIT
 CFG=$SNAP/configs/jewel-2.6.0-cs-v2.toml
 RUN="henv -n omni-sbi -x python"
 GEN="$RUN -m omnilearned.sbi.jewel.generate"
@@ -28,11 +30,11 @@ export PYTHONPATH=$SNAP/src
 mkdir -p "$D/logs"
 log() { echo "[$(date -Is) drive $SPLIT] $*" | tee -a "$D/logs/drive.log"; }
 
-log "start: snapshot $(cat "$SNAP/SOURCE_REVISION") target ${TARGET} jets/point, ${NODES} nodes x ${WORKERS} workers, <= ${WAVES} waves"
+log "start: snapshot $(cat "$SNAP/SOURCE_REVISION") dataset ${DATASET} wexpo ${WEXPO} target ${TARGET} jets/point, ${NODES} nodes x ${WORKERS} workers, <= ${WAVES} waves"
 
 if [ ! -f "$D/tasks.json" ]; then
   log "plan $SPLIT"
-  $GEN plan --split "$SPLIT" --out "$D" --config "$CFG" --wexpo 5 --chunks 2 --no-events \
+  $GEN plan --split "$SPLIT" --out "$D" --config "$CFG" --wexpo "$WEXPO" --chunks 2 --no-events \
     2>&1 | tee -a "$D/logs/drive.log"
   [ -f "$D/tasks.json" ] || { log "plan FAILED"; exit 1; }
 fi
@@ -65,9 +67,9 @@ done
 
 log "index + merge"
 $GEN index --dir "$D" 2>&1 | tail -1 | tee -a "$D/logs/drive.log"
-$GEN merge --dir "$D" --out "$JEST_NLE_ROOT/data/jewel_v2/merged" --shards 16 --workers 4 \
+$GEN merge --dir "$D" --out "$JEST_NLE_ROOT/data/$DATASET/merged" --shards 16 --workers 4 \
   2>&1 | tail -2 | tee -a "$D/logs/drive.log"
-if [ -f "$JEST_NLE_ROOT/data/jewel_v2/merged/index_${SPLIT}.json" ]; then
+if [ -f "$JEST_NLE_ROOT/data/$DATASET/merged/index_${SPLIT}.json" ]; then
   log "DONE: merged/index_${SPLIT}.json written"
   touch "$D/DONE"
 else
