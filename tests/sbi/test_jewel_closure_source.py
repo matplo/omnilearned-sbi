@@ -105,3 +105,44 @@ def test_prepare_takes_its_backend_config_from_the_spec(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="stop after"):
         closure.prepare(spec, tmp_path / "camp")
     assert seen["path"] == str(v2), "prepare ignored the spec's config"
+
+
+def test_inclusive_jets_get_unique_probe_ids_and_keep_their_event_grouping(tmp_path):
+    """event_id seeds the Hutchinson probes, so it must be unique per jet.
+
+    An inclusive sample has several jets per event. If they shared an event_id they would be
+    evaluated with identical probe vectors: each jet's divergence stays unbiased, but their
+    errors become correlated and the variance of the summed log-likelihood inflates (~2x at
+    2 jets/event). The originating event is kept in group_id, which only diagnostics read.
+    """
+    import numpy as np
+
+    from omnilearned.sbi.observations import read_observations
+    from omnilearned.sbi.toy.records import write_observation_file
+
+    _shard(tmp_path / "test_00000.h5")
+    recs, _ = jewel_ensembles(tmp_path, "test", THETAS[0], 8, 2)
+    for r in recs:
+        assert np.unique(r["event_id"]).size == len(r["event_id"])
+        assert np.unique(r["group_id"]).size < len(r["group_id"])  # the fixture shares events
+
+    write_observation_file(tmp_path / "obs.h5", recs[0], attrs={"source": "jewel"})
+    obs = read_observations(tmp_path / "obs.h5")
+    assert np.unique(obs.event_id).size == len(obs.event_id)
+    np.testing.assert_array_equal(obs.group_id, recs[0]["group_id"])
+    # subsetting must carry the grouping with it
+    sub = obs.subset(np.arange(4))
+    np.testing.assert_array_equal(sub.group_id, recs[0]["group_id"][:4])
+
+
+def test_shared_event_ids_are_still_refused(tmp_path):
+    """The uniqueness guard stays: sharing ids silently correlates the probes."""
+    import numpy as np
+    import pytest as _pytest
+
+    from omnilearned.sbi.observations import write_observations
+
+    x = np.zeros((4, 3, 3))
+    m = np.ones((4, 3), bool)
+    with _pytest.raises(ValueError, match="unique"):
+        write_observations(tmp_path / "bad.h5", x, m, np.array([1, 1, 2, 3]), ("a", "b", "c"))

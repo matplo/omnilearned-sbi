@@ -132,8 +132,12 @@ def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6):
     recs = []
     for k in range(n_ensembles):
         take = idx[k * n:(k + 1) * n]
+        # event_id must be unique per jet: it seeds the Hutchinson probes, and an inclusive
+        # sample has several jets per event. The JEWEL event goes to group_id, which only
+        # diagnostics read (the composite-likelihood coverage check).
         recs.append({"x": d["x"][take], "mask": d["mask"][take],
-                     "event_id": d["event_id"][take]})
+                     "event_id": np.arange(k * n, (k + 1) * n, dtype=np.int64),
+                     "group_id": d["event_id"][take]})
     ev = d["event_id"][idx[:need]]
     info = {"source": "jewel", "split": split, "jewel_dir": str(jewel_dir),
             "jets_available_at_theta": int(have), "jets_used": int(need),

@@ -456,3 +456,37 @@ would have been written into directories labelled 400k -- in the one phase whose
 to compare training lengths. Fixed (`K=$((STEPS/1000))`), both sets relaunched; ~3 min of
 training discarded. Third provenance-class slip of the session, after the stale worktree
 script path and planning the test split by chunk count instead of a jet target.
+
+## Inclusive jets break the observation format's id assumption (2026-10-29)
+
+Smoke-testing the numerics path on real JEWEL observations -- rather than waiting to meet it
+in Phase 6 -- hit `ValueError: event ids must be unique` from `write_observations`.
+
+**The guard is correct and was kept.** `event_id` seeds the Hutchinson probes
+(`likelihood.stable_probes`, which does `np.unique(event_ids, return_inverse=True)`), so two
+rows sharing an id are evaluated with **identical probe vectors**. Each jet's divergence
+estimate stays unbiased, but their errors become correlated, inflating the variance of the
+summed log-likelihood -- roughly 2x at the 2 jets/event an inclusive sample gives. Relaxing
+the check would have bought a silent numerical degradation in the quantity the whole fit
+rests on.
+
+**Fix:** separate the two jobs the id was doing.
+
+| field | role | who reads it |
+|---|---|---|
+| `event_id` | unique per jet; seeds the probes | the likelihood |
+| `group_id` (new, optional) | the originating JEWEL event; several jets share it | diagnostics only |
+
+`observations.py` gains an optional `group_id` dataset (carried through `Observations`,
+`subset()` and the reader), `records.write_observation_file` passes it, and
+`closure.jewel_ensembles` now emits a unique per-jet `event_id` with the JEWEL event in
+`group_id`. Verified on real merged data: 8 jets from 4 distinct events, ids unique, grouping
+preserved. This is also exactly what the Phase-6 composite-likelihood check needs -- the
+one-jet-per-event refit is now a `group_id` filter.
+
+**Sixth toy-assumption found this way, and the most consequential.** The others produced
+wrong numbers; this one would have blocked Phase 6 outright, and the tempting fix (drop the
+uniqueness check) would have quietly corrupted the likelihood's variance instead. The others
+were: the stale `sbatch` worktree path, the test split planned by chunk count, run names
+hardcoded to 400k, `ptbins` binning on 60-200, and `closure prepare` defaulting to the toy
+config.

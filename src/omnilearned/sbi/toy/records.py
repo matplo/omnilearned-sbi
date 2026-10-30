@@ -101,7 +101,8 @@ def write_observation_file(path, records, attrs=None):
     if mask is None:
         mask = np.ones(records["x"].shape[:2], dtype=bool)
     x = np.where(mask[..., None], records["x"], 0.0).astype(np.float64)
-    return write_observations(path, x, mask, records["event_id"], FEATURES, attrs=attrs)
+    return write_observations(path, x, mask, records["event_id"], FEATURES, attrs=attrs,
+                              group_id=records.get("group_id"))
 
 
 def write_truth(path, doc):
