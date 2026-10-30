@@ -490,3 +490,13 @@ uniqueness check) would have quietly corrupted the likelihood's variance instead
 were: the stale `sbatch` worktree path, the test split planned by chunk count, run names
 hardcoded to 400k, `ptbins` binning on 60-200, and `closure prepare` defaulting to the toy
 config.
+
+**A regression I introduced doing that, caught by the suite.** `group_id` was first inserted
+before `context` in the `Observations` dataclass, which silently shifted every positional
+argument after it -- callers writing `Observations(x, mask, eid, None, (), feature_names)`
+had `context` land in `group_id`, `context_names` in `context`, and so on. Two tests failed
+immediately. Appending the field at the end instead is the non-breaking way to extend a
+dataclass; a regression test now pins positional construction. Same silent-misassignment
+class as the toy-assumption bugs, but self-inflicted -- the argument for running the full
+suite after every change to shared code, not only at the end. Suite: **174 passed, 7
+skipped.**

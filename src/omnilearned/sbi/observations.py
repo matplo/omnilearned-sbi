@@ -30,12 +30,14 @@ class Observations:
     x: np.ndarray
     mask: np.ndarray
     event_id: np.ndarray
-    group_id: np.ndarray = None   # originating event; several jets of one event share it
     context: np.ndarray = None
     context_names: tuple = ()
     feature_names: tuple = ()
     sha256: str = ""
     path: str = ""
+    # appended last on purpose: several callers build Observations positionally, so a new
+    # field inserted earlier would silently shift context/feature_names.
+    group_id: np.ndarray = None   # originating event; jets of one event share it
 
     def __len__(self):
         return self.x.shape[0]
@@ -45,12 +47,12 @@ class Observations:
             self.x[index],
             self.mask[index],
             self.event_id[index],
-            None if self.group_id is None else self.group_id[index],
             None if self.context is None else self.context[index],
             self.context_names,
             self.feature_names,
             self.sha256,
             self.path,
+            None if self.group_id is None else self.group_id[index],
         )
 
 
@@ -135,5 +137,5 @@ def read_observations(path):
             context = f["context"][...]
             cnames = tuple(f["context"].attrs.get("names", []))
         fnames = tuple(f.attrs.get("feature_names", []))
-    return Observations(x, mask, eid, gid, context, cnames, fnames, file_sha256(path),
-                        str(path))
+    return Observations(x, mask, eid, context, cnames, fnames, file_sha256(path),
+                        str(path), gid)

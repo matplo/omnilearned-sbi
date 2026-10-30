@@ -146,3 +146,22 @@ def test_shared_event_ids_are_still_refused(tmp_path):
     m = np.ones((4, 3), bool)
     with _pytest.raises(ValueError, match="unique"):
         write_observations(tmp_path / "bad.h5", x, m, np.array([1, 1, 2, 3]), ("a", "b", "c"))
+
+
+def test_observations_positional_construction_is_unchanged():
+    """group_id is appended last, so existing positional callers are unaffected.
+
+    Inserting it before `context` silently shifted context/context_names/feature_names for
+    every caller that builds Observations positionally (two tests caught it).
+    """
+    import numpy as np
+
+    from omnilearned.sbi.observations import Observations
+
+    x = np.zeros((4, 3, 3))
+    m = np.ones((4, 3), bool)
+    o = Observations(x, m, np.arange(4), None, (), ("eta", "phi", "lpt"))
+    assert o.context is None and o.context_names == ()
+    assert o.feature_names == ("eta", "phi", "lpt")
+    assert o.group_id is None
+    assert o.subset(np.arange(2)).feature_names == ("eta", "phi", "lpt")
