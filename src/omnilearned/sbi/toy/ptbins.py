@@ -105,6 +105,12 @@ def run(a):
     dev = resolve_device(a.device)
     sur = FlowSurrogate.load(a.checkpoint, device=dev.device)
     sel = selection(a.config)
+    # bin over the window the sample is actually selected in, not the toy-v1 default: a
+    # JEWEL v2 sample spans 20-500 GeV and would otherwise be scored on 60-200 bins only
+    lo, hi = sel.jet_pt_range_GeV
+    edges = edges_for(lo, hi)
+    spectrum_edges = (SPECTRUM_EDGES if np.allclose(edges, PT_EDGES_60_200)
+                      else np.arange(float(lo), float(hi) + 1e-6, (float(hi) - float(lo)) / 48.0))
     direct = direct_by_point(a.fidelity_dir)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -119,10 +125,10 @@ def run(a):
                                         batch=a.batch, redraw=a.redraw)
         _, _, rs = select_clouds(xs.astype(np.float64), sel, ms)
         od, os_ = jet_observables(xd, md), jet_observables(xs, ms)
-        doc = pt_binned(rd["jet_pt"], od, rs["jet_pt"], os_)
-        doc["spectrum"] = {"edges": SPECTRUM_EDGES.tolist(),
-                           "direct": np.histogram(rd["jet_pt"], SPECTRUM_EDGES)[0].tolist(),
-                           "surrogate": np.histogram(rs["jet_pt"], SPECTRUM_EDGES)[0].tolist()}
+        doc = pt_binned(rd["jet_pt"], od, rs["jet_pt"], os_, edges=edges)
+        doc["spectrum"] = {"edges": spectrum_edges.tolist(),
+                           "direct": np.histogram(rd["jet_pt"], spectrum_edges)[0].tolist(),
+                           "surrogate": np.histogram(rs["jet_pt"], spectrum_edges)[0].tolist()}
         doc.update({"point_id": pid, "theta": np.asarray(theta).tolist(), "checkpoint": a.checkpoint,
                     "checkpoint_sha256": sur.metadata.get("checkpoint_sha256"), "redraw": a.redraw,
                     "nsteps": a.nsteps, "seed": a.seed + pid, "sample_report": rep, "device": dev.to_dict(),

@@ -42,3 +42,20 @@ def test_pt_binned_sparse_bin_and_combine():
     assert np.isclose(c["observables"]["width"]["pull_combined"][0], 2 * doc["observables"]["width"]["pull"][0])
     assert np.isclose(c["observables"]["width"]["effect"][0], doc["observables"]["width"]["effect"][0])
     assert np.isnan(c["observables"]["width"]["effect"][-1]) and c["n_direct"][0] == 4 * doc["n_direct"][0]
+
+
+def test_edges_follow_the_sample_window():
+    """ptbins must bin over the window the sample is selected in.
+
+    A JEWEL v2 sample spans 20-500 GeV; scoring it on the toy's 60-200 default would drop
+    the low-pT region that carries most of the physical weight.
+    """
+    import numpy as np
+
+    from omnilearned.sbi.toy.ptbins import PT_EDGES_20_500, PT_EDGES_60_200, edges_for
+
+    np.testing.assert_allclose(edges_for(60.0, 200.0), PT_EDGES_60_200)
+    np.testing.assert_allclose(edges_for(20.0, 500.0), PT_EDGES_20_500)
+    # an unrecognised window still yields usable, monotone, in-range edges
+    e = edges_for(30.0, 400.0)
+    assert e[0] == 30.0 and e[-1] <= 400.0 and np.all(np.diff(e) > 0)
