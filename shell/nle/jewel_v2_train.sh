@@ -41,9 +41,14 @@ COMMON=(--data-dir "$M" --val-dir "$M" --config "$CFG" --arch set --dim 256 --de
         --heads 8 --batch-size 512 --lr 3e-4 --warmup-steps 1000 --ema-decay 0.9995
         --val-every 2000 --val-batches 16 --length-buckets 16 --tf32 --mult-steps 4000
         --weight-mode loss --save-after 10000 --device cuda --cpu-threads 8)
-RUNS=(set_d256_L6_400k_s0 set_d256_L6_400k_s1 set_d256_L6_400k_s2 set_d256_L6_200k_s0)
+# Names carry the ACTUAL step count: this phase exists to compare training lengths, so a
+# directory labelled 400k that holds a 200k run would invite exactly the wrong conclusion.
+K=$((STEPS / 1000))
+CTRL_STEPS=$(( STEPS > 200000 ? 200000 : STEPS / 2 ))
+RUNS=(set_d256_L6_${K}k_s0 set_d256_L6_${K}k_s1 set_d256_L6_${K}k_s2 \
+      set_d256_L6_$((CTRL_STEPS / 1000))k_ctl)
 EXTRA=("--seed 0 --steps $STEPS" "--seed 1 --steps $STEPS" "--seed 2 --steps $STEPS"
-       "--seed 0 --steps 200000")
+       "--seed 0 --steps $CTRL_STEPS")
 PIDS=()
 for g in 0 1 2 3; do
   if [ -f "$OUT/${RUNS[$g]}/run.json" ]; then log "gpu $g: ${RUNS[$g]} already done, skip"; PIDS+=(0); continue; fi
