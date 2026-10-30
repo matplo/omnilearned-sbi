@@ -79,3 +79,29 @@ def test_load_sample_config_handles_toy_and_jewel():
     assert tuple(sel.jet_pt_range_GeV) == (20.0, 500.0)
     cfg2, sel2 = load_sample_config(root / "toy-quenching-v2.toml")
     assert cfg2["backend"].startswith("toy")
+
+
+def test_prepare_takes_its_backend_config_from_the_spec(tmp_path, monkeypatch):
+    """A JEWEL campaign must not silently inherit the toy default config.
+
+    `closure prepare` has no --config flag, so without this the toy selection (60-200 GeV
+    leading jet), the toy box and the toy reserved settings would be used for a JEWEL run.
+    """
+    from pathlib import Path
+
+    from omnilearned.sbi.toy import closure
+
+    v2 = Path(__file__).resolve().parents[2] / "configs" / "jewel-2.6.0-cs-v2.toml"
+    seen = {}
+
+    def fake_load(path):
+        seen["path"] = str(path)
+        raise RuntimeError("stop after the config is resolved")
+
+    monkeypatch.setattr(closure, "load_sample_config", fake_load)
+    spec = {"schema": closure.CAMPAIGN_SCHEMA, "config": str(v2), "setting": "primary_test",
+            "source": "jewel", "jewel_dir": "x", "n_events": 1, "n_ensembles": 1,
+            "checkpoint": str(v2)}
+    with pytest.raises(RuntimeError, match="stop after"):
+        closure.prepare(spec, tmp_path / "camp")
+    assert seen["path"] == str(v2), "prepare ignored the spec's config"

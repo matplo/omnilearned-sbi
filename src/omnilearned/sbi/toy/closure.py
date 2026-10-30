@@ -178,6 +178,9 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
         raise FileExistsError(f"{out} already holds a campaign")
     for d in ("obs", "fits", "truth"):
         (out / d).mkdir(parents=True, exist_ok=True)
+    # the spec names its own backend config, so a JEWEL campaign cannot silently inherit the
+    # toy default (which would give the wrong selection, jet window and reserved settings)
+    config = spec.get("config", config)
     cfg, sel = load_sample_config(config)
     theta = reserved_settings(cfg)[spec["setting"]]
     source = spec.get("source", "toy")
@@ -246,6 +249,7 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
                       "fit_config": path.name, "fit_config_sha256": file_sha256(path)})
         log(f"  ensemble {k}: {n} events ({source}) -> {obs.name}")
     manifest = {"schema": CAMPAIGN_SCHEMA, "spec": spec, "source": source, "n_events": n,
+                "config": str(config), "backend": cfg.get("backend"),
                 "n_ensembles": K, "checkpoint_sha256": ck_sha, "tasks": tasks,
                 "toy_config_sha256": file_sha256(config), "host": host_info(),
                 "label": "self-closure control (diagnostic, not closure evidence)"
