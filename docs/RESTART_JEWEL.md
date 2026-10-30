@@ -29,6 +29,34 @@ BLOCKED ON:   nothing
 the training script. Passing a worktree path to `sbatch` lets the script change while the job
 is queued -- that killed job 60488240.
 
+### Phase 4, ready to run once a `*_multJ.pt` checkpoint exists
+
+```bash
+cd /global/cfs/cdirs/alice/ploskon/henv-omni-sbi/omnilearned-sbi-jewel
+export JEST_NLE_ROOT=/global/cfs/cdirs/alice/ploskon/jest-nle
+SNAP=$JEST_NLE_ROOT/src_snapshots/<rev>
+CKPT=$JEST_NLE_ROOT/runs/w6_k3_200k/mult/set_d256_L6_200k_s0_multJ.pt   # or the 400k set
+CFG=$SNAP/configs/jewel-2.6.0-cs-v2.toml
+M=$JEST_NLE_ROOT/data/jewel_v2k3/merged
+
+# gate at the 128 fidelity points (shard over 4 GPUs; --redraw = per-N normalisation)
+PYTHONPATH=$SNAP/src henv -n omni-sbi -x python -m omnilearned.sbi.toy.gate run \
+  --checkpoint $CKPT --fidelity-dir $M --config $CFG --redraw \
+  --n-generate 22000 --shard $G --num-shards 4 --out $JEST_NLE_ROOT/runs/m3jv2/gate
+# then: gate summarize --dir ... --n-settings 128
+
+# per-pT fidelity; edges come from the config window (20-500), not the toy default
+PYTHONPATH=$SNAP/src henv -n omni-sbi -x python -m omnilearned.sbi.toy.ptbins run \
+  --checkpoint $CKPT --fidelity-dir $M --config $CFG \
+  --points 0 8 16 24 32 40 48 56 --out $JEST_NLE_ROOT/runs/m3jv2/ptbins
+```
+
+**Both tools were toy-shaped and had to be re-pointed at the new window.** `gate` already
+took `--config`; `ptbins` was hardcoded to 60-200 bins and would have scored a 20-500 GeV
+sample on the wrong range, silently dropping the low-pT region that carries ~73 % of the
+physical weight. If anything else in this pipeline reports a number that looks subtly off,
+suspect a 60-200 / leading-jet assumption left over from the toy.
+
 **Yield so far** (first wave, ~1.8 jets/event, 0.157 core-s/jet as the probe predicted):
 train 1.82 M jets over 500 points (median 3568/pt, target 6000 -> `topup` adds chunks),
 fidelity 464 k over 128 points (median 3571/pt, target 20000).
