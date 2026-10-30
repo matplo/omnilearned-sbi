@@ -500,3 +500,55 @@ dataclass; a regression test now pins positional construction. Same silent-misas
 class as the toy-assumption bugs, but self-inflicted -- the argument for running the full
 suite after every change to shared code, not only at the end. Suite: **174 passed, 7
 skipped.**
+
+## The gate's reference sample is biased for a weighted backend (2026-10-29) -- Phase 4 invalid as run
+
+First gate run (200k seed-0 surrogate, 108/128 points) came back catastrophic: every point
+FAIL, `p_family` ~1e-38, and relevance **12.1** (jet_pT) / **12.4** (width) at N = 1000
+against a requirement of 0.2. Numbers that extreme are a bug signal, not a fidelity result,
+so the comparison was checked before the surrogate was blamed.
+
+**`toy/gate.py` ignores the per-jet weights entirely** (`direct_by_point` reads x/mask/theta;
+the word "weight" does not occur in the file). For the toy that was correct -- direct samples
+were unbiased, so the stored jets *are* the physical distribution. For a weighted JEWEL
+backend it is wrong: the stored direct jets follow the **biased** generation law.
+
+Measured at fidelity point 0 (21 216 jets):
+
+| mean jet_pT | value |
+|---|---|
+| unweighted -- what the gate used as "direct" | **54.81 GeV** |
+| weighted -- the physical distribution | **28.68 GeV** |
+| bias in the reference | **+26.1 GeV** |
+| gate's reported surrogate - direct | -18.59 GeV |
+
+So the surrogate's mean is ~36.2 GeV: much closer to the physical 28.7 than to the 54.8 it
+was scored against. **The reference was biased, not (mostly) the surrogate.** Both gate jobs
+were cancelled rather than spend more GPU on an invalid comparison.
+
+**Not a clean bill of health for the surrogate.** 36.2 vs the physical 28.7 still leaves
+~+7.5 GeV unexplained -- possibly genuine surrogate error, possibly p(N|theta) or the
+selection applied to surrogate samples. That can only be separated once the comparison is
+correct; it is explicitly an open question, not a passed test.
+
+### Why the obvious fixes are each wrong, and what is needed
+
+- **Resample the direct jets in proportion to weight** (free, reuses all machinery) gives a
+  physically distributed reference, but only at the split's effective size -- ESS/n 0.13 on
+  21 k jets/point is ~2800 effective, versus 20 k unweighted in the toy. The noise floor on
+  the constrained shift scales as sqrt(20000/2800) = 2.7x worse, which cannot resolve the
+  0.2 sigma requirement. Valid but too weak.
+- **Generate an unweighted fidelity sample** is conceptually cleanest -- it is literally what
+  an experiment sees -- but unweighted sampling at a 20 GeV jet floor puts essentially
+  everything at low pT and almost nothing above 200 GeV, so the gate could no longer test
+  high-pT fidelity at all. This is the same starvation that motivated weighting.
+- **Weighted statistics in the gate** is therefore the right answer: keep every jet at every
+  pT, and weight the observables. The relevance part (which carries the 0.2 sigma acceptance
+  criterion) needs only weighted means and variances. The permutation significance needs a
+  weighted ECDF in the KS statistic, permuting (value, weight) pairs jointly -- the null is
+  still exchangeability, so the test stays calibrated.
+
+**Seventh toy assumption, and the one that invalidated a real measurement rather than a
+mechanism.** The pattern now has a precise statement: *every place the toy could assume its
+sample was unbiased and one-jet-per-event has to be revisited for a weighted, inclusive
+backend.* `ptbins` has the same defect and needs the same treatment.
