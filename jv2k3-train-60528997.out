@@ -1,0 +1,19 @@
+[2026-10-30T01:31:25-07:00 nid003592 job 60528997] start, snapshot ed925b7eebdcc9836a5dbb9dadeffe9205d0f61e, 400000 steps, dataset jewel_v2k3, data /global/cfs/cdirs/alice/ploskon/jest-nle/data/jewel_v2k3/merged
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-d8042c45-c91e-3c94-45ab-a450c4b27962)
+GPU 1: NVIDIA A100-SXM4-40GB (UUID: GPU-733ec3a5-9cbb-699d-3cce-d6bb83012dd1)
+GPU 2: NVIDIA A100-SXM4-40GB (UUID: GPU-f57341fd-e37b-f1c9-ed77-656694291327)
+GPU 3: NVIDIA A100-SXM4-40GB (UUID: GPU-fdca80c4-32c8-76d7-91e9-353d257bb44a)
+[2026-10-30T01:31:25-07:00 nid003592 job 60528997] gpu 0: set_d256_L6_400k_s0 pid 945421
+[2026-10-30T01:31:26-07:00 nid003592 job 60528997] gpu 1: set_d256_L6_400k_s1 pid 945430
+[2026-10-30T01:31:26-07:00 nid003592 job 60528997] gpu 2: set_d256_L6_400k_s2 pid 945440
+[2026-10-30T01:31:26-07:00 nid003592 job 60528997] gpu 3: set_d256_L6_200k_ctl pid 945448
+[2026-10-30T05:31:50-07:00 nid003592 job 60528997] set_d256_L6_400k_s0 ended rc=0
+[2026-10-30T05:32:23-07:00 nid003592 job 60528997] set_d256_L6_400k_s1 ended rc=0
+[2026-10-30T05:32:23-07:00 nid003592 job 60528997] set_d256_L6_400k_s2 ended rc=0
+[2026-10-30T05:32:23-07:00 nid003592 job 60528997] set_d256_L6_200k_ctl ended rc=0
+[2026-10-30T05:37:00-07:00 nid003592 job 60528997] p(N|theta) retrain rc=0
+[2026-10-30T05:38:15-07:00 nid003592 job 60528997] attached p(N|theta) to set_d256_L6_400k_s0 rc=0
+[2026-10-30T05:38:56-07:00 nid003592 job 60528997] attached p(N|theta) to set_d256_L6_400k_s1 rc=0
+[2026-10-30T05:39:42-07:00 nid003592 job 60528997] attached p(N|theta) to set_d256_L6_400k_s2 rc=0
+[2026-10-30T05:40:28-07:00 nid003592 job 60528997] attached p(N|theta) to set_d256_L6_200k_ctl rc=0
+[2026-10-30T05:41:11-07:00 nid003592 job 60528997] end

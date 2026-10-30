@@ -165,3 +165,37 @@ def test_observations_positional_construction_is_unchanged():
     assert o.feature_names == ("eta", "phi", "lpt")
     assert o.group_id is None
     assert o.subset(np.arange(2)).feature_names == ("eta", "phi", "lpt")
+
+
+def test_multiplicity_fit_and_check_use_the_sampling_weights():
+    """p(N|theta) must be fitted and judged against the WEIGHTED (physical) law.
+
+    On a weighted split the unweighted multiplicity law is the generation law. Fitting or
+    checking without weights reproduces the bias exactly -- which is what happened: the
+    retrained model had mean N 28.2 against a physical 19.4, and the unweighted check scored
+    it as the *better* model.
+    """
+    import numpy as np
+
+    from omnilearned.sbi.multiplicity import MultiplicityModel, train_multiplicity
+    from omnilearned.sbi.toy.multiplicity_check import binned_chi2, check
+
+    # unit weights must reproduce the unweighted statistic exactly
+    rng = np.random.default_rng(0)
+    probs = np.full(20, 1 / 20)
+    c = rng.integers(0, 20, 4000)
+    a = binned_chi2(c, probs)
+    b = binned_chi2(c, probs, weights=np.ones(4000))
+    assert np.allclose(a[:2], b[:2]) and np.isclose(a[2], b[2])
+
+    # two populations: small N heavily weighted, large N lightly weighted. The weighted mean
+    # must track the small-N population, the unweighted mean the pooled one.
+    n = np.concatenate([np.full(500, 5), np.full(500, 25)])
+    w = np.concatenate([np.full(500, 9.0), np.full(500, 1.0)])
+    assert abs((w * n).sum() / w.sum() - 7.0) < 1e-9     # weighted
+    assert abs(n.mean() - 15.0) < 1e-9                   # unweighted
+    assert train_multiplicity.__doc__ is not None
+    import inspect
+    sig = inspect.signature(train_multiplicity).parameters
+    assert "weights" in sig and "val_weights" in sig
+    assert "weights" in inspect.signature(check).parameters

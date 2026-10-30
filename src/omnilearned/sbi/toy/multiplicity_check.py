@@ -29,22 +29,39 @@ from omnilearned.sbi.toy.simulator import PARAMETERS
 
 
 def _counts(path, split):
-    """(n_constituents, theta, point_id) of a split without reading the clouds."""
+    """(n_constituents, theta, point_id, weight) of a split without reading the clouds.
+
+    ``weight`` is the per-jet sampling weight (ones for an unbiased split). It must reach the
+    fit: on a weighted split the unweighted multiplicity law is the *generation* law, not the
+    physical one, and a p(N | theta) fitted without weights reproduces the bias exactly.
+    """
     import h5py
 
-    n, th, pid = [], [], []
+    n, th, pid, w = [], [], [], []
     for p in shard_paths(path, split):
         with h5py.File(p, "r") as f:
             n.append(f["data/n_constituents"][...])
             th.append(f["global"][:, :len(PARAMETERS)])
             pid.append(f["point_id"][...])
-    return np.concatenate(n), np.concatenate(th), np.concatenate(pid)
+            w.append(f["weight"][...] if "weight" in f else np.ones(len(n[-1])))
+    return (np.concatenate(n), np.concatenate(th), np.concatenate(pid), np.concatenate(w))
 
 
-def binned_chi2(counts, probs, min_expected=5.0):
-    """χ², dof, p of observed integer ``counts`` against category ``probs``."""
-    n = counts.size
-    obs = np.bincount(counts, minlength=probs.size)[:probs.size].astype(float)
+def binned_chi2(counts, probs, min_expected=5.0, weights=None):
+    """χ², dof, p of observed integer ``counts`` against category ``probs``.
+
+    With ``weights`` the observed histogram is the weighted one, renormalised to the
+    effective sample size so the chi2 reflects the information actually present rather than
+    the arbitrary scale of the weights.
+    """
+    if weights is None:
+        n = float(counts.size)
+        obs = np.bincount(counts, minlength=probs.size)[:probs.size].astype(float)
+    else:
+        w = np.asarray(weights, float)
+        n = float(w.sum() ** 2 / (w ** 2).sum())          # effective sample size
+        obs = np.bincount(counts, weights=w, minlength=probs.size)[:probs.size].astype(float)
+        obs *= n / obs.sum()
     exp = probs * n
     # merge categories from both ends until each bin expects >= min_expected
     edges, acc_o, acc_e = [], 0.0, 0.0
@@ -65,8 +82,17 @@ def binned_chi2(counts, probs, min_expected=5.0):
     return chi2, dof, float(stats.chi2.sf(chi2, dof))
 
 
-def check(surrogate, n, theta, pid, analysis_n=1000):
+def check(surrogate, n, theta, pid, analysis_n=1000, weights=None):
+    """Compare p(N | theta) with the data at each point.
+
+    ``weights`` are the per-jet sampling weights. On a weighted split the *unweighted* moments
+    are the generation law, not the physical one, so comparing against them would pass a model
+    that learned the bias and fail a correct one -- which is exactly what happened before this
+    was weighted. Counts for the chi2 are rescaled to the effective sample size, so the
+    normalisation of the weights cannot inflate it.
+    """
     rows = []
+    w_all = None if weights is None else np.asarray(weights, float)
     for p in np.unique(pid):
         m = pid == p
         th = theta[m][0]
@@ -77,13 +103,21 @@ def check(surrogate, n, theta, pid, analysis_n=1000):
         mu = float((prob * k).sum())
         sd = float(np.sqrt((prob * k * k).sum() - mu * mu))
         nn = n[m]
-        dmu = mu - nn.mean()
-        se = nn.std() / np.sqrt(nn.size)
-        chi2, dof, pv = binned_chi2(nn, prob)
-        rows.append({"point_id": int(p), "theta": th.tolist(), "direct_mean": float(nn.mean()),
+        if w_all is None:
+            d_mean, d_sd, n_eff = float(nn.mean()), float(nn.std()), float(nn.size)
+        else:
+            ww = w_all[m]
+            d_mean = float((ww * nn).sum() / ww.sum())
+            d_sd = float(np.sqrt((ww * (nn - d_mean) ** 2).sum() / ww.sum()))
+            n_eff = float(ww.sum() ** 2 / (ww ** 2).sum())
+        dmu = mu - d_mean
+        se = d_sd / np.sqrt(max(n_eff, 1.0))
+        chi2, dof, pv = binned_chi2(nn, prob, weights=None if w_all is None else w_all[m])
+        rows.append({"point_id": int(p), "theta": th.tolist(), "direct_mean": d_mean,
                      "model_mean": mu, "model_sd": sd, "delta_mean": float(dmu), "z": float(dmu / se),
-                     "relevance": float(abs(dmu) * np.sqrt(analysis_n) / nn.std()),
-                     "chi2": chi2, "dof": dof, "p": pv, "n": int(nn.size)})
+                     "relevance": float(abs(dmu) * np.sqrt(analysis_n) / d_sd),
+                     "chi2": chi2, "dof": dof, "p": pv, "n": int(nn.size),
+                     "n_effective": n_eff, "weighted": w_all is not None})
     z = np.array([r["z"] for r in rows])
     pv = np.array([r["p"] for r in rows])
     return {"points": rows, "n_points": len(rows), "rms_z": float(np.sqrt((z ** 2).mean())),
@@ -149,8 +183,8 @@ def main(argv=None):
         print(f"attached p(N|theta) of {a.multiplicity_from} -> {a.out} sha {new.save(a.out)[:12]}")
         return
     if a.cmd == "check":
-        n, th, pid = _counts(a.data_dir, a.split)
-        doc = check(sur, n, th, pid)
+        n, th, pid, cw = _counts(a.data_dir, a.split)
+        doc = check(sur, n, th, pid, weights=cw if np.any(cw != 1.0) else None)
         doc.update({"checkpoint": a.checkpoint, "checkpoint_sha256": sur.metadata["checkpoint_sha256"],
                     "data": a.data_dir, "split": a.split, "host": host_info()})
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
@@ -164,16 +198,20 @@ def main(argv=None):
         from omnilearned.sbi.toy.datasets import read_counts
 
         n, th, _ = read_counts(sorted(Path(a.counts_dir).glob("train_counts_*.h5")))
+        tw = np.ones(len(n))
     else:
-        n, th, _ = _counts(a.train_dir, "train")
-    vn, vth, _ = _counts(a.val_dir or a.train_dir, "validation")
+        n, th, _, tw = _counts(a.train_dir, "train")
+    vn, vth, _, vw = _counts(a.val_dir or a.train_dir, "validation")
     lay = sur.multiplicity.layout
     cond = lambda t: torch.from_numpy(lay.assemble(t, list(PARAMETERS)))  # noqa: E731
     model = MultiplicityModel(len(PARAMETERS), sur.multiplicity.max_n, hidden=a.hidden, depth=a.depth)
     model.layout = lay
+    weighted = bool(np.any(tw != 1.0))
     model, hist = train_multiplicity(model, cond(th), n, cond(vth), vn, steps=a.steps,
                                      batch_size=a.batch_size, lr=a.lr, seed=a.seed,
-                                     device=a.device, val_every=1000)
+                                     device=a.device, val_every=1000,
+                                     weights=tw if weighted else None,
+                                     val_weights=vw if weighted else None)
     meta = dict(sur.metadata)
     parent = meta.pop("checkpoint_sha256")
     meta.update({"multiplicity_retrained": {"parent_checkpoint": a.checkpoint, "parent_sha256": parent,
@@ -182,7 +220,7 @@ def main(argv=None):
                                             "hidden": a.hidden, "depth": a.depth, "steps": a.steps,
                                             "batch_size": a.batch_size, "lr": a.lr, "seed": a.seed,
                                             "best_val_nll": hist["best_val_nll"],
-                                            "best_step": hist["best_step"],
+                                            "best_step": hist["best_step"], "weighted": weighted,
                                             "seconds": time.time() - start, "host": host_info()}})
     new = FlowSurrogate(sur.model, sur.base, sur.transform, sur.layout, meta, "cpu", multiplicity=model)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)

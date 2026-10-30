@@ -552,3 +552,73 @@ correct; it is explicitly an open question, not a passed test.
 mechanism.** The pattern now has a precise statement: *every place the toy could assume its
 sample was unbiased and one-jet-per-event has to be revisited for a weighted, inclusive
 backend.* `ptbins` has the same defect and needs the same treatment.
+
+## Root cause of the Phase-4 failure: p(N|theta) learned the biased law (2026-10-30)
+
+Re-scoring the gate against the **weighted** reference made most observables *worse*, not
+better, which killed the "the reference was biased, the surrogate is fine" reading:
+
+| observable | relevance as run (unweighted ref) | relevance vs physical ref |
+|---|---|---|
+| jet_pt | 12.6 | 19.3 |
+| width | 13.1 | 9.2 |
+| **n_constituents** | **0.23** | **30.0** |
+| ptd | 7.0 | 15.6 |
+
+`n_constituents` is the tell: it matched the *biased* reference almost perfectly and was
+wildly off the physical one. The multiplicity model had learned exactly the wrong
+distribution.
+
+**Cause.** `multiplicity_check._counts` reads `n_constituents`, `theta` and `point_id` but
+**never `weight`**, and `retrain` called `train_multiplicity` without weights --
+even though `train.py` passes them (`weights=train["weight"] if weighted else None`) and
+`train_multiplicity` has supported `weights`/`val_weights` all along.
+**`shell/nle/jewel_v2_train.sh` then replaced the correctly weighted p(N|theta) produced
+during training with the unweighted retrained one.** The defect was introduced by my own
+driver script, not by the library alone.
+
+| mean N at fidelity point 0 | |
+|---|---|
+| physical (weighted data) | 19.41 |
+| in-run checkpoint, weighted p(N) | **19.47** |
+| retrained `_multJ`, what the gate used | **28.24** |
+| unweighted data, for comparison | 28.10 |
+
+**`check` had the same defect and would have caught this**, had it not compared the model
+against unweighted moments -- it scored the broken model as the better one. Both are now
+weight-aware (`_counts` returns weights; `check` uses weighted mean/sd and an effective
+sample size; `binned_chi2` takes weights and renormalises the observed histogram to the ESS
+so the weight scale cannot inflate chi2). Unit weights reproduce the old numbers exactly.
+
+Re-run of the corrected check over the 128 fidelity points:
+
+| p(N\|theta) | max relevance | rms z | points p < 0.01 |
+|---|---|---|---|
+| in-run (weighted) | **4.83** | 2.4 | 7/128 |
+| retrained (unweighted) | 33.54 | 51.7 | 128/128 |
+
+**This is not a pass.** The correct model is still at max relevance 4.83 against a 0.2
+requirement, so p(N|theta) has real residual error. But the catastrophic number was an
+artifact of two stacked bugs, and the honest figure is ~5, not ~30.
+
+## Training length: the toy's main lesson does NOT transfer to JEWEL (2026-10-30)
+
+Job 60528997, 4 h 11 m, 400k x seeds 0-2 + a 200k control, on `jewel_v2k3`:
+
+| set | mean best val | seed sd |
+|---|---|---|
+| 100k control | 1.17187 | - |
+| 200k, 3 seeds | 1.17167 | 6.4e-5 |
+| 400k, 3 seeds | 1.17157 | 4.1e-5 |
+
+100k -> 200k gains 2.0e-4 (~3 seed-sigma); **200k -> 400k gains only 1.1e-4 (1.7 seed-sigma)**,
+and the best checkpoints sit at 284-310k, well short of 400k. On the toy, 400k beat 200k
+clearly across 4 seeds and training length was *the* lever; here it saturates by ~200-300k.
+Keeping the control run rather than assuming the toy result transferred is what made this
+measurable.
+
+Free reproducibility check: the 200k control in this job reproduced `200k_s0` from the
+separate earlier job to five decimals (1.17161, best step 138 000).
+
+**Caveat, as always:** this is validation loss within one dataset. It is not fidelity, and the
+weight-corrected gate is still what decides.
