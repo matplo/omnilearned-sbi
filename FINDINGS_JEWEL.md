@@ -416,3 +416,43 @@ in a comment.
 The control was **not** re-run: the ESS table above is a direct measurement of effective
 sample size, so re-confirming an 18x gap by training two surrogates would spend ~2.5 GPU-h to
 learn nothing the measurement does not already show.
+
+## Phase 3 running: the weighted ESS confirmed inside training (2026-10-29)
+
+Two sets, both on `jewel_v2k3`, snapshot `a00c9b1`:
+
+| job | runs | where |
+|---|---|---|
+| 60520874 | 200k x seeds 0-2 + 100k control | interactive, 4 GPUs, ~1.9 h |
+| 60520873 | **400k x seeds 0-2 + 200k control** | batch, 4 GPUs, 10 h limit |
+
+The 200k set runs first so that the gate / `ptbins` / closure path can be exercised on a real
+checkpoint while the 400k set -- the one that answers whether the toy's "training length is
+the lever" result transfers to JEWEL -- works through the queue.
+
+`toy.train` logs the weighted ESS, which independently confirms the WEXPO decision from
+inside the training rather than from the shards:
+
+```
+weights train:      ESS 431710 of 3298642, per point 965
+weights validation: ESS  73756 of  572015, per point 648
+per point and pT bin: [940, 125, 100, 80, 112, 79, 78, 112]
+```
+
+965 effective jets per theta point, against the ~47 the WEXPO = 5 data would have given.
+
+**Per-pT-bin effective counts are 78-125 per point above the lowest bin.** This is inherent,
+not a defect of the sampling choice: the weights restore the true steeply-falling spectrum, so
+the high-pT bins are weight-starved *by construction* no matter how the generation is biased.
+Across 500 theta points that is still ~50 k effective jets at high pT for a shared model, but
+it is the number to look at first if `ptbins` shows a high-pT fidelity problem -- and it is
+the quantitative case for the factorised-kinematics fork (PLAN section 9.1) should one be
+needed.
+
+### Run names now follow the step count
+
+The run names were hardcoded `set_d256_L6_400k_*` regardless of `STEPS`, so the 200k set
+would have been written into directories labelled 400k -- in the one phase whose purpose is
+to compare training lengths. Fixed (`K=$((STEPS/1000))`), both sets relaunched; ~3 min of
+training discarded. Third provenance-class slip of the session, after the stale worktree
+script path and planning the test split by chunk count instead of a jet target.
