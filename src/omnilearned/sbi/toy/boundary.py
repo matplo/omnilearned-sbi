@@ -139,7 +139,7 @@ def run(a):
         if js.exists():
             continue
         t0 = time.time()
-        xd, md, theta = direct[pid]
+        xd, md, theta, _wd = direct[pid]   # direct_by_point now also returns per-jet weights
         _, _, rd = select_clouds(xd.astype(np.float64), sel, md)
         xs, ms = sur.sample(np.asarray(theta), a.n_generate, None, seed=a.seed + pid, nsteps=a.nsteps,
                             candidate_names=list(PARAMETERS), batch=a.batch, sort_by_length=True)
