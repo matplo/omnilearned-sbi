@@ -10,20 +10,26 @@ Brief: `docs/PLAN_JEWEL_V3.md`. Format: `docs/FORMAT_JEWEL_V3.md`. Log: `FINDING
 ## Current state
 
 ```
-PHASE:        P0 (scaffolding) -- done
-NEXT ACTION:  P1 -- configs/jewel-2.6.0-cs-v3.toml, then jewel/jets.py (deta, logE, pid),
-              then jewel/generate.py (v3 layout, event stores by default, 1M-jet merge)
-RUNNING:      nothing
-DATASET:      data/jewel_v3  (to be created in P2)
-SNAPSHOT:     none yet -- made in P2 from a clean commit
+PHASE:        P1 -- done (tracks B and C merged). P2 starting.
+NEXT ACTION:  snapshot a clean commit, then one jewel_v3_drive.sh per split:
+                SNAP=$(shell/nle/snapshot.sh)
+                nohup shell/nle/jewel_v3_drive.sh $SNAP train      20000 8 4 > .../train.log 2>&1 &
+                nohup shell/nle/jewel_v3_drive.sh $SNAP fidelity   20000 8 4 > ... &
+                nohup shell/nle/jewel_v3_drive.sh $SNAP validation  5000 4 3 > ... &
+                NEVENT=5000 nohup shell/nle/jewel_v3_drive.sh $SNAP test 50000 2 3 > ... &
+              NEVENT=5000 on `test` is required: 50k jets/point needs 125 tasks of 1000
+              events, over the chunks_per_point cap of 100 (topup now warns if it binds).
+RUNNING:      full tests/sbi on a compute node
+DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}, merged/
+SNAPSHOT:     made in P2 from a clean commit -- never hand sbatch a worktree path
 BLOCKED ON:   nothing
 ```
 
 | phase | what | status |
 |---|---|---|
 | P0 | branch, worktree, docs | **done** |
-| P1 | config v3, Δη/log E/pid, v3 format + sidecar | not started |
-| P2 | generation (train/val/fidelity/test) **with event stores** | not started |
+| P1 | config v3, Δη/log E/pid, v3 format + sidecar | **done** |
+| P2 | generation (train/val/fidelity/test) **with event stores** | starting |
 | P3 | training (jet_pT conditioning, no standardisation) | not started |
 | P4 | fidelity: gate + ptbins, weighted estimators | not started |
 | P5 | NLE numerics (rule 6) | not started |
@@ -31,6 +37,12 @@ BLOCKED ON:   nothing
 | P7 | closure at the 4 withheld θ | not started |
 | P8 | composite-likelihood correction | not started |
 | P9 | final HTML report | not started |
+
+Code tracks: **A** (main session) owns generation and all job submission; **B** (likelihood:
+`jetpt.py`, `flow.py`, `multiplicity.py`) and **C** (weighted estimators: `fidelity.py`,
+`gate.py`, `ptbins.py`) are merged. Both were verified by checking their *call sites*, not by
+trusting their reports — Track C had changed `direct_by_point`'s return arity and broken
+`boundary.py`, which its own report did not mention.
 
 ---
 
@@ -91,3 +103,10 @@ Find the first phase not marked done and run its block in `docs/PLAN_JEWEL_V3.md
     it is working on?*
 
 Do not commit data, checkpoints, run trees, figures or binaries; never force-push.
+
+12. **`topup` clamps at `chunks_per_point`.** A point needing more chunks than the cap stops
+    short of its target, the next wave adds nothing, and the driver reads that as "complete".
+    It now warns; the fix is a larger `--nevent` for that split, not a larger cap (raising the
+    cap renumbers every NJOB stream).
+13. **`design_points` had no `test` case.** The withheld θ now come from `[holdout]` via
+    `holdout_points`, so closure data cannot be mistyped on a command line.
