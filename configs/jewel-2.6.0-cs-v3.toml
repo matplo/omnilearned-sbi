@@ -71,8 +71,9 @@ events_per_task = 1000
 train_points = 512               # scrambled Sobol (stream "train"); unset -> the Cartesian axes above
 validation_points = 128          # scrambled Sobol in the box, reservation margin 0.02
 # fidelity: gate samples at the same 128 validation points with their own NJOB streams
-# (njob_base.fidelity), larger tasks (5000 events, so a point needs < chunks_per_point tasks)
-# and no event stores (jets and diagnostics only; NJOB makes every task reproducible)
+# (njob_base.fidelity), larger tasks (5000 events, so a point needs < chunks_per_point tasks).
+# v3 writes event stores for EVERY split, fidelity included: v2 passed --no-events and locked
+# 10.3 node-h of CPU to one representation, which the representation audit then invalidated.
 
 [holdout]                        # at half steps on every axis: strictly between grid nodes (rule 2)
 development_validation = [7.5, 0.35, 0.85]
