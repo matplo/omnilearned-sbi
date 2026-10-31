@@ -57,21 +57,24 @@ def direct_by_point(fidelity_dir):
         sel = d["point_id"] == pid
         x, m = d["x"][sel], d["mask"][sel]
         w = max(1, int(m.sum(1).max()))
-        out[int(pid)] = (x[:, :w], m[:, :w], d["theta"][sel][0])
+        weights = d["weight"][sel]  # per-jet weights (ones for unweighted shards)
+        out[int(pid)] = (x[:, :w], m[:, :w], d["theta"][sel][0], weights)
     return out
 
 
-def gate_point(sur, sel, theta, xd, md, n_generate, nsteps, seed, n_perm, solver="midpoint",
+def gate_point(sur, sel, theta, xd, md, wd, n_generate, nsteps, seed, n_perm, solver="midpoint",
                batch=4096, redraw=False):
     xs, ms, rep = sample_and_select(sur, theta, n_generate, sel, seed=seed, nsteps=nsteps,
                                     solver=solver, batch=batch, redraw=redraw)
     w = max(xd.shape[1], xs.shape[1])
     t0 = time.time()
     res = fidelity.evaluate(_pad(xd, w), _pad(xs, w), n_events=max(ANALYSIS_N), n_perm=n_perm,
-                            seed=seed, direct_mask=_pad(md, w), surrogate_mask=_pad(ms, w))
+                            seed=seed, direct_mask=_pad(md, w), surrogate_mask=_pad(ms, w),
+                            direct_weights=wd, surrogate_weights=None)
     oa = fidelity.all_obs(_pad(xd, w), _pad(md, w))
     ob = fidelity.all_obs(_pad(xs, w), _pad(ms, w))
-    res["relevance_by_n"] = {str(n): fidelity.mean_relevance(oa, ob, fidelity.JET_VARIABLE, n)
+    res["relevance_by_n"] = {str(n): fidelity.mean_relevance(oa, ob, fidelity.JET_VARIABLE, n,
+                                                             weights_a=wd, weights_b=None)
                              for n in ANALYSIS_N}
     res["surrogate"] = rep
     res["n_direct"], res["n_surrogate"] = int(xd.shape[0]), int(xs.shape[0])
@@ -95,11 +98,11 @@ def run(a):
         js = out / f"point_{pid:05d}.json"
         if js.exists():
             continue
-        xd, md, theta = direct[pid]
+        xd, md, theta, wd = direct[pid]
         if a.max_direct:
-            xd, md = xd[:a.max_direct], md[:a.max_direct]
+            xd, md, wd = xd[:a.max_direct], md[:a.max_direct], wd[:a.max_direct]
         t0 = time.time()
-        res, xs, ms = gate_point(sur, sel, theta, xd, md, a.n_generate, a.nsteps, a.seed + pid,
+        res, xs, ms = gate_point(sur, sel, theta, xd, md, wd, a.n_generate, a.nsteps, a.seed + pid,
                                  a.n_perm, batch=a.batch, redraw=a.redraw)
         res.update({"point_id": pid, "theta": theta.tolist(), "checkpoint": a.checkpoint, "redraw": a.redraw,
                     "checkpoint_sha256": sur.metadata.get("checkpoint_sha256"),

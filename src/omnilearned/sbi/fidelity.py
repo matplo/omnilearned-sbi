@@ -55,20 +55,76 @@ def all_obs(x, mask=None):
     return o
 
 
-def ks_d(a, b):
-    a, b = a[np.isfinite(a)], b[np.isfinite(b)]  # padded constituents are NaN
-    a, b = np.sort(a), np.sort(b)
-    grid = np.concatenate([a, b])
-    return float(np.abs(np.searchsorted(a, grid, side="right") / a.size
-                        - np.searchsorted(b, grid, side="right") / b.size).max())
+def ks_d(a, b, weights_a=None, weights_b=None):
+    """KS statistic between a and b, optionally weighted.
+
+    For unweighted (weights=None): standard empirical CDF.
+    For weighted: F_a(x) = sum(w_a[i] * I(a[i] <= x)) / sum(w_a).
+    """
+    # Remove NaN (padded constituents)
+    mask_a = np.isfinite(a)
+    mask_b = np.isfinite(b)
+    a = a[mask_a]
+    b = b[mask_b]
+
+    if weights_a is not None:
+        weights_a = np.asarray(weights_a, float)[mask_a]
+    if weights_b is not None:
+        weights_b = np.asarray(weights_b, float)[mask_b]
+
+    if weights_a is None and weights_b is None:
+        # Unweighted: use original efficient implementation
+        a, b = np.sort(a), np.sort(b)
+        grid = np.concatenate([a, b])
+        return float(np.abs(np.searchsorted(a, grid, side="right") / a.size
+                            - np.searchsorted(b, grid, side="right") / b.size).max())
+
+    # Weighted KS: evaluate at all unique values
+    a_sorted = np.argsort(a)
+    b_sorted = np.argsort(b)
+
+    # Normalize weights
+    if weights_a is not None:
+        wa = weights_a[a_sorted] / weights_a.sum()
+    else:
+        wa = np.ones(len(a)) / len(a)
+
+    if weights_b is not None:
+        wb = weights_b[b_sorted] / weights_b.sum()
+    else:
+        wb = np.ones(len(b)) / len(b)
+
+    # Cumulative weights
+    cdf_a = np.concatenate([[0], np.cumsum(wa)])
+    cdf_b = np.concatenate([[0], np.cumsum(wb)])
+
+    # Sorted values
+    a_vals = a[a_sorted]
+    b_vals = b[b_sorted]
+
+    # Compute max difference at all unique values
+    d_max = 0.0
+    idx_a, idx_b = 0, 0
+    for val in np.unique(np.concatenate([a_vals, b_vals])):
+        # Count how many a[i] <= val
+        while idx_a < len(a_vals) and a_vals[idx_a] <= val:
+            idx_a += 1
+        # Count how many b[i] <= val
+        while idx_b < len(b_vals) and b_vals[idx_b] <= val:
+            idx_b += 1
+        d_max = max(d_max, abs(cdf_a[idx_a] - cdf_b[idx_b]))
+
+    return float(d_max)
 
 
-def permutation_test(oa, ob, keys, n_perm=500, seed=0, particle_stride=4):
+def permutation_test(oa, ob, keys, n_perm=500, seed=0, particle_stride=4, weights_a=None, weights_b=None):
     """KS D per observable with permutation p-values and a family-wise p-value.
 
     ``oa``/``ob``: dicts of per-jet arrays ([n] jet level, [n, P] particle
     level, NaN where padded). Jets are permuted as units, so constituents
     stay together.
+    ``weights_a``/``weights_b``: optional per-jet weights. Permutation pairs
+    (value, weight) jointly so the null distribution stays exchangeable.
     Particle observables use every ``particle_stride``-th jet (speed).
     """
     rng = np.random.default_rng(seed)
@@ -76,20 +132,44 @@ def permutation_test(oa, ob, keys, n_perm=500, seed=0, particle_stride=4):
     pooled = {k: _concat_padded(oa[k], ob[k]) for k in keys}
     ntot = len(pooled[keys[0]])
 
+    # Pool weights and mark which indices belong to a vs b
+    if weights_a is not None or weights_b is not None:
+        wa = weights_a if weights_a is not None else np.ones(na)
+        wb = weights_b if weights_b is not None else np.ones(len(ob[keys[0]]))
+        pooled_weights = np.concatenate([wa, wb])
+    else:
+        pooled_weights = None
+
     def stats(ia, ib):
         out = []
         for k in keys:
             v = pooled[k]
             if v.ndim == 2:
-                out.append(ks_d(v[ia[::particle_stride]].ravel(), v[ib[::particle_stride]].ravel()))
+                # Particle-level: select strided jets and ravel constituents
+                v_a_raw = v[ia[::particle_stride]]
+                v_b_raw = v[ib[::particle_stride]]
+                v_a = v_a_raw.ravel()
+                v_b = v_b_raw.ravel()
+                if pooled_weights is not None:
+                    # Each constituent inherits its jet's weight
+                    w_a = np.repeat(pooled_weights[ia[::particle_stride]], v_a_raw.shape[1])
+                    w_b = np.repeat(pooled_weights[ib[::particle_stride]], v_b_raw.shape[1])
+                    out.append(ks_d(v_a, v_b, weights_a=w_a, weights_b=w_b))
+                else:
+                    out.append(ks_d(v_a, v_b))
             else:
-                out.append(ks_d(v[ia], v[ib]))
+                # Jet-level observables
+                if pooled_weights is not None:
+                    out.append(ks_d(v[ia], v[ib], weights_a=pooled_weights[ia], weights_b=pooled_weights[ib]))
+                else:
+                    out.append(ks_d(v[ia], v[ib]))
         return np.array(out)
 
     idx = np.arange(ntot)
     obs = stats(idx[:na], idx[na:])
     null = np.empty((n_perm, len(keys)))
     for r in range(n_perm):
+        # Permute the indices, which implicitly permutes both values and weights together
         p = rng.permutation(ntot)
         null[r] = stats(p[:na], p[na:])
     # Standardize each observable by its null median so the max is comparable.
@@ -119,14 +199,46 @@ def _concat_padded(a, b):
     return np.concatenate([a, b])
 
 
-def mean_relevance(oa, ob, keys, n_events, rel_tol=0.5):
-    """Mean shift per jet observable in standard errors at ``n_events`` jets."""
+def mean_relevance(oa, ob, keys, n_events, rel_tol=0.5, weights_a=None, weights_b=None):
+    """Mean shift per jet observable in standard errors at ``n_events`` jets.
+
+    With weights, uses weighted mean, weighted std, and effective sample size
+    ESS = (sum w)^2 / sum(w^2) for sample size.
+    """
     out = {}
     for k in keys:
         a, b = oa[k], ob[k]
-        dmu = float(b.mean() - a.mean())
-        se = float(math.hypot(a.std() / math.sqrt(a.size), b.std() / math.sqrt(b.size)))
-        unit = float(a.std() / math.sqrt(n_events))
+
+        if weights_a is None and weights_b is None:
+            # Unweighted path (original)
+            dmu = float(b.mean() - a.mean())
+            se = float(math.hypot(a.std() / math.sqrt(a.size), b.std() / math.sqrt(b.size)))
+            unit = float(a.std() / math.sqrt(n_events))
+            ness = a.size
+        else:
+            # Weighted path
+            wa = weights_a if weights_a is not None else np.ones_like(a, float)
+            wb = weights_b if weights_b is not None else np.ones_like(b, float)
+
+            # Weighted means and standard deviations
+            mean_a = float((wa * a).sum() / wa.sum())
+            mean_b = float((wb * b).sum() / wb.sum())
+            dmu = mean_b - mean_a
+
+            std_a = float(np.sqrt((wa * (a - mean_a) ** 2).sum() / wa.sum()))
+            std_b = float(np.sqrt((wb * (b - mean_b) ** 2).sum() / wb.sum()))
+
+            # Effective sample sizes
+            ess_a = float(wa.sum() ** 2 / (wa ** 2).sum())
+            ess_b = float(wb.sum() ** 2 / (wb ** 2).sum())
+
+            # Standard error of difference
+            se = float(math.hypot(std_a / math.sqrt(ess_a), std_b / math.sqrt(ess_b)))
+
+            # Relevance uses the direct (a) spread and ESS at n_events
+            unit = float(std_a / math.sqrt(n_events))
+            ness = ess_a
+
         out[k] = {"delta_mean": dmu, "se": se, "z": dmu / se if se > 0 else 0.0,
                   "relevance": abs(dmu) / unit, "relevance_lower": max(0.0, abs(dmu) - 2 * se) / unit,
                   "relevant": bool(max(0.0, abs(dmu) - 2 * se) / unit > rel_tol)}
@@ -167,15 +279,19 @@ def equivalent_shift(G, C, dmu, cov_dmu):
 
 
 def evaluate(direct, surrogate, n_events=1000, n_perm=500, seed=0, n_settings=1,
-             alpha=0.05, rel_tol=0.5, direct_mask=None, surrogate_mask=None):
+             alpha=0.05, rel_tol=0.5, direct_mask=None, surrogate_mask=None,
+             direct_weights=None, surrogate_weights=None):
     """Gate one setting. With masks (variable multiplicity) the multiplicity
-    is an additional jet observable; pass both masks or neither."""
+    is an additional jet observable; pass both masks or neither.
+    With weights, uses weighted statistics for the direct sample."""
     if (direct_mask is None) != (surrogate_mask is None):
         raise ValueError("pass masks for both samples or for neither")
     oa, ob = all_obs(direct, direct_mask), all_obs(surrogate, surrogate_mask)
     jet = JET if direct_mask is None else JET_VARIABLE
-    perm = permutation_test(oa, ob, jet + PARTICLE, n_perm=n_perm, seed=seed)
-    rel = mean_relevance(oa, ob, jet, n_events, rel_tol)
+    perm = permutation_test(oa, ob, jet + PARTICLE, n_perm=n_perm, seed=seed,
+                           weights_a=direct_weights, weights_b=surrogate_weights)
+    rel = mean_relevance(oa, ob, jet, n_events, rel_tol,
+                        weights_a=direct_weights, weights_b=surrogate_weights)
     return {"permutation": perm, "relevance": rel, "n_events": n_events, "rel_tol": rel_tol,
             "alpha_setting": alpha / n_settings,
             "verdict": setting_verdict(perm, rel, alpha / n_settings)}

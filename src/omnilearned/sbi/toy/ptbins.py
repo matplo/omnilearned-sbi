@@ -47,24 +47,90 @@ def edges_for(lo, hi):
     return np.unique(np.round(np.geomspace(float(lo), float(hi), 10), 1))
 
 
-def pt_binned(pt_d, obs_d, pt_s, obs_s, edges=PT_EDGES, keys=KEYS, min_count=10):
-    """Direct vs surrogate comparison in jet-pT bins. obs_*: dict key -> per-jet array."""
+def pt_binned(pt_d, obs_d, pt_s, obs_s, edges=PT_EDGES, keys=KEYS, min_count=10, weights_d=None, weights_s=None):
+    """Direct vs surrogate comparison in jet-pT bins. obs_*: dict key -> per-jet array.
+
+    weights_d/weights_s: optional per-jet weights for direct/surrogate samples.
+    Uses weighted means, weighted spreads, and effective sample size ESS.
+    """
     bd, bs = np.digitize(pt_d, edges) - 1, np.digitize(pt_s, edges) - 1
     nb = len(edges) - 1
+
+    # Compute counts: for weighted, use ESS = (sum w)^2 / sum(w^2)
+    if weights_d is None:
+        n_direct = np.bincount(bd[(bd >= 0) & (bd < nb)], minlength=nb).tolist()
+    else:
+        w_valid = weights_d[(bd >= 0) & (bd < nb)]
+        bd_valid = bd[(bd >= 0) & (bd < nb)]
+        n_direct = []
+        for i in range(nb):
+            mask = bd_valid == i
+            if mask.any():
+                w_sum = w_valid[mask].sum()
+                ess = float(w_sum ** 2 / (w_valid[mask] ** 2).sum())
+                n_direct.append(ess)
+            else:
+                n_direct.append(0.0)
+
+    if weights_s is None:
+        n_surrogate = np.bincount(bs[(bs >= 0) & (bs < nb)], minlength=nb).tolist()
+    else:
+        w_valid = weights_s[(bs >= 0) & (bs < nb)]
+        bs_valid = bs[(bs >= 0) & (bs < nb)]
+        n_surrogate = []
+        for i in range(nb):
+            mask = bs_valid == i
+            if mask.any():
+                w_sum = w_valid[mask].sum()
+                ess = float(w_sum ** 2 / (w_valid[mask] ** 2).sum())
+                n_surrogate.append(ess)
+            else:
+                n_surrogate.append(0.0)
+
     doc = {"edges": np.asarray(edges).tolist(),
-           "n_direct": np.bincount(bd[(bd >= 0) & (bd < nb)], minlength=nb).tolist(),
-           "n_surrogate": np.bincount(bs[(bs >= 0) & (bs < nb)], minlength=nb).tolist(),
+           "n_direct": n_direct,
+           "n_surrogate": n_surrogate,
            "observables": {}}
+
     for k in keys:
         r = {f: [] for f in ("mean_d", "mean_s", "sd_d", "sd_s", "effect", "pull", "sd_ratio", "ks", "ks_p")}
         for i in range(nb):
-            a, b = obs_d[k][bd == i], obs_s[k][bs == i]
-            if min(a.size, b.size) < min_count:
+            mask_d = bd == i
+            mask_s = bs == i
+            a, b = obs_d[k][mask_d], obs_s[k][mask_s]
+
+            # Check effective sample size
+            if weights_d is not None and mask_d.any():
+                ess_d = float((weights_d[mask_d].sum() ** 2) / (weights_d[mask_d] ** 2).sum())
+            else:
+                ess_d = a.size
+
+            if weights_s is not None and mask_s.any():
+                ess_s = float((weights_s[mask_s].sum() ** 2) / (weights_s[mask_s] ** 2).sum())
+            else:
+                ess_s = b.size
+
+            if min(ess_d, ess_s) < min_count:
                 for f in r:
                     r[f].append(None)
                 continue
-            md, ms, sd, ss = a.mean(), b.mean(), a.std(ddof=1), b.std(ddof=1)
-            se = np.sqrt(sd ** 2 / a.size + ss ** 2 / b.size)
+
+            # Compute weighted or unweighted stats
+            if weights_d is None and weights_s is None:
+                md, ms = a.mean(), b.mean()
+                sd, ss = a.std(ddof=1), b.std(ddof=1)
+                se = np.sqrt(sd ** 2 / a.size + ss ** 2 / b.size)
+            else:
+                wd = weights_d[mask_d] if weights_d is not None else np.ones_like(a)
+                ws = weights_s[mask_s] if weights_s is not None else np.ones_like(b)
+
+                md = float((wd * a).sum() / wd.sum())
+                ms = float((ws * b).sum() / ws.sum())
+                sd = float(np.sqrt((wd * (a - md) ** 2).sum() / wd.sum()))
+                ss = float(np.sqrt((ws * (b - ms) ** 2).sum() / ws.sum()))
+                se = float(np.sqrt(sd ** 2 / ess_d + ss ** 2 / ess_s))
+
+            # KS test may need weight support later, for now use unweighted
             d, p = ks_statistic(a, b)
             for f, v in zip(r, (md, ms, sd, ss, (ms - md) / sd, (ms - md) / se, ss / sd, d, p)):
                 r[f].append(float(v))
@@ -119,15 +185,15 @@ def run(a):
         if js.exists():
             continue
         t0 = time.time()
-        xd, md, theta = direct[pid]
+        xd, md, theta, wd = direct[pid]
         _, _, rd = select_clouds(xd.astype(np.float64), sel, md)
         xs, ms, rep = sample_and_select(sur, theta, a.n_generate, sel, seed=a.seed + pid, nsteps=a.nsteps,
                                         batch=a.batch, redraw=a.redraw)
         _, _, rs = select_clouds(xs.astype(np.float64), sel, ms)
         od, os_ = jet_observables(xd, md), jet_observables(xs, ms)
-        doc = pt_binned(rd["jet_pt"], od, rs["jet_pt"], os_, edges=edges)
+        doc = pt_binned(rd["jet_pt"], od, rs["jet_pt"], os_, edges=edges, weights_d=wd, weights_s=None)
         doc["spectrum"] = {"edges": spectrum_edges.tolist(),
-                           "direct": np.histogram(rd["jet_pt"], spectrum_edges)[0].tolist(),
+                           "direct": np.histogram(rd["jet_pt"], spectrum_edges, weights=wd)[0].tolist(),
                            "surrogate": np.histogram(rs["jet_pt"], spectrum_edges)[0].tolist()}
         doc.update({"point_id": pid, "theta": np.asarray(theta).tolist(), "checkpoint": a.checkpoint,
                     "checkpoint_sha256": sur.metadata.get("checkpoint_sha256"), "redraw": a.redraw,
