@@ -92,6 +92,11 @@ class Selection:
     min_constituents: int = 2
     max_constituents: int = 256
     max_attempts_per_requested_event: int = 1000
+    # Detector acceptance on ABSOLUTE particle eta, applied before clustering. None = off
+    # (the toy, which has no detector). The constituent_abs_* bounds below act on whatever
+    # coordinates are stored -- relative to the jet axis for JEWEL v3 -- so they are
+    # containment checks, not acceptance.
+    particle_abs_eta_max: float = None
 
     @classmethod
     def from_config(cls, sel):

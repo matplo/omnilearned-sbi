@@ -101,6 +101,17 @@ def event_jets(ev, cfg, sel):
             "thermal_pt": float(np.hypot(ev["px"], ev["py"])[ev["status"] == 3].sum())}
     if len(s["px"]) == 0:
         return [], "no_jet", [], {}
+    if getattr(sel, "particle_abs_eta_max", None) is not None:
+        # detector acceptance on absolute eta, applied BEFORE clustering -- that is where it
+        # physically acts. Once the stored coordinates are relative to the jet axis an
+        # |eta| cut applied afterwards would never bite.
+        ppt = np.hypot(s["px"], s["py"])
+        keep = (ppt > 0) & (np.abs(np.arcsinh(np.divide(s["pz"], ppt, out=np.zeros_like(ppt),
+                                                        where=ppt > 0)))
+                            < sel.particle_abs_eta_max)
+        s = {k: v[keep] for k, v in s.items()}
+        if len(s["px"]) == 0:
+            return [], "no_jet", [], {}
     r = _cluster(s["px"], s["py"], s["pz"], s["e"], sel.jet_radius)
     idx = jet_indices(int(r["njets"][0]), mode)
     if not idx:
@@ -127,18 +138,27 @@ def event_jets(ev, cfg, sel):
         pt = np.hypot(s["px"], s["py"])[member]
         eta = np.arcsinh(s["pz"][member] / pt)
         phi = np.arctan2(s["py"][member], s["px"][member])
+        ene = s["e"][member]
+        cpid = s["pid"][member]
         tag = s["tag"][member]
         order = np.argsort(-pt, kind="stable")
         pt, eta, phi, tag = pt[order], eta[order], phi[order], tag[order]
+        ene, cpid = ene[order], cpid[order]
         jpt, jeta, jphi = _axis(s["px"], s["py"], s["pz"], s["e"], member)
-        rot = jphi if cfg["selection"].get("rotate_to_jet_axis", True) else 0.0
+        # Both angular coordinates are measured from THIS jet's axis. v2 rotated phi but left
+        # eta absolute, so feature 0 tracked the jet axis at r = +0.999 (spread 1.00) while the
+        # R = 0.4 substructure it should carry has spread 0.16 -- the model spent its input
+        # range on where the jet sat. OmniLearned's minimal set is (deta, dphi, log pT, log E).
+        relative = cfg["selection"].get("rotate_to_jet_axis", True)
+        rot = jphi if relative else 0.0
         phi = np.angle(np.exp(1j * (phi - rot)))
+        eta = eta - jeta if relative else eta
         if len(pt) > sel.max_constituents:
             reason = "too_many_constituents"  # drop this jet, keep the event's other jets
             continue
-        recs.append({"eta": eta, "phi": phi, "pt": pt})
+        recs.append({"eta": eta, "phi": phi, "pt": pt, "e": ene, "pid": cpid})
         diags.append({**base, "jet_index": int(j), "phi_rotation": rot,
-                      "event_jet_pt": jpt,
+                      "event_jet_pt": jpt, "eta_rotation": jeta if relative else 0.0,
                       "event_jet_eta": jeta, "n_in_jet": int(member.sum()),
                       "leftover_pt_in_jet": float(pt[tag == cs.TAG_THERMAL_LEFT].sum()),
                       "n_leftover_in_jet": int((tag == cs.TAG_THERMAL_LEFT).sum()),
