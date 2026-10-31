@@ -141,14 +141,24 @@ class FlowSurrogate:
         names = list(context_names or [c for c in self.layout.known if c != MULTIPLICITY_COLUMN])
         return np.concatenate([np.asarray(context, np.float64), n], 1), names + [MULTIPLICITY_COLUMN]
 
-    def log_multiplicity(self, counts, candidates, candidate_names=None):
-        """log p(N | theta) [M, len(counts)] for candidate rows (0 without a model)."""
+    def log_multiplicity(self, counts, candidates, candidate_names=None, context=None,
+                         context_names=None):
+        """log p(N | pT_J, theta) [M, len(counts)] for candidate rows (0 without a model).
+
+        Args:
+            counts: [N] or [M, N] constituent multiplicities.
+            candidates: [M, D] or [D] unknown parameter values.
+            candidate_names: order of candidates (default: layout.unknown).
+            context: optional [M, K] known context values (e.g. jet_pt).
+            context_names: order of context columns (default: layout.known except n_constituents).
+        """
         candidates = np.atleast_2d(candidates)
         counts = np.asarray(counts)
         if self.multiplicity is None:
             return np.zeros((candidates.shape[0], counts.size))
         lay = self.multiplicity.layout
-        cond = torch.from_numpy(lay.assemble(candidates, candidate_names)).to(self.device)
+        cond = torch.from_numpy(lay.assemble(candidates, candidate_names, context=context,
+                                             context_names=context_names)).to(self.device)
         with torch.no_grad():
             lp = torch.log_softmax(self.multiplicity.logits(cond).double(), -1).cpu().numpy()
         n = np.clip(counts, 0, self.multiplicity.max_n)
@@ -205,7 +215,27 @@ class FlowSurrogate:
         lp = lp + logj.repeat(M)
         out = lp.numpy().reshape(M, N)
         if self.multiplicity is not None:
-            lm = self.log_multiplicity(mask_t.sum(1).numpy(), candidates, candidate_names)
+            # Extract context excluding n_constituents (which is derived from counts)
+            # For multiplicity, we need context per candidate, not per observation
+            # ctx is [M*N, K] (from repeating observation context), we need [M, K]
+            mult_ctx = None
+            mult_ctx_names = None
+            if context_names and MULTIPLICITY_COLUMN in context_names:
+                mult_idx = context_names.index(MULTIPLICITY_COLUMN)
+                # Extract only the non-n_constituents context
+                if mult_idx > 0:
+                    # Take every N-th row to get one per candidate
+                    if ctx is not None:
+                        mult_ctx = ctx[::N, :mult_idx]
+                    mult_ctx_names = context_names[:mult_idx]
+            elif ctx is not None:
+                # No n_constituents in context_names, use all context
+                mult_ctx = ctx[::N]
+                mult_ctx_names = context_names
+
+            lm = self.log_multiplicity(mask_t.sum(1).numpy(),
+                                      candidates, candidate_names,
+                                      context=mult_ctx, context_names=mult_ctx_names)
             diag["log_multiplicity"] = lm
             out = out + lm
         return out, diag
@@ -230,7 +260,21 @@ class FlowSurrogate:
         if self.multiplicity is not None:
             counts = mask_t.sum(1).numpy()
             rows = np.atleast_2d(rows)
-            lm = np.array([self.log_multiplicity(counts[i:i + 1], rows[i], candidate_names)[0, 0]
+            # Extract context excluding n_constituents (which is derived from counts)
+            mult_ctx = context
+            mult_ctx_names = context_names
+            if context_names and MULTIPLICITY_COLUMN in context_names:
+                mult_idx = context_names.index(MULTIPLICITY_COLUMN)
+                # Extract only the non-n_constituents context
+                if mult_idx > 0 and context is not None:
+                    mult_ctx = context[:, :mult_idx]
+                    mult_ctx_names = context_names[:mult_idx]
+                elif mult_idx == 0:
+                    mult_ctx = None
+                    mult_ctx_names = None
+            lm = np.array([self.log_multiplicity(counts[i:i + 1], rows[i:i + 1], candidate_names,
+                                                 context=mult_ctx[i:i + 1] if mult_ctx is not None else None,
+                                                 context_names=mult_ctx_names)[0, 0]
                            for i in range(len(counts))])
             diag["log_multiplicity"] = lm
             out = out + lm

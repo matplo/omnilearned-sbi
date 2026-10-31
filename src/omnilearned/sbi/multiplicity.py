@@ -9,7 +9,8 @@ and N is also a known condition of the flow (column ``n_constituents``).
 ``MultiplicityModel`` is a categorical distribution over N = 0..max_n whose
 logits are a smooth (SiLU) MLP of the normalized inferred parameters, so
 log p(N | theta) is a smooth function of theta, as the grid likelihood needs.
-It conditions on the inferred parameters only, never on N or other context.
+It can condition on the inferred parameters only, or additionally on jet_pt
+and other known context columns.
 """
 
 import copy
@@ -25,11 +26,48 @@ from omnilearned.sbi.parameters import ConditionLayout
 MULTIPLICITY_COLUMN = "n_constituents"
 
 
-def layout_with_multiplicity(unknown, lower, upper, scale=100.0, units=None):
-    """Flow condition layout: unknowns in [-1, 1] plus N / ``scale`` as known context."""
-    lay = ConditionLayout.from_bounds(unknown, lower, upper, known=(MULTIPLICITY_COLUMN,),
-                                      units=units)
+def layout_with_multiplicity(unknown, lower, upper, scale=100.0, units=None, known_context=None,
+                             known_scales=None):
+    """Flow condition layout: unknowns in [-1, 1] plus known context columns with their scales.
+
+    Args:
+        unknown: list of unknown parameter names.
+        lower, upper: bounds for unknown parameters.
+        scale: scale for n_constituents (default 100.0).
+        units: optional dict of column units.
+        known_context: optional dict mapping context column names to None (for default
+            initialization). If None, only n_constituents is added.
+        known_scales: optional dict mapping context column names to their scales.
+            Missing entries default to 1.0.
+
+    Returns:
+        ConditionLayout with normalized unknown parameters and known context columns.
+
+    Notes:
+        - jet_pt is recommended with log(pT/GeV) scaling, centered near 0.
+        - Existing code using only scale parameter is backward compatible.
+    """
+    # Backward compatibility: if known_context is None, use only n_constituents with scale arg
+    if known_context is None:
+        known_cols = (MULTIPLICITY_COLUMN,)
+    else:
+        # Convert dict to tuple if needed (allow dict or tuple)
+        if isinstance(known_context, dict):
+            known_cols = tuple(known_context.keys())
+        else:
+            known_cols = tuple(known_context)
+        # Add n_constituents if not already present
+        if MULTIPLICITY_COLUMN not in known_cols:
+            known_cols = (MULTIPLICITY_COLUMN,) + known_cols
+
+    lay = ConditionLayout.from_bounds(unknown, lower, upper, known=known_cols, units=units)
+    # Set scale for n_constituents
     lay.scale[MULTIPLICITY_COLUMN] = float(scale)
+    # Set scales for other known context columns
+    if known_scales is not None:
+        for name, s in known_scales.items():
+            if name in lay.scale:
+                lay.scale[name] = float(s)
     return lay
 
 
@@ -40,7 +78,11 @@ def multiplicity_context(mask):
 
 
 class MultiplicityModel(nn.Module):
-    """Categorical p(N | theta) over N = 0..max_n with smooth logits."""
+    """Categorical p(N | pT_J, theta) over N = 0..max_n with smooth logits.
+
+    Can condition on inferred parameters (theta) and optionally on known context
+    such as jet transverse momentum (pT_J) and constituent multiplicity.
+    """
 
     def __init__(self, cond_dim, max_n, hidden=128, depth=3):
         super().__init__()
@@ -51,7 +93,7 @@ class MultiplicityModel(nn.Module):
             d = hidden
         layers.append(nn.Linear(d, max_n + 1))
         self.net = nn.Sequential(*layers)
-        self.layout = None  # ConditionLayout over the unknown parameters (set by the owner)
+        self.layout = None  # ConditionLayout over unknowns + known context (set by the owner)
 
     @property
     def max_n(self):
