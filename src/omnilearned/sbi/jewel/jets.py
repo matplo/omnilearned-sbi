@@ -188,6 +188,41 @@ def pack(records, width):
     return eta, phi, pt, mask
 
 
+def pack_v3(records, width):
+    """Left-packed (eta, phi, pt, e, pid, mask) for the v3 layout.
+
+    ``e`` and ``pid`` are carried so the stored cloud can be
+    (deta, dphi, log pT, log E, pid) -- OmniLearned's minimal input set.
+    """
+    n = len(records)
+    eta, phi, pt, ene = (np.zeros((n, width)) for _ in range(4))
+    pid = np.zeros((n, width), np.int32)
+    mask = np.zeros((n, width), bool)
+    for i, r in enumerate(records):
+        k = len(r["pt"])
+        eta[i, :k], phi[i, :k], pt[i, :k] = r["eta"], r["phi"], r["pt"]
+        ene[i, :k], pid[i, :k] = r["e"], r["pid"]
+        mask[i, :k] = True
+    return eta, phi, pt, ene, pid, mask
+
+
+def select_records_v3(records, sel):
+    """``select_records`` for the v3 cloud: (ok, reasons, reco, x[n,P,5], mask).
+
+    Feature order is fixed by OmniLearned (``dataloader.HEPDataset``): 0,1 relative angles,
+    2 log pT (its validity marker), 3 log E clipped to >= log pT, 4 the PDG id at ``pid_idx``.
+    Padded slots are exactly zero in every column.
+    """
+    eta, phi, pt, ene, pid, mask = pack_v3(records, sel.max_constituents)
+    ok, reason, r = select_sets(eta, phi, pt, mask, sel)
+    names = [None if k < 0 else REJECTION_REASONS[k] for k in reason]
+    lpt = np.log(np.where(mask, pt, 1.0))
+    le = np.log(np.where(mask, ene, 1.0))
+    le = np.maximum(le, lpt)                      # E >= pT always; guards rounding
+    x = np.where(mask[..., None], np.stack([eta, phi, lpt, le, pid.astype(np.float64)], -1), 0.0)
+    return ok, names, r, x, mask
+
+
 def select_records(records, sel):
     """Apply ``select_sets`` to candidate records: (accepted [n], reason names [n], reco)."""
     eta, phi, pt, mask = pack(records, sel.max_constituents)
