@@ -1,4 +1,16 @@
-# OmniLearned SBI: branch dev/nle-jewel
+# OmniLearned SBI: branch dev/nle-jewel-v3
+
+**Read `docs/RESTART_JEWEL_V3.md` first** — current state and the exact next command. Then
+`docs/PLAN_JEWEL_V3.md` (standing brief) and `docs/FORMAT_JEWEL_V3.md` (normative data format).
+Running log: `FINDINGS_JEWEL_V3.md`.
+
+The toy track and the v2 JEWEL track are **closed**; their logs stay as records
+(`FINDINGS_NLE.md`, `FINDINGS_JEWEL.md`). `PLAN_NLE_PERLMUTTER.md` sections 1-6 remain
+authoritative for the shared ground rules and lessons.
+
+---
+
+## (superseded) branch dev/nle-jewel
 
 **Read `docs/RESTART_JEWEL.md` first** — it holds the current state and the exact next
 command after any interruption. Then `docs/PLAN_JEWEL_NLE.md`, the standing brief for this
