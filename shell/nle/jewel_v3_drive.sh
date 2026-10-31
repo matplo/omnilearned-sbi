@@ -21,6 +21,12 @@ set -uo pipefail
 SNAP=$1; SPLIT=$2; TARGET=$3; NODES=${4:-8}; WAVES=${5:-4}; WORKERS=${6:-64}
 WEXPO=${WEXPO:-3}            # pT-hat sampling exponent; 3 = log-flat over 10-600 GeV
 DATASET=${DATASET:-jewel_v3} # data/<DATASET>/<split>
+# NEVENT: events per task. randomness.chunks_per_point caps a point at 100 tasks (NJOB is
+# base + 100*point + chunk and cards.njob refuses chunk >= 100), so TARGET jets per point
+# must be reachable in <= 100 tasks. At the measured 0.40 jets/event, 1000 events/task gives
+# ~400 jets/task = 40k jets/point -- enough for train/fidelity (20k) and validation (5k), but
+# NOT for the test split's 50k. Pass NEVENT=5000 there.
+NEVENT=${NEVENT:-}
 export JEST_NLE_ROOT=${JEST_NLE_ROOT:-/global/cfs/cdirs/alice/ploskon/jest-nle}
 D=$JEST_NLE_ROOT/data/$DATASET/$SPLIT
 CFG=$SNAP/configs/jewel-2.6.0-cs-v3.toml
@@ -37,7 +43,7 @@ if [ ! -f "$D/tasks.json" ]; then
   # NO --no-events: v3 always writes raw event stores, so a future representation change
   # never needs a regeneration. v2 passed it and locked 10.3 node-h to one representation.
   $GEN plan --split "$SPLIT" --out "$D" --config "$CFG" --wexpo "$WEXPO" --chunks 2 \
-    2>&1 | tee -a "$D/logs/drive.log"
+    ${NEVENT:+--nevent "$NEVENT"} 2>&1 | tee -a "$D/logs/drive.log"
   [ -f "$D/tasks.json" ] || { log "plan FAILED"; exit 1; }
 fi
 

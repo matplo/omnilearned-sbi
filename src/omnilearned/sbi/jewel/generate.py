@@ -186,13 +186,16 @@ def topup(directory, target_jets, margin=1.05, max_chunks=None, log=print):
             with open(p) as f:
                 m = json.load(f)
             done.setdefault(t["point_id"], []).append((m["jets_selected"], m["events_generated"]))
-    new = []
+    new, capped = [], []
     for pid, tl in by_point.items():
         if pid not in done:
             continue
         jets_, ev = (sum(v) for v in zip(*done[pid]))
         acc = jets_ / max(1, ev)
-        want = min(cap, int(np.ceil(target_jets * margin / max(acc * tl[0]["nevent"], 1e-9))))
+        need = int(np.ceil(target_jets * margin / max(acc * tl[0]["nevent"], 1e-9)))
+        want = min(cap, need)
+        if need > cap:
+            capped.append((pid, need, int(acc * tl[0]["nevent"] * cap)))
         have = max(t["chunk"] for t in tl) + 1
         for c in range(have, want):
             t0 = tl[0]
@@ -207,6 +210,14 @@ def topup(directory, target_jets, margin=1.05, max_chunks=None, log=print):
         json.dump(doc, f, indent=1)
     os.replace(tmp, directory / "tasks.json")
     log(f"top-up to {target_jets} jets: {len(new)} tasks added ({len(doc['tasks'])} in total)")
+    if capped:
+        # Loud, because the alternative is a split that quietly stops short of its target and
+        # whose next wave then "adds nothing", which the driver reads as success.
+        pid, need, reach = max(capped, key=lambda r: r[1])
+        log(f"WARNING: {len(capped)} point(s) cannot reach {target_jets} jets within the "
+            f"chunks_per_point cap of {cap}: worst is point {pid}, which needs {need} chunks "
+            f"and tops out near {reach} jets. Re-plan that split with a larger --nevent "
+            f"(NEVENT= in the driver); raising the cap would renumber NJOB streams.")
     return new
 
 

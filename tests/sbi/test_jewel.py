@@ -258,6 +258,25 @@ def test_topup_adds_chunks_from_measured_acceptance(fake_cfg, tmp_path):
     assert len({t["njob"] for t in doc["tasks"]}) == len(doc["tasks"]) and doc["topups"][0]["added"] == len(new)
 
 
+def test_topup_warns_when_the_chunk_cap_stops_a_point_reaching_target(fake_cfg, tmp_path):
+    """A capped point stops short of its target, and the next empty wave reads as success.
+
+    topup clamps the chunks it adds at randomness.chunks_per_point, so a target that needs
+    more than the cap is quietly never met: the driver's "wave added nothing" check then ends
+    the run as if the split were complete. The cap binding must be said out loud.
+    """
+    pytest.importorskip("hepyy")
+    from omnilearned.sbi.jewel import generate
+
+    d = tmp_path / "farm"
+    generate.plan(fake_cfg, "probe", d, chunks=1, theta=[[4.5, 0.45, 0.65]], nevent=20)
+    generate.work(d, scratch=str(tmp_path), log=lambda m: None, max_tasks=1)
+    msgs = []
+    generate.topup(d, target_jets=10**7, margin=1.0, max_chunks=3, log=msgs.append)
+    assert any("WARNING" in m and "cap of 3" in m for m in msgs), msgs
+    assert len(generate.load(d)["tasks"]) == 3            # clamped, not silently unbounded
+
+
 def test_toy_train_runs_on_jewel_shards(fake_cfg, tmp_path):
     pytest.importorskip("hepyy")
     from omnilearned.sbi.flow import FlowSurrogate
