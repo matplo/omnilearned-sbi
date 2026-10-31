@@ -57,8 +57,8 @@ def _cluster(px, py, pz, e, radius):
     return reco.cluster_events(p4, radius)
 
 
-def _axis(px, py, pz, e, member):
-    """(pT, eta, phi) of a jet from its constituents.
+def _axis(px, py, pz, e, member, with_mass=False):
+    """(pT, eta, phi[, mass]) of a jet from its constituents.
 
     ``reco.cluster_events`` reports ``jet_pt/eta/phi`` for the leading jet only, so every
     other jet's axis is the four-momentum sum of its members. For the leading jet this
@@ -67,7 +67,12 @@ def _axis(px, py, pz, e, member):
     sx, sy, sz = px[member].sum(), py[member].sum(), pz[member].sum()
     pt = float(np.hypot(sx, sy))
     eta = float(np.arcsinh(sz / pt)) if pt > 0 else 0.0
-    return pt, eta, float(np.arctan2(sy, sx))
+    phi = float(np.arctan2(sy, sx))
+    if not with_mass:
+        return pt, eta, phi
+    se = e[member].sum()
+    m2 = se * se - (sx * sx + sy * sy + sz * sz)
+    return pt, eta, phi, float(np.sqrt(m2)) if m2 > 0 else 0.0
 
 
 def _leading(px, py, pz, e, radius):
@@ -144,7 +149,7 @@ def event_jets(ev, cfg, sel):
         order = np.argsort(-pt, kind="stable")
         pt, eta, phi, tag = pt[order], eta[order], phi[order], tag[order]
         ene, cpid = ene[order], cpid[order]
-        jpt, jeta, jphi = _axis(s["px"], s["py"], s["pz"], s["e"], member)
+        jpt, jeta, jphi, jmass = _axis(s["px"], s["py"], s["pz"], s["e"], member, with_mass=True)
         # Both angular coordinates are measured from THIS jet's axis. v2 rotated phi but left
         # eta absolute, so feature 0 tracked the jet axis at r = +0.999 (spread 1.00) while the
         # R = 0.4 substructure it should carry has spread 0.16 -- the model spent its input
@@ -158,7 +163,8 @@ def event_jets(ev, cfg, sel):
             continue
         recs.append({"eta": eta, "phi": phi, "pt": pt, "e": ene, "pid": cpid})
         diags.append({**base, "jet_index": int(j), "phi_rotation": rot,
-                      "event_jet_pt": jpt, "eta_rotation": jeta if relative else 0.0,
+                      "event_jet_pt": jpt, "event_jet_mass": jmass,
+                      "eta_rotation": jeta if relative else 0.0,
                       "event_jet_eta": jeta, "n_in_jet": int(member.sum()),
                       "leftover_pt_in_jet": float(pt[tag == cs.TAG_THERMAL_LEFT].sum()),
                       "n_leftover_in_jet": int((tag == cs.TAG_THERMAL_LEFT).sum()),

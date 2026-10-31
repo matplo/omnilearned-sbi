@@ -62,6 +62,21 @@ MERGED_SCHEMA = "jewel-merged-v1"
 TASKS_SCHEMA = "jewel-tasks-v1"
 
 
+JET_ORDINAL_BITS = 10          # up to 1024 jets per event in the event_id packing
+
+
+def _write_diag(path, rec):
+    """Per-jet diagnostics beside a v3 jet file (never read by training or fitting)."""
+    from omnilearned.sbi.observations import file_sha256
+
+    with h5py.File(path, "w") as f:
+        _dataset(f, "event_id", np.asarray(rec["event_id"], np.int64))
+        for k, v in rec["diag"].items():
+            _dataset(f, k, np.asarray(v))
+        f.attrs["schema"] = "jewel-diag-v3"
+    return file_sha256(path)
+
+
 def task_name(split, point_id, chunk):
     return f"{split}_p{int(point_id):05d}_c{int(chunk):03d}"
 
@@ -307,12 +322,14 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
                           "weight": ev["weight"], "pthat": ev["scale"]})
                 recs.append(rec)
                 diags.append(d)
+        v3 = str(cfg.get("backend", "")).startswith("jewel-2.6.0-cs-v3")
         if recs:
-            ok, why, r, x, mask = jets.select_records(recs, sel)
+            ok, why, r, x, mask = (jets.select_records_v3 if v3 else jets.select_records)(recs, sel)
         else:
             ok, why, r = np.zeros(0, bool), [], {"jet_pt": np.zeros(0), "jet_eta": np.zeros(0),
                                                   "jet_phi": np.zeros(0)}
-            x, mask = np.zeros((0, sel.max_constituents, 3)), np.zeros((0, sel.max_constituents), bool)
+            nf = 5 if v3 else 3
+            x, mask = np.zeros((0, sel.max_constituents, nf)), np.zeros((0, sel.max_constituents), bool)
         reject = dict(pre_reject)
         for w in why:
             if w is not None:
@@ -331,8 +348,36 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
             rec["weight"], rec["pthat"] = rec["diag"]["weight"].copy(), rec["diag"]["pthat"].copy()
             bias = sampling_record(task["sampling"])
         cfg_sha = cfg.get("_sha256", "unknown")  # of the config the task list was planned from
-        sha, dsha = write_shard(out_dir / f"{name}.h5", [(task["point_id"], task["theta"], rec)],
-                                task["split"], cfg["backend"], cfg_sha, sampling_bias=bias)
+        if v3:
+            from omnilearned.sbi.jewel import v3format
+
+            # group_id is the originating event (inclusive jets of one event share it);
+            # event_id must be UNIQUE per jet because it seeds the Hutchinson probes, so it
+            # is the event id shifted up with the jet's ordinal within that event.
+            gid = rec["event_id"]
+            ordinal = np.zeros(len(gid), np.int64)
+            seen = {}
+            for i, g in enumerate(gid):
+                ordinal[i] = seen.get(int(g), 0)
+                seen[int(g)] = ordinal[i] + 1
+            if ordinal.size and ordinal.max() >= (1 << JET_ORDINAL_BITS):
+                raise RuntimeError(f"more than {1 << JET_ORDINAL_BITS} jets in one event")
+            eid = (gid << JET_ORDINAL_BITS) | ordinal
+            dg = rec["diag"]
+            sha = v3format.write_jets(
+                out_dir / f"{name}.h5", x=rec["x"], mask=rec["mask"],
+                theta=np.repeat(np.asarray(task["theta"], float)[None], len(gid), 0),
+                jet_pt=rec["jet_pt"], jet_eta=rec["jet_eta"], jet_phi=rec["jet_phi"],
+                jet_mass=dg["event_jet_mass"], event_id=eid, group_id=gid,
+                point_id=np.full(len(gid), task["point_id"], np.int32),
+                weight=rec.get("weight"), pthat=rec.get("pthat"),
+                attrs={"backend": cfg["backend"], "split": task["split"],
+                       "config_sha256": cfg_sha,
+                       "sampling_bias": json.dumps(bias) if bias else ""})
+            dsha = _write_diag(out_dir / f"{name}.diag.h5", rec)
+        else:
+            sha, dsha = write_shard(out_dir / f"{name}.h5", [(task["point_id"], task["theta"], rec)],
+                                    task["split"], cfg["backend"], cfg_sha, sampling_bias=bias)
         keep_ev = task.get("keep_events", True)
         esha = _write_events(out_dir / f"{name}.events.h5", events, stream, task["point_id"],
                              task["chunk"], task["nevent"]) if keep_ev else None
@@ -426,14 +471,29 @@ def write_index(directory):
         if file_sha256(directory / m["files"]["jets"]) != m["files"]["jets_sha256"]:
             raise ValueError(f"{m['files']['jets']} does not match its manifest hash")
         mans.append(m)
+    # A truncated jet is silently dropped, and it would be dropped preferentially at high
+    # jet pT where the quenching signal is strongest -- a theta-dependent hole in the
+    # acceptance. The cap is set so it cannot bind, so any hit is a hard error, not a warning.
+    capped = {m["task"]["name"]: m["rejections"]["too_many_constituents"] for m in mans
+              if m.get("rejections", {}).get("too_many_constituents", 0)}
+    if capped:
+        total = sum(capped.values())
+        raise ValueError(
+            f"{total} jet(s) exceeded selection.max_constituents in {len(capped)} task(s) "
+            f"(e.g. {dict(list(capped.items())[:3])}). Raise max_constituents and regenerate "
+            f"those tasks; do not index a truncated sample.")
     index = {"schema": "jewel-index-v1", "split": doc["split"], "backend": doc["backend"],
+             "too_many_constituents": 0,
              "shards": [{"file": m["files"]["jets"], "sha256": m["files"]["jets_sha256"],
                          "events": m["files"]["events"], "point_id": m["task"]["point_id"],
                          "chunk": m["task"]["chunk"], "n_jets": m["jets_selected"]} for m in mans],
              "tasks_done": len(mans), "tasks_total": len(doc["tasks"]),
              "n_jets": int(sum(m["jets_selected"] for m in mans)),
              "events": int(sum(m["events_generated"] for m in mans)),
-             "seconds_jewel": float(sum(m["seconds_jewel"] for m in mans))}
+             "seconds_jewel": float(sum(m["seconds_jewel"] for m in mans)),
+             "event_stores": int(sum(bool(m["files"].get("events")) for m in mans)),
+             "max_constituents_seen": max((m["n_constituents_range"][1] for m in mans
+                                           if m.get("n_constituents_range")), default=0)}
     with open(directory / f"index_{doc['split']}.json", "w") as f:
         json.dump(index, f, indent=1)
     return index

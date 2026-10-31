@@ -150,3 +150,84 @@ def write_dataset_spec(root, spec):
     except ImportError:          # yaml is a convenience; the JSON is what code reads
         pass
     return root / "dataset.json"
+
+
+def plan_merge_groups(shards, target_jets=1_000_000):
+    """Group per-task shards into output files of ~``target_jets``, keeping points whole.
+
+    A theta point is never split across output files: the per-point weight normalisation
+    (sum w = n_jets at that point) must be computed over all of a point's jets, and keeping
+    points whole also means a reader can hold one point in memory from one file.
+    """
+    by_point = {}
+    for s in shards:
+        by_point.setdefault(int(s["point_id"]), []).append(s)
+    groups, cur, cur_n = [], [], 0
+    for pid in sorted(by_point):
+        n = sum(int(s["n_jets"]) for s in by_point[pid])
+        if cur and cur_n + n > target_jets:
+            groups.append(cur)
+            cur, cur_n = [], 0
+        cur.extend(by_point[pid])
+        cur_n += n
+    if cur:
+        groups.append(cur)
+    return groups
+
+
+def merge_v3(directory, out, split, target_jets=1_000_000, cfg=None, design=None, log=print):
+    """Merge per-task v3 files into ~``target_jets``-jet files, with the sidecar.
+
+    Weights are renormalised per point so ``sum(weight) = n_jets`` at that point; because
+    points are never split across files this is exact.
+    """
+    from omnilearned.sbi.observations import file_sha256
+
+    directory, out = Path(directory), Path(out)
+    index = json.loads((directory / f"index_{split}.json").read_text())
+    groups = plan_merge_groups(index["shards"], target_jets)
+    out.mkdir(parents=True, exist_ok=True)
+    files, total = [], 0
+    for gi, grp in enumerate(groups):
+        parts = [read_jets(directory / s["file"]) for s in grp]
+        P = max(p["data"].shape[1] for p in parts)
+
+        def pad(a, width=P):
+            if a.shape[1] == width:
+                return a
+            z = [(0, 0), (0, width - a.shape[1])] + [(0, 0)] * (a.ndim - 2)
+            return np.pad(a, z)
+
+        d = {k: np.concatenate([p[k] for p in parts]) for k in
+             ("global", "weight", "event_id", "group_id", "point_id", "theta")}
+        x = np.concatenate([pad(p["data"]) for p in parts])
+        mask = np.concatenate([pad(p["mask"]) for p in parts])
+        pthat = (np.concatenate([p["pthat"] for p in parts])
+                 if all("pthat" in p for p in parts) else None)
+        w, pid_ = d["weight"].astype(np.float64), d["point_id"]
+        for q in np.unique(pid_):
+            sl = pid_ == q
+            tot = w[sl].sum()
+            if tot > 0:
+                w[sl] *= sl.sum() / tot
+        gn = list(GLOBALS)
+        name = f"{split}_{gi:05d}.h5"
+        sha = write_jets(
+            out / name, x=x, mask=mask, theta=d["theta"],
+            jet_pt=d["global"][:, gn.index("jet_pt")], jet_eta=d["global"][:, gn.index("jet_eta")],
+            jet_phi=d["global"][:, gn.index("jet_phi")], jet_mass=d["global"][:, gn.index("jet_mass")],
+            event_id=d["event_id"], group_id=d["group_id"], point_id=pid_, weight=w, pthat=pthat,
+            attrs={"split": split, "merged_from_tasks": len(grp)})
+        files.append({"file": name, "sha256": sha, "n_jets": int(x.shape[0]),
+                      "n_points": int(np.unique(pid_).size), "max_constituents": int(P)})
+        total += int(x.shape[0])
+        log(f"  {name}: {x.shape[0]} jets, {np.unique(pid_).size} points, P={P}")
+    idx = {"schema": SCHEMA, "split": split, "n_jets": total, "n_files": len(files),
+           "source_index": str(directory / f"index_{split}.json"),
+           "source_index_sha256": file_sha256(directory / f"index_{split}.json"),
+           "files": files}
+    (out / f"index_{split}.json").write_text(json.dumps(idx, indent=1))
+    if cfg is not None:
+        write_dataset_spec(out, dataset_spec(cfg, split, files, design))
+    log(f"merged {index['tasks_done']} tasks -> {len(files)} files, {total} jets")
+    return idx

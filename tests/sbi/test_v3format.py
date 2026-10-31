@@ -126,3 +126,99 @@ def test_omnilearned_clip_inputs_assumptions_hold(tmp_path):
     assert np.all(dr[m] < 0.8), f"max dR {dr[m].max():.3f} would be clipped by OmniLearned"
     # column 3 is already >= column 2, so clip_inputs is a no-op on our files
     np.testing.assert_array_equal(np.maximum(x[..., 3], x[..., 2])[m], x[..., 3][m])
+
+
+def test_worker_end_to_end_writes_a_valid_v3_file(tmp_path):
+    """The generation worker, with a fake JEWEL binary, must produce a loadable v3 file.
+
+    This is the P1 gate: representation, format and the worker agree, and the result is
+    something OmniLearned can train on.
+    """
+    pytest.importorskip("hepyy")
+    import json
+    import sys
+    from pathlib import Path
+
+    from omnilearned.sbi.jewel import cards, generate
+
+    from test_jewel import FAKE  # the fake JEWEL used by the v1/v2 worker tests
+
+    root = Path(__file__).resolve().parents[2]
+    cfg = cards.load_config(root / "configs" / "jewel-2.6.0-cs-v3.toml")
+    exe = tmp_path / "fake_jewel.py"
+    exe.write_text(FAKE.format(python=sys.executable))
+    exe.chmod(0o755)
+    cfg["jewel"]["executable"] = str(exe)
+    cfg["jewel"]["launcher"] = []
+    cfg["jewel"]["env_scripts"] = []
+
+    d = tmp_path / "probe"
+    generate.plan(cfg, "probe", d, chunks=1, theta=[[4.5, 0.45, 0.65]], nevent=60,
+                  keep_events=True, sampling={"wexpo": 3.0})
+    generate.work(d, scratch=str(tmp_path), max_tasks=1)
+
+    man = json.loads(next(d.glob("probe_*.json")).read_text())
+    assert man["backend"] == "jewel-2.6.0-cs-v3"
+    assert man["rejections"].get("too_many_constituents", 0) == 0
+    assert (d / f"{man['task']['name']}.events.h5").exists(), "event stores must be written"
+
+    got = read_jets(d / f"{man['task']['name']}.h5")
+    assert got["feature_names"] == FEATURES
+    x, m = got["data"], got["mask"]
+    if m.any():
+        # the representation invariants, on real worker output
+        assert np.all(x[~m] == 0)
+        assert np.all(x[..., 3][m] >= x[..., 2][m] - 1e-6)
+        assert np.abs(x[..., 0][m]).max() < 1.0, "deta must be relative to the jet axis"
+        assert np.unique(got["event_id"]).size == got["event_id"].size
+        # several jets of one event share a group_id but never an event_id
+        assert np.unique(got["group_id"]).size <= got["group_id"].size
+
+
+def test_merge_keeps_points_whole_and_normalises_weights_per_point(tmp_path):
+    """Merging must not split a theta point across files.
+
+    The per-point normalisation (sum w = n_jets at that point) is only exact if every jet of
+    a point is in the same file, and a reader can then hold one point from one file.
+    """
+    import json
+
+    from omnilearned.sbi.jewel.v3format import merge_v3, plan_merge_groups
+
+    # grouping: whole points, ~target per file
+    shards = [{"point_id": p, "n_jets": 20000, "file": f"f{p}"} for p in range(512)]
+    groups = plan_merge_groups(shards, 1_000_000)
+    seen = [{s["point_id"] for s in g} for g in groups]
+    assert all(not (a & b) for i, a in enumerate(seen) for b in seen[i + 1:])
+    assert all(sum(s["n_jets"] for s in g) <= 1_000_000 for g in groups)
+
+    # end to end on small files, with deliberately un-normalised weights
+    src = tmp_path / "tasks"
+    src.mkdir()
+    rng = np.random.default_rng(3)
+    recs = []
+    for pid in range(4):
+        d = _jets(n=10, P=8, seed=pid)
+        d["point_id"] = np.full(10, pid, np.int32)
+        d["event_id"] = np.arange(pid * 10, pid * 10 + 10, dtype=np.int64)
+        d["weight"] = rng.uniform(0.1, 9.0, 10)          # arbitrary scale
+        name = f"test_p{pid:05d}_c000.h5"
+        sha = write_jets(src / name, **d)
+        recs.append({"file": name, "sha256": sha, "point_id": pid, "chunk": 0,
+                     "n_jets": 10, "events": None})
+    (src / "index_test.json").write_text(json.dumps(
+        {"schema": "jewel-index-v1", "split": "test", "shards": recs, "tasks_done": 4}))
+
+    out = tmp_path / "merged"
+    idx = merge_v3(src, out, "test", target_jets=25, log=lambda *a: None)
+    assert idx["n_jets"] == 40
+    got = read_jets(out / idx["files"][0]["file"])
+    for q in np.unique(got["point_id"]):
+        sl = got["point_id"] == q
+        assert np.isclose(got["weight"][sl].sum(), sl.sum()), "sum(w) must equal n_jets per point"
+    # every point lands in exactly one file
+    where = {}
+    for fspec in idx["files"]:
+        for q in np.unique(read_jets(out / fspec["file"])["point_id"]):
+            where.setdefault(int(q), []).append(fspec["file"])
+    assert all(len(v) == 1 for v in where.values()), where
