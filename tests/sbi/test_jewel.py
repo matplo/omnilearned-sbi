@@ -70,6 +70,28 @@ def test_njob_unique_in_range_and_design_respects_holdout():
         cards.njob(CFG, "train", 0, 100)
 
 
+def test_v3_test_split_is_the_four_withheld_theta():
+    """The driver plans every split the same way, so ``test`` needs a design of its own.
+
+    Without this, ``generate plan --split test`` raised and the closure data could only be
+    produced by typing the withheld theta on the command line -- where a typo is silent and
+    would be discovered only after the fits were sealed.
+    """
+    from omnilearned.sbi.jewel.generate import box, design_points, holdout_points
+    from omnilearned.sbi.toy.datasets import margin_clashes
+
+    root = Path(__file__).resolve().parents[2]
+    cfg = cards.load_config(root / "configs" / "jewel-2.6.0-cs-v3.toml")
+    pts = design_points(cfg, "test")
+    np.testing.assert_array_equal(pts, holdout_points(cfg))
+    np.testing.assert_allclose(pts, [[7.5, 0.35, 0.85], [4.5, 0.45, 0.65],
+                                     [1.5, 0.65, 0.35], [9.5, 0.25, 0.45]])
+    # the training design must keep its distance from every one of them
+    train = design_points(cfg, "train")
+    assert train.shape == (512, 3)
+    assert not margin_clashes(train, {i: p for i, p in enumerate(pts)}, box(cfg)).any()
+
+
 def test_constituent_subtraction_cases():
     # particle with a collinear, softer thermal momentum: pT reduced by the thermal pT
     st = np.array([1, 3, 3, 1, 1])

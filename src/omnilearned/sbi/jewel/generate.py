@@ -103,7 +103,21 @@ def design_points(cfg, split):
     if split in ("validation", "fidelity"):
         pts, _ = make_design(int(cfg["design"]["validation_points"]), "validation", cfg, box=box(cfg))
         return pts
+    if split == "test":
+        return holdout_points(cfg)
     raise ValueError(f"no design for split {split}")
+
+
+def holdout_points(cfg):
+    """The withheld theta of ``[holdout]``, in a fixed order [n, 3].
+
+    Generating jets here is not a seal violation: the seal is on reading the truth before a
+    fit is sealed (``holdout.truth_manifest_access``), not on simulating at these settings --
+    the closure test needs data at exactly the points the training design excludes.
+    """
+    h = cfg["holdout"]
+    rows = [h["development_validation"], h["primary_test"], *h.get("additional_test_settings", [])]
+    return np.asarray(rows, float)
 
 
 def plan(cfg, split, out, chunks=1, points=None, theta=None, keep_hepmc=(), extra=None,
