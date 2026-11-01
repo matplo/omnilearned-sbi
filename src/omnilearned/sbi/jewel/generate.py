@@ -340,7 +340,12 @@ def run_task(cfg, task, out_dir, scratch=None, timeout=None, log=print):
             for reason_, count_ in pre.items():  # dropped before packing, still accounted for
                 pre_reject[reason_] += count_
             if not evrecs:
-                pre_reject[why] += 1
+                # event_jets guarantees why is a real reason string when evrecs is empty; this
+                # guard is defense in depth, not a substitute for that guarantee -- a silent
+                # "no_jet" miscount is a wrong number, but a KeyError(None) here discards the
+                # whole task (every event already processed in it), which is what actually
+                # happened before event_jets was fixed to never return None here.
+                pre_reject[why if why is not None else "no_jet"] += 1
                 continue
             for rec, d in zip(evrecs, evdiags):  # jets of one event share its number -> event_id
                 d.update({"number": ev["number"], "centrality_record": ev["centrality"],

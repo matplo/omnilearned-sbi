@@ -177,3 +177,40 @@ def test_cartesian_design_still_used_without_train_points():
     pts = generate.design_points(cfg, "train")
     n = int(np.prod([len(cfg["design"][p]) for p in ("b", "T_ref", "tau_init")]))
     assert pts.shape == (n, 3)
+
+
+def _no_jet_event():
+    """One event whose only two candidates are single particles, each below min_constituents.
+
+    Well-separated in eta (4.0 apart) so anti-kt R=0.4 keeps them as two distinct one-particle
+    jets rather than merging them into one real jet.
+    """
+    def p(pt, eta, phi):
+        return (pt * np.cos(phi), pt * np.sin(phi), pt * np.sinh(eta), pt * np.cosh(eta))
+    a, b = p(5.0, -2.0, 0.0), p(5.0, 2.0, 0.0)
+    return {"px": np.array([a[0], b[0]]), "py": np.array([a[1], b[1]]),
+            "pz": np.array([a[2], b[2]]), "e": np.array([a[3], b[3]]),
+            "pid": np.array([211, 211]), "status": np.array([1, 1]),
+            "number": 1, "centrality": 10.0, "weight": 1.0, "scale": 150.0}
+
+
+def test_event_jets_reports_too_few_constituents_not_none():
+    """Regression: every candidate jet sub-threshold must set a real rejection reason.
+
+    2026-11-01 P2 production: this event shape -- common, not exotic -- made 37-90% of all
+    JEWEL v3 task attempts crash with KeyError(None) in run_task's `pre_reject[why] += 1`,
+    discarding the WHOLE task (every event already processed in it, not just this one) on
+    every task that hit it anywhere in its batch. event_jets's own docstring promises "then
+    the reason is set" when records is empty; this is that promise, checked.
+    """
+    ev = _no_jet_event()
+    sel = jets.selection_from_config(_cfg("inclusive"))
+    assert sel.min_constituents == 2
+    recs, why, diags, pre = jets.event_jets(ev, _cfg("inclusive"), sel)
+    assert recs == [] and diags == []
+    assert why == "too_few_constituents", f"must not be None: {why!r}"
+    assert pre == {"too_few_constituents": 2}  # both candidates skipped (1 member < 2)
+    # the caller's bookkeeping dict must have a slot for it: no KeyError
+    pre_reject = {r: 0 for r in jets.REASONS}
+    pre_reject[why] += 1
+    assert pre_reject["too_few_constituents"] == 1

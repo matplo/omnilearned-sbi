@@ -171,6 +171,15 @@ def event_jets(ev, cfg, sel):
                       "unsubtracted_jet_pt": float(rr["jet_pt"][0]) if rr["njets"][0] else 0.0,
                       "unsubtracted_n": int(rm.sum())})
     pre = {"too_few_constituents": skipped} if skipped else {}
+    if not recs and reason is None:
+        # Every candidate jet of this event was below min_constituents (counted in `skipped`,
+        # above) and none hit `too_many_constituents` -- the only two ways `reason` gets set
+        # in the loop. Leaving it None broke the docstring's contract ("empty ... then the
+        # reason is set") and crashed run_task's `pre_reject[why] += 1` with KeyError(None),
+        # discarding the WHOLE task (not just this event) on every run that hit it. Found by:
+        # the P2 production run showed 37-90% of all task attempts failing with exactly this
+        # error (57 593 of train's attempts, against only 9576 that ever wrote a manifest).
+        reason = "too_few_constituents" if skipped else "no_jet"
     return recs, (reason if not recs else None), diags, pre
 
 
