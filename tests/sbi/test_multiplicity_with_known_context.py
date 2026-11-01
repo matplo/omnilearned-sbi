@@ -7,6 +7,7 @@ import torch
 from omnilearned.sbi.multiplicity import (
     MULTIPLICITY_COLUMN,
     MultiplicityModel,
+    layout_for_multiplicity_model,
     layout_with_multiplicity,
     multiplicity_context,
     train_multiplicity,
@@ -71,7 +72,12 @@ def test_layout_with_multiplicity_known_context_as_list():
 
 
 def test_layout_with_multiplicity_assembles_correctly():
-    """ConditionLayout.assemble works with jet_pt as known context."""
+    """ConditionLayout.assemble works with jet_pt alongside the forced n_constituents column.
+
+    layout_with_multiplicity is the constituent FLOW's layout, which always carries
+    n_constituents as known context (the flow generates exactly N constituents) -- so an
+    assemble call here must supply context for both known columns, not jet_pt alone.
+    """
     lay = layout_with_multiplicity(
         ["b", "T_ref"],
         [0, 0.1],
@@ -80,17 +86,18 @@ def test_layout_with_multiplicity_assembles_correctly():
         known_context={"jet_pt": None},
         known_scales={"jet_pt": 5.0}
     )
+    assert lay.known == [MULTIPLICITY_COLUMN, "jet_pt"]
 
     # Test assembling: unknowns are normalized, knowns are not (assembly does it)
     candidates = np.array([[5.5, 0.5]])  # midpoint of bounds
-    context = np.array([[200.0]])  # jet_pt in GeV
+    context = np.array([[30.0, 200.0]])  # n_constituents, jet_pt (GeV)
 
-    cond = lay.assemble(candidates, context=context, context_names=["jet_pt"])
-    assert cond.shape == (1, 5)
+    cond = lay.assemble(candidates, context=context, context_names=[MULTIPLICITY_COLUMN, "jet_pt"])
+    assert cond.shape == (1, 4)
     # Unknowns should be normalized to [-1, 1] (midpoint should be ~0)
     np.testing.assert_allclose(cond[0, :2], [0, 0], atol=0.1)
     # Known context should also be normalized
-    assert np.isfinite(cond[0, 3])  # jet_pt should be normalized
+    assert np.isfinite(cond[0, 2:]).all()  # n_constituents, jet_pt both normalized
 
 
 def test_multiplicity_model_conditioned_on_single_unknown():
@@ -105,17 +112,22 @@ def test_multiplicity_model_conditioned_on_single_unknown():
 
 
 def test_multiplicity_model_conditioned_on_theta_and_jet_pt():
-    """MultiplicityModel conditions on theta and jet_pt."""
-    # Layout with both unknowns and known context
-    lay = layout_with_multiplicity(
+    """MultiplicityModel conditions on theta and jet_pt -- never on n_constituents.
+
+    Uses layout_for_multiplicity_model, not layout_with_multiplicity: the latter is the
+    constituent flow's layout and always forces n_constituents into known context, which
+    would require this count model to be told N before predicting N.
+    """
+    lay = layout_for_multiplicity_model(
         ["b", "T_ref"],
         [0, 0.1],
         [11, 0.9],
         known_context={"jet_pt": None},
         known_scales={"jet_pt": 5.0}
     )
+    assert lay.known == ["jet_pt"]
 
-    # Model takes cond_dim = 4 (2 unknowns + jet_pt + n_constituents)
+    # Model takes cond_dim = 3 (2 unknowns + jet_pt)
     model = MultiplicityModel(lay.dim, max_n=64, hidden=32, depth=2)
     model.layout = lay
 
@@ -153,12 +165,11 @@ def test_multiplicity_weighted_training_with_jet_pt():
     train_idx = rng.permutation(n_data)[:n_train]
     val_idx = np.setdiff1d(np.arange(n_data), train_idx)
 
-    # Create layout
-    lay = layout_with_multiplicity(
+    # Create layout for the count model itself -- never n_constituents as known context
+    lay = layout_for_multiplicity_model(
         ["a", "b"],
         [-1, -1],
         [1, 1],
-        scale=100.0,
         known_context={"jet_pt": None},
         known_scales={"jet_pt": 5.0}
     )
@@ -299,3 +310,15 @@ def test_multiplicity_unit_weights_reproduce_unweighted():
         lp_unit = model_unit.log_prob(test_n, test_cond)
 
     torch.testing.assert_close(lp_unweighted, lp_unit, rtol=1e-5, atol=1e-6)
+
+
+def test_multiplicity_model_layout_cannot_require_n_constituents():
+    """layout_for_multiplicity_model refuses n_constituents as known context, loudly.
+
+    A count model that must be told N before predicting it is not a model. This guards the
+    distinction from layout_with_multiplicity (the constituent flow's layout), which must
+    always carry n_constituents for the opposite reason -- it generates exactly N particles.
+    """
+    with pytest.raises(ValueError, match=MULTIPLICITY_COLUMN):
+        layout_for_multiplicity_model(["a", "b"], [0, 0], [1, 1],
+                                      known_context={MULTIPLICITY_COLUMN: None})

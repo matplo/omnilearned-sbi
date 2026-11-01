@@ -71,6 +71,28 @@ def layout_with_multiplicity(unknown, lower, upper, scale=100.0, units=None, kno
     return lay
 
 
+def layout_for_multiplicity_model(unknown, lower, upper, known_context=None, known_scales=None,
+                                  units=None):
+    """Condition layout for ``MultiplicityModel`` itself: theta (+ jet_pt), never n_constituents.
+
+    ``layout_with_multiplicity`` is for the *constituent flow*, which generates exactly N
+    constituents and so correctly treats ``n_constituents`` as known context. The count model
+    predicts N, so n_constituents must never be one of its own known columns -- a layout built
+    with it would require the model to be told the answer before predicting it. Use this
+    factory for ``MultiplicityModel.layout``; reserve ``layout_with_multiplicity`` for the flow.
+    """
+    known_cols = tuple(known_context.keys() if isinstance(known_context, dict)
+                       else known_context or ())
+    if MULTIPLICITY_COLUMN in known_cols:
+        raise ValueError(f"{MULTIPLICITY_COLUMN} cannot be known context for the model that "
+                         "predicts it")
+    lay = ConditionLayout.from_bounds(unknown, lower, upper, known=known_cols, units=units)
+    for name, s in (known_scales or {}).items():
+        if name in lay.scale:
+            lay.scale[name] = float(s)
+    return lay
+
+
 def multiplicity_context(mask):
     """Known-context column [N, 1] (real constituent count) from a mask."""
     m = np.asarray(mask, dtype=bool)
