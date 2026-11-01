@@ -51,3 +51,32 @@ sat. `jet_pt` was stored in `global` and never reached the model.
 `docs/FORMAT_JEWEL_V3.md` (normative format), `docs/RESTART_JEWEL_V3.md` (live state and the
 eleven traps already hit), this log. Nothing is reused from `jewel_v1`/`jewel_w1` — v3
 generates fresh.
+
+## P2: generation under way (2026-11-01) — measured acceptance ~2x worse than planned
+
+`topup`'s self-correction is working as designed, but the numbers it is correcting are large.
+Plan §2 budgeted train at 12 node-h (1024 tasks); measured per-point acceptance drove `topup`
+to grow the task list to 22 809 (train) and 5855 (fidelity), from 1024 and 256 respectively.
+Rough node-hour estimate from task count and the measured ~4.1 min/task at 64 workers/node:
+
+| split | planned tasks | actual tasks (so far) | planned node-h | estimated actual node-h |
+|---|---|---|---|---|
+| train | 1024 | 22 809 | 12 | ~24 |
+| fidelity | 256 | 5855 | 3 | ~6 |
+| validation | 256 | 1487 | 1 | ~1.6 |
+| test | 8 (then 90 at `--nevent 5000`) | 90 | 0.3 | ~0.5 |
+
+Total ≈ 33 node-h against a 16 node-h plan estimate — about 2x over, still well inside
+"budget pre-approved, log node-hours, do not block on questions." Validation reached its
+per-point target cleanly (649 789 jets at 128 pts × 5000 = 640 000). Test's first merge ran at
+62/90 tasks (142 646 of a 200 000-jet target, 71%) because the driver's `WAVES` cap was hit
+before the two outstanding farm jobs finished, not because `topup` under-estimated chunks
+needed (no `too_many_constituents`-style cap warning fired) — relaunched with `--waves 6` to
+let it top up and re-merge once the in-flight tasks land.
+
+**Operational note, not a code bug:** the driver loops (`jewel_v3_drive.sh`, launched via
+`setsid nohup ... &`) died twice when the interactive session ended, despite `nohup` —  the
+submitted Slurm jobs themselves were unaffected, but the wave→topup→merge bookkeeping stalled
+each time until manually relaunched (idempotent, so safe, but costs wall-clock before someone
+notices). `setsid` alone did not change the behaviour between the two session endings tested
+here; worth a method change (e.g. a persistent `screen`/`tmux` session) if it recurs.
