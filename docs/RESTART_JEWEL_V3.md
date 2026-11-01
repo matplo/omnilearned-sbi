@@ -10,7 +10,9 @@ Brief: `docs/PLAN_JEWEL_V3.md`. Format: `docs/FORMAT_JEWEL_V3.md`. Log: `FINDING
 ## Current state
 
 ```
-PHASE:        P1 -- done (tracks B and C merged). P2 starting.
+PHASE:        P1 done. P2 relaunched 2026-11-01 ~12:30 from snapshot 18275284 after fixing
+              the event_jets KeyError(None) bug (86-88% of all task attempts were crashing).
+              P3 training code (jet_pt conditioning, no standardisation) written, tested.
 NEXT ACTION:  snapshot a clean commit, then one jewel_v3_drive.sh per split:
                 SNAP=$(shell/nle/snapshot.sh)
                 nohup shell/nle/jewel_v3_drive.sh $SNAP train      20000 8 4 > .../train.log 2>&1 &
