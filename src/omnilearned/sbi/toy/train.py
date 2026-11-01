@@ -1,11 +1,11 @@
-"""Train a toy-v2 NLE surrogate q(x, N | theta) = p(N | theta) q(x | N, theta).
+"""Train an NLE surrogate q(x, N | theta) = p(N | theta) q(x | N, theta).
 
-Reads training and validation shards (``toy.datasets``), fits the feature
-transform on the training split only, trains the categorical multiplicity
-model (selected on validation NLL) and the flow-matching velocity (selected on
-the validation flow-matching loss of the EMA weights), and writes one
-checkpoint holding both, plus ``run.json`` (options, data hashes, history,
-source revision, device, matmul precision).
+Reads training and validation shards, fits the feature transform on the
+training split only, trains the categorical multiplicity model (selected on
+validation NLL) and the flow-matching velocity (selected on the validation
+flow-matching loss of the EMA weights), and writes one checkpoint holding
+both, plus ``run.json`` (options, data hashes, history, source revision,
+device, matmul precision).
 
 The flow condition is theta mapped to [-1, 1] over the box plus N / 100 as
 known context (``layout_with_multiplicity``). Weighted samples (hard-pT biased
@@ -13,6 +13,15 @@ shards, per-jet ``weight``) are trained with ``--weight-mode loss|sample``; the
 multiplicity NLL is then weighted too, and run.json records the effective sample
 size per point and jet-pT bin. Training may use TF32 matmuls
 (``--tf32``, recorded); evaluation always runs in IEEE float32.
+
+Dispatches on ``--config``'s backend id (``sample_setup``): a toy or JEWEL v2 backend reads
+``toy.datasets`` shards (3 features: absolute eta, phi, log pT) and fits an affine
+standardisation; a backend ending ``-v3`` reads OmniLearned-native merged files
+(``jewel.v3format``, 4 features: deta/dphi relative to the jet axis, log pT, log E), skips
+standardisation (docs/FORMAT_JEWEL_V3.md: the paper's minimal set is already O(1)-scaled), and
+conditions both the flow and the multiplicity model on jet_pt as known context in addition to
+theta -- the multiplicity model's own layout (``layout_for_multiplicity_model``) never on
+n_constituents, since that is what it predicts.
 
     python -m omnilearned.sbi.toy.train --data-dir DATA --out RUN --steps 1000
 """
@@ -31,7 +40,9 @@ from omnilearned.sbi.base import GaussianBase
 from omnilearned.sbi.device import resolve_device
 from omnilearned.sbi.flow import FlowSurrogate, TrainOptions, json_dumps, train_flow
 from omnilearned.sbi.multiplicity import (
+    MULTIPLICITY_COLUMN,
     MultiplicityModel,
+    layout_for_multiplicity_model,
     layout_with_multiplicity,
     train_multiplicity,
 )
@@ -45,6 +56,10 @@ from omnilearned.sbi.velocity import SetFlowVelocity
 from omnilearned.sbi.velocity_pet import SmoothPETVelocity
 
 FEATURES = ["eta", "phi", "log_pt_over_GeV"]
+# v3 (docs/FORMAT_JEWEL_V3.md): deta, dphi are relative to the jet axis (v2's were absolute --
+# the defect the v3 fork exists to fix), plus log E. The on-disk fifth column (pid, the PDG
+# code) is dropped by read_v3_shards: the three-factor likelihood never conditions on it.
+FEATURES_V3 = ["deta", "dphi", "log_pt", "log_e"]
 PT_EDGES = (60.0, 70, 80, 90, 100, 120, 140, 170, 200)  # as toy.ptbins
 
 
@@ -67,6 +82,30 @@ def weight_summary(data, edges=PT_EDGES):
             "per_point_bin_p10": np.percentile(per_bin, 10, 0).tolist()}
 
 
+def context_for_layout(data, layout):
+    """Known-context columns for ``layout.known``, in the layout's own column order.
+
+    n_constituents comes from the shard's mask sum; any other known column (currently only
+    ``jet_pt``, logged per the multiplicity-module docstring: "recommended with log(pT/GeV)
+    scaling, centered near 0" -- here just logged, since v3 applies no further standardisation)
+    is read from ``global``/``global_names``. One helper for both the flow's layout and the
+    multiplicity model's layout, so a backend's known-context columns are plumbed in exactly
+    one place rather than once per caller.
+    """
+    if not layout.known:
+        return None
+    cols = []
+    for name in layout.known:
+        if name == MULTIPLICITY_COLUMN:
+            cols.append(data["n_constituents"].astype(np.float64))
+        elif name == "jet_pt":
+            idx = list(data["global_names"]).index("jet_pt")
+            cols.append(np.log(data["global"][:, idx].astype(np.float64)))
+        else:
+            raise ValueError(f"no known source for context column {name!r}")
+    return np.column_stack(cols)
+
+
 def prepare(data, transform, layout, chunk=200_000, weights=False):
     """Model-coordinate tensors for ``train_flow``: u, mask, cond (and w if ``weights``).
 
@@ -80,7 +119,8 @@ def prepare(data, transform, layout, chunk=200_000, weights=False):
         x = torch.as_tensor(np.asarray(data["x"][s:s + chunk]), dtype=torch.float64)
         u[s:s + chunk] = transform.forward(x, mask[s:s + chunk])[0].float()
     cond = layout.assemble(data["theta"], list(PARAMETERS),
-                           context=data["n_constituents"][:, None].astype(np.float64))
+                           context=context_for_layout(data, layout),
+                           context_names=layout.known)
     out = {"u": u, "mask": mask, "cond": torch.from_numpy(cond)}
     if weights:
         out["w"] = torch.as_tensor(np.asarray(data["weight"]), dtype=torch.float32)
@@ -111,20 +151,33 @@ def sample_setup(config):
 
 def build_surrogate(args, train, val, out, log=print):
     backend, sel, box = sample_setup(args.config)
+    is_v3 = backend.endswith("-v3")
     lo, hi = box_arrays(box)
-    transform = FeatureTransform.fit(
-        FEATURES, [sel.constituent_abs_eta_max, sel.constituent_abs_phi_max_rad, None],
-        train["x"], train["mask"], chunk=200_000)
-    base = GaussianBase.standard(3)
-    layout = layout_with_multiplicity(list(PARAMETERS), lo, hi)
-    mlayout = ConditionLayout.from_bounds(list(PARAMETERS), lo, hi)
+    if is_v3:
+        # docs/FORMAT_JEWEL_V3.md: the paper's minimal feature set is already centred with
+        # O(1) variance, so no affine standardisation is fit -- an identity transform keeps
+        # FlowSurrogate/train_flow unchanged while matching that no-op exactly.
+        features = FEATURES_V3
+        transform = FeatureTransform(features, [None] * len(features), [0.0] * len(features),
+                                     [1.0] * len(features))
+        layout = layout_with_multiplicity(list(PARAMETERS), lo, hi, known_context={"jet_pt": None})
+        mlayout = layout_for_multiplicity_model(list(PARAMETERS), lo, hi, known_context={"jet_pt": None})
+    else:
+        features = FEATURES
+        transform = FeatureTransform.fit(
+            features, [sel.constituent_abs_eta_max, sel.constituent_abs_phi_max_rad, None],
+            train["x"], train["mask"], chunk=200_000)
+        layout = layout_with_multiplicity(list(PARAMETERS), lo, hi)
+        mlayout = ConditionLayout.from_bounds(list(PARAMETERS), lo, hi)
+    base = GaussianBase.standard(len(features))
     dev = resolve_device(args.device)
 
     t0 = time.time()
-    mult = MultiplicityModel(len(PARAMETERS), sel.max_constituents, hidden=args.mult_hidden,
+    mult = MultiplicityModel(mlayout.dim, sel.max_constituents, hidden=args.mult_hidden,
                              depth=args.mult_depth)
     mult.layout = mlayout
-    mcond = lambda d: torch.from_numpy(mlayout.assemble(d["theta"], list(PARAMETERS)))  # noqa: E731
+    mcond = lambda d: torch.from_numpy(mlayout.assemble(  # noqa: E731
+        d["theta"], list(PARAMETERS), context=context_for_layout(d, mlayout), context_names=mlayout.known))
     weighted = getattr(args, "weight_mode", "none") != "none"
     mult, mhist = train_multiplicity(mult, mcond(train), train["n_constituents"], mcond(val),
                                      val["n_constituents"], steps=args.mult_steps,
@@ -135,11 +188,11 @@ def build_surrogate(args, train, val, out, log=print):
     mhist["seconds"] = time.time() - t0
 
     if args.arch == "set":
-        model = SetFlowVelocity(3, layout.dim, dim=args.dim, depth=args.depth, heads=args.heads,
-                                cond_embed=True, cond_to_particles=True)
+        model = SetFlowVelocity(len(features), layout.dim, dim=args.dim, depth=args.depth,
+                                heads=args.heads, cond_embed=True, cond_to_particles=True)
     else:
-        model = SmoothPETVelocity(3, layout.dim, dim=args.dim, depth=args.depth, heads=args.heads,
-                                  local_dim=args.local_dim)
+        model = SmoothPETVelocity(len(features), layout.dim, dim=args.dim, depth=args.depth,
+                                  heads=args.heads, local_dim=args.local_dim)
     opts = TrainOptions(**{f.name: getattr(args, f.name) for f in fields(TrainOptions)
                            if hasattr(args, f.name)})
     tr, va = prepare(train, transform, layout, weights=weighted), prepare(val, transform, layout, weights=weighted)
@@ -220,8 +273,14 @@ def main(argv=None):
     start = time.time()
     host = host_info()  # source revision at start (the checkout may change while training)
     log(f"source {host['source_revision']} dirty={host['source_dirty']} host {host['host']}")
-    tp, vp = shard_paths(args.data_dir, "train"), shard_paths(args.val_dir or args.data_dir, "validation")
-    train, val = read_shards(tp), read_shards(vp)
+    backend, _, _ = sample_setup(args.config)
+    if backend.endswith("-v3"):
+        from omnilearned.sbi.jewel.v3format import read_v3_shards, shard_paths_v3
+        paths, reader = shard_paths_v3, read_v3_shards
+    else:
+        paths, reader = shard_paths, read_shards
+    tp, vp = paths(args.data_dir, "train"), paths(args.val_dir or args.data_dir, "validation")
+    train, val = reader(tp), reader(vp)
     log(f"data: train {train['x'].shape} from {len(tp)} shards, val {val['x'].shape} "
         f"from {len(vp)} shards, {time.time() - start:.1f}s")
     data = {"train": [{"file": str(p), "sha256": file_sha256(p)} for p in tp],

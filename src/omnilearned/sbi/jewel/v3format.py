@@ -101,6 +101,67 @@ def read_jets(path):
     return out
 
 
+def shard_paths_v3(directory, split):
+    """Merged v3 file paths of a split, from its index (hash-checked) or by name."""
+    directory = Path(directory)
+    idx = directory / f"index_{split}.json"
+    if idx.exists():
+        return [directory / f["file"] for f in json.loads(idx.read_text())["files"]]
+    return sorted(directory.glob(f"{split}_*.h5"))
+
+
+def read_v3_shards(paths, trim=True):
+    """Concatenated training arrays from merged v3 files: x, mask, n_constituents, theta,
+    global, global_names, event_id, group_id, point_id, weight, pthat (if present).
+
+    ``x`` is trimmed to the four *modeled* kinematic features (``FEATURES[:4]``: deta, dphi,
+    log_pt, log_e) -- column 4, the constituent PDG code, is not part of the density the flow
+    learns (the three-factor likelihood in docs/PLAN_JEWEL_V3.md never conditions on it) and is
+    dropped here so callers never have to know the on-disk layout carries a fifth column.
+    """
+    paths = [Path(p) for p in paths]
+    parts = [read_jets(p) for p in paths]
+    if not parts:
+        raise ValueError("no v3 shard files given")
+    names = parts[0]["feature_names"]
+    if any(p["feature_names"] != names for p in parts):
+        raise ValueError("shards disagree on feature_names")
+    kin = [names.index(n) for n in FEATURES[:4]]  # deta, dphi, log_pt, log_e; pid excluded
+    width = max(1, max(int(p["mask"].sum(1).max()) if p["mask"].size else 1 for p in parts)) \
+        if trim else max(p["data"].shape[1] for p in parts)
+
+    def pad_or_trim(a, w):
+        if a.shape[1] == w:
+            return a
+        if a.shape[1] > w:
+            return a[:, :w]
+        z = [(0, 0), (0, w - a.shape[1])] + [(0, 0)] * (a.ndim - 2)
+        return np.pad(a, z)
+
+    out = {k: [] for k in ("x", "mask", "n_constituents", "global", "event_id",
+                          "group_id", "point_id", "weight")}
+    has_pthat = all("pthat" in p for p in parts)
+    if has_pthat:
+        out["pthat"] = []
+    global_names = None
+    for p in parts:
+        out["x"].append(pad_or_trim(p["data"][..., kin], width))
+        out["mask"].append(pad_or_trim(p["mask"], width))
+        out["n_constituents"].append(p["mask"].sum(1).astype(np.int64))
+        out["global"].append(p["global"])
+        global_names = p["global_names"]
+        out["event_id"].append(p["event_id"])
+        out["group_id"].append(p["group_id"])
+        out["point_id"].append(p["point_id"])
+        out["weight"].append(p["weight"])
+        if has_pthat:
+            out["pthat"].append(p["pthat"])
+    out = {k: np.concatenate(v) for k, v in out.items()}
+    out["global_names"] = global_names
+    out["theta"] = np.concatenate([p["theta"] for p in parts])
+    return out
+
+
 def dataset_spec(cfg, split, files, design=None):
     """The self-describing sidecar for a dataset root.
 

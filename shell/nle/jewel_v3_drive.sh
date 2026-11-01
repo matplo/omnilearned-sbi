@@ -73,15 +73,18 @@ for w in $(seq 1 "$WAVES"); do
   $GEN topup --dir "$D" --target-jets "$TARGET" 2>&1 | tail -2 | tee -a "$D/logs/drive.log"
 done
 
-log "index + merge"
-$GEN index --dir "$D" 2>&1 | tail -1 | tee -a "$D/logs/drive.log"
-$RUN - "$D" "$JEST_NLE_ROOT/data/$DATASET/merged" "$SPLIT" "$CFG" <<'PYEOF' 2>&1 | tail -3 | tee -a "$D/logs/drive.log"
-import sys
-from omnilearned.sbi.jewel import cards
-from omnilearned.sbi.jewel.v3format import merge_v3
-d, out, split, cfgp = sys.argv[1:5]
-merge_v3(d, out, split, target_jets=1_000_000, cfg=cards.load_config(cfgp))
-PYEOF
+log "index + merge (compute node: merge_v3 loads a whole group into memory, which OOM-killed"
+log "  the validation merge -- 1392 shards, 649789 jets -- on the login node, 2026-11-01)"
+MJID=$(sbatch --parsable -A alice -C cpu -q debug -t 00:30:00 -N 1 \
+      -o "$D/logs/merge-%j.log" -J "v3merge-$SPLIT" \
+      "$(dirname "$0")/jewel_v3_merge.sbatch" "$SNAP" "$D" "$JEST_NLE_ROOT/data/$DATASET/merged" "$SPLIT" "$CFG")
+if [ -n "$MJID" ]; then
+  log "merge job $MJID submitted, waiting"
+  while squeue -h -j "$MJID" 2>/dev/null | grep -q .; do sleep 60; done
+  tail -5 "$D/logs/merge-$MJID.log" | tee -a "$D/logs/drive.log"
+else
+  log "merge sbatch FAILED to submit"
+fi
 if [ -f "$JEST_NLE_ROOT/data/$DATASET/merged/index_${SPLIT}.json" ]; then
   log "DONE: merged/index_${SPLIT}.json written"
   touch "$D/DONE"
