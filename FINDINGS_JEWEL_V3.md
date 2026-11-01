@@ -80,3 +80,35 @@ submitted Slurm jobs themselves were unaffected, but the wave→topup→merge bo
 each time until manually relaunched (idempotent, so safe, but costs wall-clock before someone
 notices). `setsid` alone did not change the behaviour between the two session endings tested
 here; worth a method change (e.g. a persistent `screen`/`tmux` session) if it recurs.
+
+## P2 correction: the "2x node-hours" above was mostly a crash, not low acceptance
+
+The section above took the task-count growth at face value — `topup`'s own acceptance math,
+which only sees successful manifests. It does not see failed attempts, and there were far
+more of those than successes: `event_jets` left its rejection reason `None` whenever every
+clustered jet candidate in an event was below `min_constituents` (a common, not exotic, event
+shape — nothing exotic about two sub-threshold candidates). `run_task`'s
+`pre_reject[why] += 1` then raised `KeyError(None)`, and because the exception propagates out
+of the *whole* per-event loop, it discarded every event already processed in that task, not
+just the offending one.
+
+Measured failure rate before the fix: **57 593 failed attempts against 9576 successful train
+manifests (86%), 41 057 against 5458 fidelity manifests (88%), 12 721+ for validation, and
+enough of test's attempts that it made no net progress for the final ~3 hours of its run.**
+The "2x node-hours" estimate was therefore mostly CPU spent on tasks that crashed partway
+through a full JEWEL run and wrote nothing — not jets selected at a worse rate than planned.
+True per-event acceptance is not yet known; it can only be measured honestly after a run with
+the fix in.
+
+Fixed in `jets.py` (`event_jets` now sets `reason = "too_few_constituents"` or `"no_jet"`
+before returning whenever `recs` is empty, mirroring the singular `event_jet()` helper's
+existing `why or "no_jet"` guard, which this plural path should have had from the start) and
+defensively in `generate.py`'s call site. Regression test in `test_jewel_inclusive.py`.
+
+**Action taken:** cancelled every running `jv3-*` farm job and the four driver loops (all on
+the pre-fix snapshot), cleared claim locks, cut a new snapshot from the fix, and relaunched
+train/fidelity/validation/test from it. Already-written manifests are untouched — nothing
+generated so far is discarded, only resumed. Validation's merge (649 789 jets, 125/128
+points, done via the new compute-node `jewel_v3_merge.sbatch` after the login-node OOM noted
+above) stands as the last pre-fix checkpoint; worth a top-up pass once post-fix capacity is
+available, since 3 points have no jets at all yet.
