@@ -251,11 +251,22 @@ def merge_v3(directory, out, split, target_jets=1_000_000, cfg=None, design=None
     files, total = [], 0
     for gi, grp in enumerate(groups):
         parts = [read_jets(directory / s["file"]) for s in grp]
-        P = max(p["data"].shape[1] for p in parts)
+        # The group's REAL max, not the stored width: a per-task shard's own max_constituents
+        # was, before jets.select_records_v3 was fixed to pad to its task's real max (2026-11-
+        # 01), always the configured selection cap (1024) regardless of how few constituents
+        # any jet actually had (measured max ~148). Padding every already-over-wide shard back
+        # up to that same 1024 here -- which `max(p["data"].shape[1] ...)` did -- just carried
+        # the blow-up through: merge_v3 OOM-killed on a login node and ran a fidelity merge
+        # past a 30-minute compute-node walltime at that width. Trimming to the real max here
+        # is a free fix for every already-written shard, not only shards written after the
+        # writer-side fix.
+        P = max(1, max(int(p["mask"].sum(1).max()) if p["mask"].size else 0 for p in parts))
 
         def pad(a, width=P):
             if a.shape[1] == width:
                 return a
+            if a.shape[1] > width:
+                return a[:, :width]  # safe: every real constituent is left-packed within width
             z = [(0, 0), (0, width - a.shape[1])] + [(0, 0)] * (a.ndim - 2)
             return np.pad(a, z)
 

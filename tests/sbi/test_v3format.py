@@ -175,6 +175,46 @@ def test_worker_end_to_end_writes_a_valid_v3_file(tmp_path):
         assert np.unique(got["group_id"]).size <= got["group_id"].size
 
 
+def test_merge_trims_to_the_real_max_not_the_stored_width(tmp_path):
+    """Regression: merge_v3 padded a group to the WIDEST STORED shard, not the real max.
+
+    Every v3 shard was written at width = sel.max_constituents (1024) before jets.py's
+    select_records_v3 was fixed (2026-11-01) to pad to its own task's real max instead. Even
+    after that writer fix, merge_v3 itself computed the group width from `.shape[1]` (the
+    stored width) rather than from the mask -- so merging shards still written wide (anything
+    generated before the writer fix landed) carried the blow-up through regardless. This is
+    what OOM-killed a 650k-jet merge on a login node and ran a 2.75M-jet merge past a 30-
+    minute compute-node walltime.
+    """
+    import json
+
+    from omnilearned.sbi.jewel.v3format import merge_v3
+
+    src = tmp_path / "tasks"
+    src.mkdir()
+    stored_width, real_max = 20, 5
+    d = _jets(n=6, P=stored_width, seed=11)
+    for i in range(len(d["mask"])):  # force every jet's real constituent count <= real_max
+        k = min(int(d["mask"][i].sum()), real_max)
+        d["mask"][i] = False
+        d["mask"][i, :k] = True
+        d["x"][i, k:] = 0.0
+    assert d["mask"].sum(1).max() <= real_max and d["x"].shape[1] == stored_width
+    sha = write_jets(src / "test_p00000_c000.h5", **d)
+    (src / "index_test.json").write_text(json.dumps(
+        {"schema": "jewel-index-v1", "split": "test",
+         "shards": [{"file": "test_p00000_c000.h5", "sha256": sha, "point_id": 0, "chunk": 0,
+                     "n_jets": 6, "events": None}], "tasks_done": 1}))
+
+    out = tmp_path / "merged"
+    idx = merge_v3(src, out, "test", target_jets=100, log=lambda *a: None)
+    got = read_jets(out / idx["files"][0]["file"])
+    assert got["data"].shape[1] == real_max, \
+        f"merged width {got['data'].shape[1]} must be the real max {real_max}, not {stored_width}"
+    np.testing.assert_array_equal(got["data"], d["x"][:, :real_max].astype(np.float32))
+    np.testing.assert_array_equal(got["mask"], d["mask"][:, :real_max])
+
+
 def test_merge_keeps_points_whole_and_normalises_weights_per_point(tmp_path):
     """Merging must not split a theta point across files.
 

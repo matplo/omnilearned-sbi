@@ -228,7 +228,16 @@ def select_records_v3(records, sel):
     2 log pT (its validity marker), 3 log E clipped to >= log pT, 4 the PDG id at ``pid_idx``.
     Padded slots are exactly zero in every column.
     """
-    eta, phi, pt, ene, pid, mask = pack_v3(records, sel.max_constituents)
+    # Pad to this TASK's real max, not the configured cap: pack_v3 used sel.max_constituents
+    # (1024) unconditionally, so every shard stored every jet at width 1024 regardless of its
+    # actual constituent count (measured per-jet max ~148; one task's real max here was 75).
+    # merge_v3 pads a whole group to its widest shard, so this cost a ~13x memory blow-up at
+    # merge time that OOM-killed validation's merge on a login node and fidelity's on a
+    # compute node (2026-11-01) -- the cap is a safety ceiling the data should never reach,
+    # not the width to actually store. select_sets's cuts compare count to sel.max_constituents
+    # directly, not to this array's width, so narrowing it changes no selection outcome.
+    width = min(sel.max_constituents, max((len(r["pt"]) for r in records), default=1))
+    eta, phi, pt, ene, pid, mask = pack_v3(records, width)
     ok, reason, r = select_sets(eta, phi, pt, mask, sel)
     names = [None if k < 0 else REJECTION_REASONS[k] for k in reason]
     lpt = np.log(np.where(mask, pt, 1.0))

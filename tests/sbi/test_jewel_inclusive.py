@@ -194,6 +194,31 @@ def _no_jet_event():
             "number": 1, "centrality": 10.0, "weight": 1.0, "scale": 150.0}
 
 
+def test_select_records_v3_pads_to_the_real_max_not_the_configured_cap():
+    """Regression: v3 shards were stored at width = sel.max_constituents (1024) always.
+
+    merge_v3 pads a whole group to its widest shard, so every shard being stored at the
+    configured ceiling rather than its own real max turned a ~150-constituent jet population
+    into a ~1024-wide array at merge time -- a ~7x memory blow-up that OOM-killed validation's
+    merge on a login node and ran a fidelity merge past its 30-minute compute-node walltime
+    (2026-11-01). select_sets compares constituent COUNT to sel.max_constituents directly, not
+    to this array's width, so narrowing it must not change any selection outcome.
+    """
+    pytest.importorskip("hepyy")
+    ev = _two_jet_event()  # jets of 12 and 10 real constituents
+    cfg = _cfg("inclusive")
+    sel = jets.selection_from_config(cfg)
+    assert sel.max_constituents == 512  # the configured ceiling this must NOT pad to
+    recs, why, diags, _ = jets.event_jets(ev, cfg, sel)
+    assert why is None and len(recs) >= 2
+
+    ok, reasons, r, x, mask = jets.select_records_v3(recs, sel)
+    real_max = max(len(rec["pt"]) for rec in recs)
+    assert x.shape[1] == real_max < sel.max_constituents
+    assert mask.sum(1).tolist() == [len(rec["pt"]) for rec in recs]
+    assert ok.sum() == len(recs)  # both real jets pass selection, same as before narrowing
+
+
 def test_event_jets_reports_too_few_constituents_not_none():
     """Regression: every candidate jet sub-threshold must set a real rejection reason.
 
