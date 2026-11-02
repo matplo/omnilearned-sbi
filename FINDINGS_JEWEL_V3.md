@@ -112,3 +112,36 @@ generated so far is discarded, only resumed. Validation's merge (649 789 jets, 1
 points, done via the new compute-node `jewel_v3_merge.sbatch` after the login-node OOM noted
 above) stands as the last pre-fix checkpoint; worth a top-up pass once post-fix capacity is
 available, since 3 points have no jets at all yet.
+
+**Confirmed fixed, not just fixed-in-theory:** ~30-60k `KeyError(None)` entries kept
+appearing in `failures.log` for an hour or so *after* the relaunch, which first looked like
+the fix hadn't taken. It had: every one of those post-relaunch failures stopped by
+~15:52 — hours before `squeue`/`pgrep` showed anything still running on the old snapshot —
+consistent with at least one pre-fix farm array element (4 h walltime) that `scancel`/`pkill`
+missed, running to its own natural end rather than the fix being incomplete. Confirmed
+directly: pulled one exact failing task (`train_p00390_c050`, theta/njob/nevent from
+`tasks.json`) and reran `generate.run_task` on it standalone against the fixed snapshot --
+`SUCCESS 400 997`, no exception. Zero new failures of any kind since.
+
+## P2: shards and merges were padded to the configured cap, not the real max constituent count
+
+A second, independent memory bug, found while retrying train/fidelity's merges: every v3
+shard was written at width `sel.max_constituents` (1024) regardless of its real constituent
+count (measured per-jet max ~148, one task's actual max 75) -- `jets.select_records_v3`
+passed the configured cap straight to `pack_v3` unconditionally. `merge_v3` then computed its
+output width from the *stored* shard width rather than the real per-jet max, carrying the
+blow-up through. Together these turned a ~150-wide jet population into a ~1024-wide array at
+merge time (~7x memory), which is what OOM-killed validation's 650k-jet merge on a login node
+and ran a fidelity 2.75M-jet merge past a 30-minute compute-node walltime. Fixed in both
+places: the writer now pads to the task's own real max (capped at `sel.max_constituents`,
+never above it), and `merge_v3` now computes and trims to the group's real max via the mask
+rather than trusting the stored width -- the second fix alone unblocks every already-written
+shard without regenerating anything, since it works regardless of how wide the input happens
+to be stored. Regression tests in `test_jewel_inclusive.py` (writer) and `test_v3format.py`
+(merge trim).
+
+**Driver hygiene note:** the farm's `#SBATCH -o %x-%A_%a.out` default is a path relative to
+`sbatch`'s own working directory, which was the worktree when these jobs were launched by
+hand rather than through a job already running from a snapshot -- left ~30 stray `.out` files
+in the worktree, cleaned up (not committed; nothing in `.gitignore` currently catches this
+pattern, worth adding if it recurs).
