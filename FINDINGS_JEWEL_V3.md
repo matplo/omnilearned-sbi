@@ -145,3 +145,43 @@ to be stored. Regression tests in `test_jewel_inclusive.py` (writer) and `test_v
 hand rather than through a job already running from a snapshot -- left ~30 stray `.out` files
 in the worktree, cleaned up (not committed; nothing in `.gitignore` currently catches this
 pattern, worth adding if it recurs).
+
+## P2: two more corrupted the merge rather than the data, both found by manual inspection
+
+1. **One empty manifest crashed `write_index` for the whole split.** A worker killed mid-
+   write (the scancel/pkill cleanup above, or a farm wave hitting its walltime) can leave an
+   empty `.json` manifest. `work()`'s own "already done" check is bare file existence, so
+   that task was permanently stuck (never retried) AND every future `write_index` call for
+   the whole split crashed with a bare `JSONDecodeError` on the first bad file it hit. Hit
+   once: `train_p00110_c021.json`, 0 bytes. `write_index` now deletes a corrupt manifest and
+   logs a warning instead of raising, making the task claimable again. Regression test in
+   `test_jewel.py`.
+
+2. **`dataset.json` only ever described the split that merged last.** Four splits share one
+   `merged/` root; `write_dataset_spec` wrote the sidecar fresh every call, so train,
+   fidelity, validation and test each clobbered the previous split's entry. Found after all
+   four had genuinely finished: `dataset.json` said `"split": "validation"` with no trace the
+   other three ever existed, even with their files sitting right next to it on disk. Per-split
+   fields now accumulate under a `splits` dict; regenerated the live sidecar from the four
+   `index_<split>.json` files once fixed (`splits in sidecar: ['fidelity', 'test', 'train',
+   'validation']`, confirmed). Regression test in `test_v3format.py`.
+
+   Also: the 30-minute debug-QOS walltime, adequate for the smaller splits, was never enough
+   for train's merge (22 809 shards: ~hashing alone took most of a debug-QOS slot). Merges
+   now go through `-q regular -t 02:00:00`+ rather than `-q debug -t 00:30:00`; train's own
+   merge needed ~2 h wall end to end (index + 11 output groups) even after the width fix.
+
+## P2 generation: complete
+
+All four splits merged and verified, final counts (all exceed their plan targets):
+
+| split | jets | files | θ points |
+|---|---|---|---|
+| train | 10 705 283 | 11 | 512 / 512 |
+| fidelity | 2 751 253 | 3 | 128 / 128 |
+| validation | 653 086 | 1 | 128 / 128 |
+| test | 215 400 | 1 | 4 / 4 (the withheld holdout θ) |
+
+P3 (training) can start: `omnilearned.sbi.toy.train` already reads these files directly via
+`jewel.v3format.read_v3_shards`/`shard_paths_v3` (wired in before generation finished, see
+the P3 entry above), conditions on jet_pt, and applies no feature standardisation.

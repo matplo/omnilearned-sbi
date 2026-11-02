@@ -10,20 +10,20 @@ Brief: `docs/PLAN_JEWEL_V3.md`. Format: `docs/FORMAT_JEWEL_V3.md`. Log: `FINDING
 ## Current state
 
 ```
-PHASE:        P1 done. P2 relaunched 2026-11-01 ~12:30 from snapshot 18275284 after fixing
-              the event_jets KeyError(None) bug (86-88% of all task attempts were crashing).
-              P3 training code (jet_pt conditioning, no standardisation) written, tested.
-NEXT ACTION:  snapshot a clean commit, then one jewel_v3_drive.sh per split:
-                SNAP=$(shell/nle/snapshot.sh)
-                nohup shell/nle/jewel_v3_drive.sh $SNAP train      20000 8 4 > .../train.log 2>&1 &
-                nohup shell/nle/jewel_v3_drive.sh $SNAP fidelity   20000 8 4 > ... &
-                nohup shell/nle/jewel_v3_drive.sh $SNAP validation  5000 4 3 > ... &
-                NEVENT=5000 nohup shell/nle/jewel_v3_drive.sh $SNAP test 50000 2 3 > ... &
-              NEVENT=5000 on `test` is required: 50k jets/point needs 125 tasks of 1000
-              events, over the chunks_per_point cap of 100 (topup now warns if it binds).
-RUNNING:      full tests/sbi on a compute node
-DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}, merged/
-SNAPSHOT:     made in P2 from a clean commit -- never hand sbatch a worktree path
+PHASE:        P2 done (2026-11-02). All four splits merged and verified:
+                train 10 705 283 jets / 512 pts (11 files), fidelity 2 751 253 / 128 (3 files),
+                validation 653 086 / 128 (1 file), test 215 400 / 4 holdout pts (1 file).
+              P3 training code (jet_pt conditioning, no standardisation) written, tested,
+              but not yet run on the real merged data -- that is the next action.
+NEXT ACTION:  P3 -- train the surrogate on $JEST_NLE_ROOT/data/jewel_v3/merged/{train,
+              validation}. toy.train dispatches on backend id automatically (ends "-v3" ->
+              jewel.v3format reader, jet_pt known context, identity feature transform); see
+              docs/PLAN_JEWEL_V3.md P3 for the run plan (400k x 3 seeds + 200k control, 4 GPUs).
+RUNNING:      nothing
+DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
+              + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
+              four splits under a `splits` key -- see FORMAT doc §4)
+SNAPSHOT:     d5a22c5 is the latest with every P2 fix in; always cut a fresh one for new work
 BLOCKED ON:   nothing
 ```
 
@@ -31,8 +31,8 @@ BLOCKED ON:   nothing
 |---|---|---|
 | P0 | branch, worktree, docs | **done** |
 | P1 | config v3, Δη/log E/pid, v3 format + sidecar | **done** |
-| P2 | generation (train/val/fidelity/test) **with event stores** | starting |
-| P3 | training (jet_pT conditioning, no standardisation) | not started |
+| P2 | generation (train/val/fidelity/test) **with event stores** | **done** |
+| P3 | training (jet_pT conditioning, no standardisation) | code written, not yet run |
 | P4 | fidelity: gate + ptbins, weighted estimators | not started |
 | P5 | NLE numerics (rule 6) | not started |
 | P6 | three-factor likelihood + Jacobian + scan | not started |
@@ -112,3 +112,20 @@ Do not commit data, checkpoints, run trees, figures or binaries; never force-pus
     cap renumbers every NJOB stream).
 13. **`design_points` had no `test` case.** The withheld θ now come from `[holdout]` via
     `holdout_points`, so closure data cannot be mistyped on a command line.
+14. **A sub-threshold event (every candidate jet below `min_constituents`) left `event_jets`'s
+    rejection reason `None`**, crashing `run_task` and discarding the whole task's output, not
+    just that event's. Not exotic -- 86-88% of all P2 task attempts hit this before the fix.
+    Fixed; see FINDINGS.
+15. **Shards and merges were padded to `sel.max_constituents` (1024), not the real per-jet
+    max (~150-230)** -- a ~5-7x memory blow-up that OOM-killed a 650k-jet merge on a login
+    node and ran a 2.75M-jet merge past a 30-min compute-node walltime. Fixed at both the
+    writer and `merge_v3`; the merge-side fix alone unblocks already-written wide shards.
+16. **One corrupt (0-byte) manifest crashed `write_index` for the ENTIRE split**, and the
+    task behind it was stuck forever (`work()`'s "already done" check is bare file
+    existence). `write_index` now deletes a corrupt manifest and continues.
+17. **`dataset.json` described only whichever split merged last** -- four splits share one
+    `merged/` root, and the sidecar write was a flat overwrite. Per-split fields now
+    accumulate under `splits.<name>`.
+18. **The debug-QOS 30-min walltime was never enough for a real merge.** Train's own merge
+    (22 809 shards) needed ~2 h end to end even after the width fix (~30-50 min just to hash
+    every shard at index time). Merge jobs go through `-q regular -t 02:00:00`+ now.
