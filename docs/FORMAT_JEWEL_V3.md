@@ -135,9 +135,18 @@ with no JEWEL CPU. ≈24 kB/event.
 
 At each dataset root, with the same content mirrored into the index JSON that code reads:
 schema version and backend id; the full `[jewel]`, `[subtraction]`, `[selection]` blocks;
-column names, definitions and units for `data` and `global`; the weighting convention; the θ
-design with its seed and the reserved settings; and the file list with per-file jet counts and
-sha256. The intent is that a file can be understood without the generating code.
+column names, definitions and units for `data` and `global`; the weighting convention; and
+the file list with per-file jet counts and sha256. The intent is that a file can be
+understood without the generating code.
+
+Fields shared across a backend (schema, backend id, generator/subtraction/selection,
+columns, weighting, identifiers) sit at the top level, refreshed from whichever split wrote
+last. Per-split fields (the θ design with its seed and reserved settings, and the file list)
+accumulate under `splits.<name>` rather than being overwritten — train, validation, fidelity
+and test all merge into one `merged/` root, and a flat single-split sidecar would otherwise
+describe only whichever split happened to merge last (found 2026-11-01, after all four
+splits of a production run had merged: `dataset.json` said `"split": "validation"` with no
+trace that the other three had ever existed).
 
 ## 5. Reading a file
 

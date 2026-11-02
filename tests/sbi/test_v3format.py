@@ -262,3 +262,44 @@ def test_merge_keeps_points_whole_and_normalises_weights_per_point(tmp_path):
         for q in np.unique(read_jets(out / fspec["file"])["point_id"]):
             where.setdefault(int(q), []).append(fspec["file"])
     assert all(len(v) == 1 for v in where.values()), where
+
+
+def test_dataset_spec_accumulates_across_splits_sharing_one_root(tmp_path):
+    """Regression: four splits share one merged/ root, and write_dataset_spec clobbered it.
+
+    Each merge_v3(..., cfg=...) call used to overwrite dataset.json wholesale with just that
+    one split's files -- after all four splits of a real production run had merged, the
+    sidecar's top-level "split" said "validation" with no trace that train/fidelity/test had
+    ever existed. Per-split fields now accumulate under a "splits" dict instead.
+    """
+    import json
+    from pathlib import Path
+
+    from omnilearned.sbi.jewel import cards
+    from omnilearned.sbi.jewel.v3format import merge_v3
+
+    cfg = cards.load_config(Path(__file__).resolve().parents[2] / "configs" / "jewel-2.6.0-cs-v3.toml")
+    out = tmp_path / "merged"
+
+    def _one_point_split(split, pid, seed):
+        src = tmp_path / f"{split}_tasks"
+        src.mkdir()
+        d = _jets(n=4, P=6, seed=seed)
+        d["point_id"] = np.full(4, pid, np.int32)
+        name = f"{split}_p{pid:05d}_c000.h5"
+        sha = write_jets(src / name, **d)
+        (src / f"index_{split}.json").write_text(json.dumps(
+            {"schema": "jewel-index-v1", "split": split,
+             "shards": [{"file": name, "sha256": sha, "point_id": pid, "chunk": 0,
+                         "n_jets": 4, "events": None}], "tasks_done": 1}))
+        merge_v3(src, out, split, target_jets=100, cfg=cfg, log=lambda *a: None)
+
+    _one_point_split("train", 0, 1)
+    _one_point_split("validation", 1, 2)
+
+    doc = json.loads((out / "dataset.json").read_text())
+    assert set(doc["splits"]) == {"train", "validation"}
+    assert doc["splits"]["train"]["files"][0]["file"] == "train_00000.h5"
+    assert doc["splits"]["validation"]["files"][0]["file"] == "validation_00000.h5"
+    assert "split" not in doc and "files" not in doc  # no longer a single flat split
+    assert doc["backend"] == cfg["backend"]  # shared fields still present

@@ -201,16 +201,35 @@ def dataset_spec(cfg, split, files, design=None):
 
 
 def write_dataset_spec(root, spec):
-    """Write ``dataset.yaml`` (and ``dataset.json``) at a dataset root."""
+    """Write ``dataset.yaml`` (and ``dataset.json``) at a dataset root.
+
+    Four splits (train/validation/fidelity/test) share one ``merged/`` root, and this is
+    called once per split -- a flat write would have each call's ``spec`` (one split's
+    ``files``) overwrite the previous split's entirely, leaving the sidecar describing only
+    whichever split merged last. (Found 2026-11-01 after all four splits finished: dataset.json
+    said `"split": "validation"` with no trace of train/fidelity/test ever having existed.)
+    Per-split fields (``split``, ``files``, ``design``) accumulate under a ``splits`` dict
+    keyed by split name instead; the remaining fields are shared across splits of one backend
+    and are simply refreshed from the latest call.
+    """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    (root / "dataset.json").write_text(json.dumps(spec, indent=1, default=str))
+    path = root / "dataset.json"
+    doc = json.loads(path.read_text()) if path.exists() else {}
+    splits = doc.get("splits", {})
+    # Upgrade a pre-existing flat (single-split) sidecar in place, rather than lose it.
+    if "split" in doc and doc["split"] not in splits:
+        splits[doc["split"]] = {"files": doc.get("files", []), "design": doc.get("design", {})}
+    splits[spec["split"]] = {"files": spec["files"], "design": spec.get("design", {})}
+    doc = {k: v for k, v in spec.items() if k not in ("split", "files", "design")}
+    doc["splits"] = splits
+    path.write_text(json.dumps(doc, indent=1, default=str))
     try:
         import yaml
-        (root / "dataset.yaml").write_text(yaml.safe_dump(spec, sort_keys=False))
+        (root / "dataset.yaml").write_text(yaml.safe_dump(doc, sort_keys=False))
     except ImportError:          # yaml is a convenience; the JSON is what code reads
         pass
-    return root / "dataset.json"
+    return path
 
 
 def plan_merge_groups(shards, target_jets=1_000_000):
