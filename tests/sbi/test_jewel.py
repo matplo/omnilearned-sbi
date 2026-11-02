@@ -202,6 +202,31 @@ def test_worker_end_to_end_with_fake_jewel(fake_cfg, tmp_path):
     assert sum(1 for _ in hepmc.read_events(d / "hepmc" / "probe_p00000_c000.hepmc.gz")) == 40
 
 
+def test_write_index_deletes_a_corrupt_manifest_instead_of_crashing(fake_cfg, tmp_path):
+    """Regression: a truncated manifest (worker killed mid-write) crashed the whole index.
+
+    work()'s "already done" check is bare file existence, so a corrupt-but-present manifest
+    blocked that task forever AND, before this fix, raised a bare JSONDecodeError out of
+    write_index on the very first call -- one bad file (2026-11-01: train_p00110_c021.json,
+    0 bytes, left by a scancel/pkill hitting a worker mid-write) blocked indexing the whole
+    split. Deleting the corrupt file makes the task claimable again instead.
+    """
+    pytest.importorskip("hepyy")
+    from omnilearned.sbi.jewel import generate
+
+    d = tmp_path / "farm"
+    generate.plan(fake_cfg, "probe", d, chunks=2, theta=[[4.5, 0.45, 0.65]], nevent=10)
+    assert generate.work(d, scratch=str(tmp_path), log=lambda m: None) == 2
+    (d / "probe_p00000_c001.json").write_text("")  # truncated mid-write, same as the real case
+
+    msgs = []
+    idx = generate.write_index(d, log=msgs.append)
+    assert idx["tasks_done"] == 1  # only the good task counted
+    assert any("corrupt" in m and "probe_p00000_c001" in m for m in msgs), msgs
+    assert not (d / "probe_p00000_c001.json").exists()  # deleted, not left to block forever
+    assert generate.work(d, scratch=str(tmp_path), log=lambda m: None) == 1  # now claimable again
+
+
 def test_worker_records_timeouts_and_continues(fake_cfg, tmp_path):
     from omnilearned.sbi.jewel import generate
 

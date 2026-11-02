@@ -487,7 +487,7 @@ def work(directory, scratch=None, timeout=None, log=print, max_tasks=None):
     return done
 
 
-def write_index(directory):
+def write_index(directory, log=print):
     """Merge task manifests into ``index_<split>.json`` (several chunks per point allowed)."""
     directory = Path(directory)
     doc = load(directory)
@@ -496,8 +496,18 @@ def write_index(directory):
         p = directory / f"{t['name']}.json"
         if not p.exists():
             continue
-        with open(p) as f:
-            m = json.load(f)
+        try:
+            with open(p) as f:
+                m = json.load(f)
+        except json.JSONDecodeError:
+            # A worker killed mid-write (scancel/pkill, a wave hitting its walltime) can leave
+            # an empty or truncated manifest. work()'s own "already done" check is bare file
+            # existence, so a corrupt-but-present file would otherwise block that task forever
+            # AND crash every future index attempt for the whole split on one bad file.
+            # Deleting it makes the task claimable again instead.
+            p.unlink()
+            log(f"WARNING: {p.name} was corrupt (truncated write) -- deleted, will be retried")
+            continue
         if file_sha256(directory / m["files"]["jets"]) != m["files"]["jets_sha256"]:
             raise ValueError(f"{m['files']['jets']} does not match its manifest hash")
         mans.append(m)
