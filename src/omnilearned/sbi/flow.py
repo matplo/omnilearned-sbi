@@ -19,6 +19,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import time
 from dataclasses import dataclass, asdict
 
@@ -472,7 +473,8 @@ def minibatch_sampler(lengths, batch_size, buckets=0, generator=None, weights=No
     return draw
 
 
-def train_flow(model, base, train, val, options, log=print, on_best=None):
+def train_flow(model, base, train, val, options, log=print, on_best=None,
+              resume_from=None, resume_path=None, stop_after_step=None):
     """Train a velocity model by flow matching; select by validation loss only.
 
     Args:
@@ -481,6 +483,18 @@ def train_flow(model, base, train, val, options, log=print, on_best=None):
             ``mask`` [N, P] and ``cond`` [N, C].
         on_best: callback ``(ema_model, step, val_loss)`` when validation
             improves (e.g. to save a checkpoint).
+        resume_from: path to a ``resume_path`` file from an earlier, interrupted call with
+            the same ``options`` (steps included -- it is the target, not an increment);
+            continues from its exact step, optimizer, scheduler and minibatch-stream state.
+        resume_path: if given, a full resumable snapshot (model, EMA, optimizer, scheduler,
+            RNG stream, running history) is written here at every validation point, not only
+            on an improving one -- unlike ``on_best``'s checkpoint, which only ever reflects
+            the best step so far and carries no optimizer state to continue training from.
+        stop_after_step: return early once this many steps are done (after that step's
+            checkpoint/resume_path write), leaving ``options.steps`` -- and so the LR
+            schedule -- unchanged. For stopping cleanly ahead of a walltime limit instead of
+            relying on SIGKILL mid-step; a later call with ``resume_from`` continues to the
+            real target.
     Returns:
         (best EMA model on CPU, history dict)
     """
@@ -493,8 +507,12 @@ def train_flow(model, base, train, val, options, log=print, on_best=None):
     for p in ema.parameters():
         p.requires_grad_(False)
 
-    tr = {k: v.to(device) for k, v in train.items()}
-    va = {k: v.to(device) for k, v in val.items()}
+    # Stay on CPU: a real production train set (e.g. JEWEL v3's 10.7M jets x 225 slots x 4
+    # features) is ~38.5 GiB as float32, and moving it to the GPU wholesale left no room for
+    # the model, optimizer or activations even on a 40 GiB A100 -- OOM on the very first
+    # validation batch (2026-11-03). Only the current minibatch (training) or the small
+    # fixed validation subsets (below) are ever transferred.
+    tr, va = train, val
     ntr, nva = tr["u"].shape[0], va["u"].shape[0]
     mode = options.weight_mode
     if mode not in ("none", "loss", "sample"):
@@ -504,15 +522,19 @@ def train_flow(model, base, train, val, options, log=print, on_best=None):
     wtr = tr.get("w") if mode == "loss" else None
     wva = va.get("w") if mode != "none" else None
 
-    # Fixed validation noise/time so the selection metric is comparable.
+    # Fixed validation noise/time so the selection metric is comparable. Built once: these
+    # val_batches x vb rows (a few thousand total) are the only validation data ever resident
+    # on the GPU, not the full validation set.
     vgen = torch.Generator(device="cpu").manual_seed(options.val_seed)
     vb = min(options.batch_size * 4, nva)
     val_sets = []
     for _ in range(options.val_batches):
         idx = torch.randint(0, nva, (vb,), generator=vgen)
         t = torch.rand(vb, generator=vgen)
-        eps = base.sample_like(va["u"][idx].cpu(), va["mask"][idx].cpu(), vgen)
-        val_sets.append((idx.to(device), t.to(device), eps.to(device)))
+        eps = base.sample_like(va["u"][idx], va["mask"][idx], vgen)
+        val_sets.append((va["u"][idx].to(device), va["mask"][idx].to(device),
+                         va["cond"][idx].to(device), t.to(device), eps.to(device),
+                         wva[idx].to(device) if wva is not None else None))
 
     opt = torch.optim.AdamW(model.parameters(), lr=options.lr,
                             weight_decay=options.weight_decay)
@@ -533,19 +555,33 @@ def train_flow(model, base, train, val, options, log=print, on_best=None):
     best = (float("inf"), -1)
     best_state = None
     running = 0.0
+    start_step, elapsed_before = 0, 0.0
+    if resume_from is not None:
+        # weights_only=False: this file is our own optimizer/scheduler state, not external
+        # data -- torch 2.6+ defaults to weights_only=True, which cannot deserialize it.
+        ck = torch.load(resume_from, map_location=device, weights_only=False)
+        model.load_state_dict(ck["model"])
+        ema.load_state_dict(ck["ema"])
+        opt.load_state_dict(ck["opt"])
+        sched.load_state_dict(ck["sched"])
+        gen.set_state(ck["gen_state"])
+        start_step, best, best_state, history = ck["step"], tuple(ck["best"]), ck["best_state"], ck["history"]
+        elapsed_before = ck["elapsed_seconds"]
+        log(f"resumed from {resume_from} at step {start_step}/{options.steps}, "
+            f"best so far {best[0]:.5f} @ {best[1]}, {elapsed_before:.0f}s already elapsed")
     start = time.time()
-    for step in range(options.steps):
+    for step in range(start_step, options.steps):
         model.train()
-        idx = draw().to(device)
+        idx = draw()  # CPU indices: tr is CPU-resident, only this step's slice goes to device
         t = torch.rand(options.batch_size, generator=gen).to(device)
         # Noise is drawn on CPU for device-independent streams; padded
         # entries are masked inside the loss.
         eps = base.sample_like(
             torch.zeros((options.batch_size,) + tuple(tr["u"].shape[1:])), None, gen
         ).to(device)
-        loss = flow_matching_loss(model, tr["u"][idx], tr["mask"][idx],
-                                  tr["cond"][idx], base, t=t, eps=eps,
-                                  weight=None if wtr is None else wtr[idx])
+        loss = flow_matching_loss(model, tr["u"][idx].to(device), tr["mask"][idx].to(device),
+                                  tr["cond"][idx].to(device), base, t=t, eps=eps,
+                                  weight=None if wtr is None else wtr[idx].to(device))
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), options.grad_clip)
@@ -558,26 +594,40 @@ def train_flow(model, base, train, val, options, log=print, on_best=None):
         if (step + 1) % options.val_every == 0 or step + 1 == options.steps:
             with torch.no_grad():
                 vl = np.mean([
-                    float(flow_matching_loss(ema, va["u"][i], va["mask"][i],
-                                             va["cond"][i], base, t=t_, eps=e_,
-                                             weight=None if wva is None else wva[i]))
-                    for i, t_, e_ in val_sets
+                    float(flow_matching_loss(ema, u_, m_, c_, base, t=t_, eps=e_, weight=w_))
+                    for u_, m_, c_, t_, e_, w_ in val_sets
                 ])
             synchronize(device)
             ntrain = (step + 1) % options.val_every or options.val_every
+            elapsed = elapsed_before + time.time() - start
             history["step"].append(step + 1)
             history["train_loss"].append(running / ntrain)
             history["val_loss"].append(float(vl))
-            history["seconds"].append(time.time() - start)
+            history["seconds"].append(elapsed)
             running = 0.0
             log(f"step {step + 1:6d} train {history['train_loss'][-1]:.5f} "
                 f"val(ema) {vl:.5f} lr {sched.get_last_lr()[0]:.2e} "
-                f"{time.time() - start:.0f}s")
+                f"{elapsed:.0f}s")
             if vl < best[0]:
                 best = (float(vl), step + 1)
                 best_state = {k: v.detach().cpu().clone() for k, v in ema.state_dict().items()}
                 if on_best is not None:
                     on_best(ema, step + 1, float(vl))
+            if resume_path is not None:
+                # Written every validation point, not only on an improving one: unlike the
+                # on_best checkpoint (model weights only, for inference), this carries the
+                # optimizer/scheduler/RNG state a continuation actually needs, and must exist
+                # even during a long stretch with no improvement.
+                tmp = str(resume_path) + f".tmp.{os.getpid()}"
+                torch.save({"model": model.state_dict(), "ema": ema.state_dict(),
+                            "opt": opt.state_dict(), "sched": sched.state_dict(),
+                            "gen_state": gen.get_state(), "step": step + 1, "best": best,
+                            "best_state": best_state, "history": history,
+                            "elapsed_seconds": elapsed}, tmp)
+                os.replace(tmp, resume_path)  # atomic: a kill mid-write must not corrupt it
+            if stop_after_step is not None and step + 1 >= stop_after_step:
+                log(f"stopping after step {step + 1} of {options.steps} (stop_after_step)")
+                break
     history["best_val_loss"], history["best_step"] = best
     model_cpu = copy.deepcopy(ema).cpu()
     if best_state is not None:

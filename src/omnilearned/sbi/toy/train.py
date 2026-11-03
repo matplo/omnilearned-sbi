@@ -227,7 +227,11 @@ def build_surrogate(args, train, val, out, log=print):
     torch.set_float32_matmul_precision("high" if args.tf32 else "highest")
     log(f"flow: {meta['n_params']} parameters, train {tr['u'].shape}, val {va['u'].shape}, "
         f"device {dev.device}")
-    best, hist = train_flow(model, base, tr, va, opts, log=log, on_best=save)
+    resume_path = out / "resume.pt"
+    resume_from = resume_path if getattr(args, "resume", False) and resume_path.exists() else None
+    best, hist = train_flow(model, base, tr, va, opts, log=log, on_best=save,
+                            resume_from=resume_from, resume_path=resume_path,
+                            stop_after_step=getattr(args, "stop_after_step", None))
     torch.set_float32_matmul_precision("highest")
     sur = FlowSurrogate(best, base, transform, layout,
                         dict(meta, best_step=hist["best_step"], best_val_loss=hist["best_val_loss"]),
@@ -271,6 +275,16 @@ def main(argv=None):
     ap.add_argument("--mult-depth", type=int, default=3)
     ap.add_argument("--save-after", type=int, default=0,
                     help="first step at which an improving checkpoint is written")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue from --out/resume.pt if it exists (same target --steps; "
+                         "a fresh run always writes one at every validation point, so a "
+                         "second invocation with the same --out and this flag picks up where "
+                         "a killed one left off, not just from its last best-val checkpoint)")
+    ap.add_argument("--stop-after-step", dest="stop_after_step", type=int, default=None,
+                    help="stop cleanly after this step (run.json/checkpoint still written) "
+                         "instead of running to --steps -- for ending before a walltime "
+                         "limit instead of relying on SIGKILL mid-step; --resume continues "
+                         "from here to the real --steps in a later invocation")
     ap.add_argument("--cpu-threads", type=int, default=8,
                     help="torch CPU threads (noise is drawn on the CPU; several trainings "
                          "per node oversubscribe the cores with the default)")
