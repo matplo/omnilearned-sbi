@@ -185,3 +185,45 @@ All four splits merged and verified, final counts (all exceed their plan targets
 P3 (training) can start: `omnilearned.sbi.toy.train` already reads these files directly via
 `jewel.v3format.read_v3_shards`/`shard_paths_v3` (wired in before generation finished, see
 the P3 entry above), conditions on jet_pt, and applies no feature standardisation.
+
+## P3 launch: a fairshare-pending queue, then a real OOM once it actually ran (2026-11-03)
+
+**The queue wait was a fairshare penalty, not congestion.** The first P3 job (4 GPUs, regular
+QOS) sat `PENDING (Priority)` for 12+ hours with zero movement; splitting it into 4x 1-GPU
+jobs didn't help either. `sshare -A alice_g` explained it: `ploskon`'s `EffectvUsage` was
+0.893662 against a `NormShares` of 0.010989 -- the P2 generation campaign's 33 node-hours
+plus this session's own GPU smoke tests had tanked fairshare, deprioritizing *any* new
+submission from this account regardless of job size. Worked around with `-q interactive`
+(salloc, 4h wall, 2-node budget, a separate pool) -- granted in ~20s every time it was tried.
+One operational trap on the way: `setsid nohup salloc ... &` abandons a request that has to
+queue (worked fine when interactive granted instantly, failed silently once it didn't) --
+switched to the harness's own background-job mode, which holds the request properly.
+
+**Once a job actually ran, `train_flow` OOM'd on the very first validation batch.** It moved
+the entire training set to GPU unconditionally (`tr = {k: v.to(device) ...}`): for the real
+10.7M-jet train set that is ~38.5 GiB as float32, which alone exceeds a 40 GiB A100's usable
+memory with the model, optimizer and activations still to come. Neither of the two prior
+checks caught this: the CPU end-to-end test used synthetic data (thousands of jets, not
+millions), and the one real-data GPU check that ran (the debug-QOS smoke test) only trained
+for 50 steps and happened not to need a GPU-resident validation batch large enough to notice
+-- scale was the only thing missing from every check before this. Fixed: `train_flow` now
+keeps the training and validation dicts on whatever device the caller passed (CPU, from
+`toy.train`) and transfers only the active minibatch, or the small fixed validation subset,
+to the compute device. Confirmed fixed on real GPU hardware, not just by the fix compiling:
+seeds 0 and 1 are training past the exact point that crashed before (step 2000 of 400000
+reached, loss 1.03/1.26 train/val, ~75s for those 2000 steps).
+
+**Added while already under the 4h interactive clock, because the user flagged it in time:**
+`train_flow(..., resume_from=, resume_path=, stop_after_step=)` -- a full resumable snapshot
+(model, EMA, optimizer, scheduler, minibatch RNG stream, history) written at every validation
+point, restoring a bit-exact continuation (new test confirms this against an uninterrupted
+run), and a clean-stop option that leaves `options.steps` -- and so the LR schedule -- alone.
+Seeds 0/1 are running with `--resume --stop-after-step 300000` (~3h7m at the measured pace,
+leaving ~50min margin inside the 4h wall); seed2 and the 200k control are queued on regular
+QOS with `--resume` set, to pick up cleanly whenever fairshare lets them through.
+
+**Measured training pace** (real hardware, real data, dim 256 / depth 6 / heads 8 / batch
+512): ~0.0375 s/step, matching the v2 JEWEL reference (400k steps ≈ 4h11m) closely despite
+the different constituent width (v3: 184-225, pT/log-E conditioned; v2: absolute eta, no
+log E) -- per-step cost is apparently dominated by batch size and model width, not cloud
+width, at least in this range.

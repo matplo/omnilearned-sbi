@@ -10,19 +10,27 @@ Brief: `docs/PLAN_JEWEL_V3.md`. Format: `docs/FORMAT_JEWEL_V3.md`. Log: `FINDING
 ## Current state
 
 ```
-PHASE:        P2 done. P3 launched 2026-11-02 as GPU job 60730550 (4 GPUs, 8h, regular QOS,
-                400k x seeds 0-2 + 200k control) from snapshot 26add9d -- queued on priority,
-                not yet confirmed running. P4 reader wiring (direct_by_point) done ahead of
-                need; gate/fidelity/selection code otherwise needs no v3-specific change
-                (confirmed by reading, not assumed -- they only touch columns 0-2 of a cloud).
-NEXT ACTION:  watch job 60730550; once it has a checkpoint, run P4 (gate.py run/summarize,
-              then ptbins.py, both --config configs/jewel-2.6.0-cs-v3.toml --fidelity-dir
-              $JEST_NLE_ROOT/data/jewel_v3/merged, which direct_by_point now reads correctly).
-RUNNING:      job 60730550 (P3 training, PENDING/Priority as of last check)
+PHASE:        P2 done. P3 genuinely training as of 2026-11-03 ~13:40, after two real bugs
+                found and fixed post-launch: (1) regular-QOS GPU jobs sat PENDING on a
+                fairshare penalty (sshare: 89% effective usage vs ~1% share) for 12+ h, not
+                congestion -- worked around with interactive QOS (grants in ~20s, 2-node cap,
+                4h wall); (2) train_flow moved the WHOLE train set to GPU unconditionally
+                (~38.5 GiB for 10.7M jets, OOM on a 40 GiB A100) -- fixed to transfer only the
+                active minibatch; added --resume/--stop-after-step since interactive's 4h cap
+                is close to a 400k-step run's wall time. See FINDINGS for both in full.
+NEXT ACTION:  watch the 4 runs (seeds 0,1 interactive jobs 60761953/60761969, stop_after_step
+              300000; seed2 + 200k control queued on regular QOS 60763011/60763012, --resume
+              set). Once seed0/1 hit their step cap or the 4h wall, relaunch with --resume
+              (same --out) to continue to 400000; once ANY checkpoint exists, run P4 (gate.py
+              run/summarize, then ptbins.py, both --config configs/jewel-2.6.0-cs-v3.toml
+              --fidelity-dir $JEST_NLE_ROOT/data/jewel_v3/merged -- direct_by_point already
+              reads this correctly, wired ahead of need).
+RUNNING:      60761953 (s0), 60761969 (s1) on interactive GPU; 60763011 (s2), 60763012 (ctl)
+              queued on regular GPU QOS
 DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
               + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
               four splits under a `splits` key -- see FORMAT doc §4)
-SNAPSHOT:     26add9d is the latest (P3 driver + P4 reader wiring); always cut a fresh one
+SNAPSHOT:     89e5f94 is the latest (train_flow memory fix + resume support); always cut fresh
 BLOCKED ON:   nothing
 
 TODO before P7: closure.py's jewel_ensembles (toy/closure.py:121-124) has the same hardcoded
@@ -133,3 +141,20 @@ Do not commit data, checkpoints, run trees, figures or binaries; never force-pus
 18. **The debug-QOS 30-min walltime was never enough for a real merge.** Train's own merge
     (22 809 shards) needed ~2 h end to end even after the width fix (~30-50 min just to hash
     every shard at index time). Merge jobs go through `-q regular -t 02:00:00`+ now.
+19. **A GPU job PENDING for hours is not necessarily congestion** -- check `sshare -A <acct>`.
+    Heavy recent usage (ours: the P2 generation campaign plus GPU smoke tests) tanks fairshare
+    and deprioritizes new submissions regardless of job size; splitting one 4-GPU request into
+    4x 1-GPU didn't help since the penalty is per-user, not per-job-size. `-q interactive`
+    (salloc, not sbatch; 4h cap, 2-node budget) is a separate pool and granted in ~20s.
+20. **`salloc` backgrounded without a terminal abandons a QUEUED request.** `setsid nohup
+    salloc ... &` worked when the allocation was granted immediately, but when interactive
+    itself had to queue once, the client gave up waiting and exited while the job stayed
+    PENDING in Slurm with nothing left to run it -- `scancel` it, don't wait on it. Use the
+    harness's own background mode (`run_in_background: true` on the tool call) instead; it
+    holds the request properly even when it has to wait.
+21. **`train_flow` moved the WHOLE dataset to GPU, not just each minibatch** -- OOM on a real
+    10.7M-jet train set (~38.5 GiB as float32) even on a 40 GiB A100, regardless of
+    `--batch-size`. Fixed; see FINDINGS. A smoke test on a SMALL split (e.g. validation
+    standing in for train) would not have caught this -- it only breaks at real scale, which
+    is exactly why nothing was confirmed on the full real train set until a live GPU job hit
+    it. Test real-scale data paths on real-scale data before trusting a smaller proxy.
