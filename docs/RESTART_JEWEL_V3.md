@@ -10,21 +10,25 @@ Brief: `docs/PLAN_JEWEL_V3.md`. Format: `docs/FORMAT_JEWEL_V3.md`. Log: `FINDING
 ## Current state
 
 ```
-PHASE:        P2 done (2026-11-02). All four splits merged and verified:
-                train 10 705 283 jets / 512 pts (11 files), fidelity 2 751 253 / 128 (3 files),
-                validation 653 086 / 128 (1 file), test 215 400 / 4 holdout pts (1 file).
-              P3 training code (jet_pt conditioning, no standardisation) written, tested,
-              but not yet run on the real merged data -- that is the next action.
-NEXT ACTION:  P3 -- train the surrogate on $JEST_NLE_ROOT/data/jewel_v3/merged/{train,
-              validation}. toy.train dispatches on backend id automatically (ends "-v3" ->
-              jewel.v3format reader, jet_pt known context, identity feature transform); see
-              docs/PLAN_JEWEL_V3.md P3 for the run plan (400k x 3 seeds + 200k control, 4 GPUs).
-RUNNING:      nothing
+PHASE:        P2 done. P3 launched 2026-11-02 as GPU job 60730550 (4 GPUs, 8h, regular QOS,
+                400k x seeds 0-2 + 200k control) from snapshot 26add9d -- queued on priority,
+                not yet confirmed running. P4 reader wiring (direct_by_point) done ahead of
+                need; gate/fidelity/selection code otherwise needs no v3-specific change
+                (confirmed by reading, not assumed -- they only touch columns 0-2 of a cloud).
+NEXT ACTION:  watch job 60730550; once it has a checkpoint, run P4 (gate.py run/summarize,
+              then ptbins.py, both --config configs/jewel-2.6.0-cs-v3.toml --fidelity-dir
+              $JEST_NLE_ROOT/data/jewel_v3/merged, which direct_by_point now reads correctly).
+RUNNING:      job 60730550 (P3 training, PENDING/Priority as of last check)
 DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
               + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
               four splits under a `splits` key -- see FORMAT doc §4)
-SNAPSHOT:     d5a22c5 is the latest with every P2 fix in; always cut a fresh one for new work
+SNAPSHOT:     26add9d is the latest (P3 driver + P4 reader wiring); always cut a fresh one
 BLOCKED ON:   nothing
+
+TODO before P7: closure.py's jewel_ensembles (toy/closure.py:121-124) has the same hardcoded
+toy/v2 shard reader direct_by_point had -- needs the same shards_for_config(config) dispatch
+before closure can read real v3 test-split data. Not fixed yet: P7 needs P3-P6 done first,
+so fixing it now would be speculative work ahead of need. Noted here so it isn't missed.
 ```
 
 | phase | what | status |
@@ -32,7 +36,7 @@ BLOCKED ON:   nothing
 | P0 | branch, worktree, docs | **done** |
 | P1 | config v3, Δη/log E/pid, v3 format + sidecar | **done** |
 | P2 | generation (train/val/fidelity/test) **with event stores** | **done** |
-| P3 | training (jet_pT conditioning, no standardisation) | code written, not yet run |
+| P3 | training (jet_pT conditioning, no standardisation) | **running** (job 60730550) |
 | P4 | fidelity: gate + ptbins, weighted estimators | not started |
 | P5 | NLE numerics (rule 6) | not started |
 | P6 | three-factor likelihood + Jacobian + scan | not started |
