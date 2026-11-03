@@ -149,6 +149,21 @@ def sample_setup(config):
     return backend, sel, BOX
 
 
+def shards_for_config(config):
+    """(shard_paths, read_shards) functions matching ``config``'s backend.
+
+    One place to decide this, so a caller (gate, closure, ...) does not have to repeat the
+    "-v3" backend check that main() already makes. A backend ending "-v3" reads merged files
+    through ``jewel.v3format`` (deta/dphi relative to the jet axis, log E, jet_pt known
+    context); anything else reads the historical toy/v2 shard schema via ``toy.datasets``.
+    """
+    backend, _, _ = sample_setup(config)
+    if backend.endswith("-v3"):
+        from omnilearned.sbi.jewel.v3format import read_v3_shards, shard_paths_v3
+        return shard_paths_v3, read_v3_shards
+    return shard_paths, read_shards
+
+
 def build_surrogate(args, train, val, out, log=print):
     backend, sel, box = sample_setup(args.config)
     is_v3 = backend.endswith("-v3")
@@ -273,12 +288,7 @@ def main(argv=None):
     start = time.time()
     host = host_info()  # source revision at start (the checkout may change while training)
     log(f"source {host['source_revision']} dirty={host['source_dirty']} host {host['host']}")
-    backend, _, _ = sample_setup(args.config)
-    if backend.endswith("-v3"):
-        from omnilearned.sbi.jewel.v3format import read_v3_shards, shard_paths_v3
-        paths, reader = shard_paths_v3, read_v3_shards
-    else:
-        paths, reader = shard_paths, read_shards
+    paths, reader = shards_for_config(args.config)
     tp, vp = paths(args.data_dir, "train"), paths(args.val_dir or args.data_dir, "validation")
     train, val = reader(tp), reader(vp)
     log(f"data: train {train['x'].shape} from {len(tp)} shards, val {val['x'].shape} "

@@ -35,6 +35,7 @@ from omnilearned.sbi.flow import FlowSurrogate, json_dumps
 from omnilearned.sbi.toy.config import V2_CONFIG, load_toy_config
 from omnilearned.sbi.toy.datasets import host_info, read_shards, shard_paths
 from omnilearned.sbi.toy.sample_select import sample_and_select
+from omnilearned.sbi.toy.train import shards_for_config
 
 ANALYSIS_N = (250, 1000)
 
@@ -50,8 +51,15 @@ def selection(config):
     return sample_setup(config)[1]
 
 
-def direct_by_point(fidelity_dir):
-    d = read_shards(shard_paths(fidelity_dir, "fidelity"))
+def direct_by_point(fidelity_dir, config=None):
+    """Direct-sample jets per validation point, from ``fidelity_dir``.
+
+    ``config`` picks the reader: a v3 backend's merged files (``jewel.v3format``) or the
+    historical toy/v2 shard schema (default, for backward compatibility with existing
+    callers that never passed one).
+    """
+    paths, reader = shards_for_config(config) if config else (shard_paths, read_shards)
+    d = reader(paths(fidelity_dir, "fidelity"))
     out = {}
     for pid in np.unique(d["point_id"]):
         sel = d["point_id"] == pid
@@ -86,7 +94,7 @@ def run(a):
     dev = resolve_device(a.device)
     sur = FlowSurrogate.load(a.checkpoint, device=dev.device)
     sel = selection(a.config)
-    direct = direct_by_point(a.fidelity_dir)
+    direct = direct_by_point(a.fidelity_dir, a.config)
     pids = sorted(direct)
     if a.points:
         pids = [p for p in pids if p in set(a.points)]
@@ -168,7 +176,7 @@ def convergence(a):
     dev = resolve_device(a.device)
     sur = FlowSurrogate.load(a.checkpoint, device=dev.device)
     sel = selection(a.config)
-    direct = direct_by_point(a.fidelity_dir)
+    direct = direct_by_point(a.fidelity_dir, a.config)
     out = {}
     for pid in a.points:
         theta = direct[pid][2]

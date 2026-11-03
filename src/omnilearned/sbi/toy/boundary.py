@@ -131,7 +131,7 @@ def run(a):
     dev = resolve_device(a.device)
     sur = FlowSurrogate.load(a.checkpoint, device=dev.device)
     sel = selection(a.config)
-    direct = direct_by_point(a.fidelity_dir)
+    direct = direct_by_point(a.fidelity_dir, a.config)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     for pid in a.points:
