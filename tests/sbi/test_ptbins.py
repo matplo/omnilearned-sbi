@@ -61,6 +61,26 @@ def test_edges_follow_the_sample_window():
     assert e[0] == 30.0 and e[-1] <= 400.0 and np.all(np.diff(e) > 0)
 
 
+def test_run_picks_spectrum_edges_without_crashing_on_a_different_length_window():
+    """Regression: toy.ptbins.run() picked spectrum_edges with a bare np.allclose(edges,
+    PT_EDGES_60_200) -- np.allclose raises ValueError (cannot broadcast) rather than
+    returning False when the two arrays have different lengths, which is exactly what
+    happens for the v3 20-500 GeV window (10 edges vs. 9). Crashed gate.py's very first
+    real ptbins run (2026-11-04). The shape check must gate the allclose call.
+    """
+    import numpy as np
+
+    from omnilearned.sbi.toy.ptbins import PT_EDGES_60_200, SPECTRUM_EDGES, edges_for
+
+    for lo, hi in [(60.0, 200.0), (20.0, 500.0), (30.0, 400.0)]:
+        edges = edges_for(lo, hi)
+        spectrum_edges = (SPECTRUM_EDGES
+                          if edges.shape == PT_EDGES_60_200.shape and np.allclose(edges, PT_EDGES_60_200)
+                          else np.arange(float(lo), float(hi) + 1e-6, (float(hi) - float(lo)) / 48.0))
+        assert spectrum_edges[0] >= lo - 1e-6 and spectrum_edges[-1] <= hi + 1e-6
+    assert np.array_equal(edges_for(60.0, 200.0).shape, PT_EDGES_60_200.shape)
+
+
 def test_pt_binned_unit_weights_matches_unweighted():
     """With unit weights, weighted pt_binned recovers unweighted results exactly."""
     from omnilearned.sbi.toy.ptbins import PT_EDGES, pt_binned

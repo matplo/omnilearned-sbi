@@ -258,3 +258,76 @@ beating 200k clearly, outside the seed spread), val loss here looks nearly conve
 across differently-biased splits and is never the thing P4's gate judges on. Whether 400k
 actually buys anything on the gate/`ptbins` metrics is P4's question to answer, not this
 number's.
+
+## P4: the gate run, a real-scale OOM, and a decisive fail (2026-11-03 -- 2026-11-04)
+
+Checkpoint under test: `v3_set_d256_L6_400k_s0` (`7ce2e63d5504`). 128 fidelity points, sharded
+4-way (`--num-shards 4`), `--n-generate 22000 --nsteps 128 --redraw`.
+
+**`FlowSurrogate.sample()` had never been exercised with jet_pt as known context.** P3
+trained the flow and the multiplicity model to condition on jet_pt (`sur.layout.known ==
+["n_constituents", "jet_pt"]`), but `sample()` never accepted or threaded a jet_pt array --
+the very first real run crashed immediately with `ValueError: known context ['jet_pt'] must
+be supplied`. There is no `p(pT_J|theta)` model yet (that is P6), so the fix is a convention,
+not a fit: `gate.py`/`ptbins.py`/`boundary.py` resample jet_pt from the **direct** sample's
+own (weighted) empirical distribution at that theta, so the surrogate is always sampled at
+matched jet kinematics rather than asked to invent its own jet_pt spectrum. Threaded through
+`FlowSurrogate.sample(..., jet_pt=)`, `sample_and_select(..., jet_pt=)`, and a `sort_by_length`
+permutation fix (jet_pt must be reordered by the same permutation as the draw, or shapes
+mismatch or NaNs appear on the redraw path). Regression test added: `test_jewel_v3_train.py
+::test_v3_sample_needs_jet_pt_and_uses_it_correctly`.
+
+**A rare-large-N OOM in the attention layer, hit by every shard in turn, mitigated by
+`--batch 256`.** Shard 0 crashed first (`torch.OutOfMemoryError: ... 78.19 GiB memory in
+use` on an 80 GiB A100, inside `velocity.py`'s attention forward, reached through a redraw
+round), then shard 1, then shard 2 at the **default** `--batch 1024`, each at a different
+point and after already producing several good results -- not a first-point crash, so none
+of the three real-scale smoke tests before this run (CPU unit test, debug-QOS GPU test,
+the resume test) could have caught it: all used small synthetic clouds, never a redraw round
+against a multiplicity model whose categorical tail occasionally draws N close to
+`max_constituents = 1024`, which is what makes the batch's padded width -- and so the
+attention tensor's memory -- spike. `--batch 256` (down from the default 1024, chosen for
+speed, not memory) held every shard's peak usage under the 80 GiB cap for the remainder of
+the campaign; no further OOMs after the switch, across ~100 more points. The cost is time
+only: `gate.py run` already writes one `point_NNNNN.json` per point and skips any point whose
+file exists (`if js.exists(): continue`), so every crash (OOM or the 4h interactive walltime
+itself) needed nothing but a plain relaunch of the same command to resume -- exactly the
+robustness the resumable-checkpoint work in P3 was asked for, except gate.py already had it
+for free via its own output layout.
+
+**Perlmutter's interactive QOS caps concurrent jobs at 2 per user, but a `salloc --gpus N`
+request still reserves the whole 4-GPU node exclusively** (`AllocTRES` shows `gres/gpu=4`
+even when `ReqTRES` asked for 1). That spare capacity was used to attach additional shards as
+job *steps* (`srun --jobid=<existing> --gpus 1 --overlap ...`) to an already-running
+allocation instead of submitting new jobs and hitting `QOSMaxSubmitJobPerUserLimit` --
+tracked, Slurm-visible job steps, not raw background processes. 4 jobs and numerous crash/
+relaunch cycles later, all 128 points completed; wall time across the whole campaign (several
+sequential 4h interactive allocations, shards running 2-at-a-time) was about 7h.
+
+**Family-wise verdict: decisive fail.** `gate.py summarize --alpha 0.05`:
+
+```
+128 of 128 points, alpha/S 3.91e-04: 19 FAIL, 19 significant
+uniformity: ks_d=0.714, ks_p=1.78e-58, n_below_0.01=52/128, binomial_p_at_least=1.2e-68
+```
+
+19 of 128 points fail the per-point Bonferroni-corrected test (both significant at
+alpha/S and `relevant`); 52 of 128 have a permutation p-value below 0.01 against a null
+under which p should be uniform on [0, 1] -- the KS and binomial statistics on that are not
+borderline (p ~ 1e-58, 1e-68). This is not a marginal miss: the v3 surrogate's constituent
+clouds disagree with JEWEL's at a large fraction of theta points, strongly enough that no
+plausible multiple-testing correction saves it. `width` and `outer_fraction` recur across
+nearly every FAIL point's flagged-observable list, with `n_constituents`, `soft8_fraction`,
+`ptd` and `lead_fraction` appearing intermittently -- the mismatch looks concentrated in jet
+substructure/width observables rather than being uniform across all seven `JET_VARIABLE`s, a
+lead worth following before any retraining attempt (the v2 representation audit that
+motivated the v3 rewrite found exactly this kind of substructure-specific signature).
+
+Not yet done: `ptbins` over the 20-500 GeV window (run on a representative 8-point subset
+rather than the full 128, given the gate's verdict is already decisive and each point costs
+the same redraw-heavy sampling as the gate did) to see whether the mismatch concentrates in a
+jet-pT range; the four-withheld-theta repeat of this gate. **P5 onward (NLE numerics,
+likelihood, closure) should not proceed on this checkpoint until the fidelity failure is
+understood or a retrained/fixed surrogate is available** -- running the likelihood and
+closure machinery against a surrogate that fails this gate this badly would not test the NLE
+methodology, it would just reproduce the surrogate's own mismatch.

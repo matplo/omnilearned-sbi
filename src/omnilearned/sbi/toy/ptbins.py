@@ -175,7 +175,8 @@ def run(a):
     # JEWEL v2 sample spans 20-500 GeV and would otherwise be scored on 60-200 bins only
     lo, hi = sel.jet_pt_range_GeV
     edges = edges_for(lo, hi)
-    spectrum_edges = (SPECTRUM_EDGES if np.allclose(edges, PT_EDGES_60_200)
+    spectrum_edges = (SPECTRUM_EDGES
+                      if edges.shape == PT_EDGES_60_200.shape and np.allclose(edges, PT_EDGES_60_200)
                       else np.arange(float(lo), float(hi) + 1e-6, (float(hi) - float(lo)) / 48.0))
     direct = direct_by_point(a.fidelity_dir, a.config)
     out = Path(a.out)

@@ -10,29 +10,42 @@ Brief: `docs/PLAN_JEWEL_V3.md`. Format: `docs/FORMAT_JEWEL_V3.md`. Log: `FINDING
 ## Current state
 
 ```
-PHASE:        P2 and P3 both done (2026-11-03). P3 needed three real bugs fixed after launch
-                (fairshare-penalized queue, train_flow OOM at real scale, a resume/map_location
-                bug) -- see FINDINGS. All four runs finished clean:
-                  s0  400k steps  val 0.88637  sha 7ce2e63d5504
-                  s1  400k steps  val 0.88637  sha 4c059d6268fc
-                  s2  400k steps  val 0.88650  sha 8c2a1579a212
-                  ctl 200k steps  val 0.88659  sha 929670be5409
-                Tight seed spread (~0.00013) and only marginal gain 200k->400k (~0.0002) --
-                looks largely converged by 200k, unlike the toy/v2 pattern that motivated the
-                4-run design; P4's fidelity numbers are the real test of that, not val loss.
-NEXT ACTION:  P4 -- gate.py run (128 fidelity points, --redraw, sharded over however many
-              GPUs are free) then summarize, using s0's checkpoint as the reference (or run
-              all 4 and compare -- cheap, same gate.py invocation each time) against
-              $JEST_NLE_ROOT/data/jewel_v3/merged with --config configs/jewel-2.6.0-cs-v3.toml;
-              then ptbins.py over the 20-500 GeV window. direct_by_point already reads v3
-              merged files correctly (wired ahead of need in P3).
+PHASE:        P2, P3, P4's gate.py part all done (2026-11-04). P4's gate: checkpoint s0
+                (sha 7ce2e63d5504), all 128 fidelity points, --redraw. Needed two real fixes
+                along the way -- FlowSurrogate.sample() had never been taught to accept
+                jet_pt (v3's layouts condition on it), and a rare-large-N redraw spiked GPU
+                memory (fixed with --batch 256; default 1024 OOM'd every shard in turn, each
+                after producing several good points first) -- see FINDINGS. Family-wise
+                result: **decisive fail**. `gate.py summarize --alpha 0.05`:
+                  128 of 128 points, alpha/S 3.91e-04: 19 FAIL, 19 significant
+                  uniformity ks_p=1.78e-58, n_below_0.01=52/128, binomial_p=1.2e-68
+                Not a marginal miss -- the p-value distribution overwhelmingly rejects the
+                null of no mismatch. `width`/`outer_fraction` recur across most FAIL points'
+                flagged-observable lists; worth following before any retraining attempt.
+NEXT ACTION:  ptbins.py over the 20-500 GeV window hit a real bug on its first real run
+              (fixed, see FINDINGS and the new regression test in test_ptbins.py -- NOT YET
+              IN A SNAPSHOT, cut one before launching): `run()`'s spectrum_edges line did a
+              bare `np.allclose(edges, PT_EDGES_60_200)`, which raises ValueError (cannot
+              broadcast) rather than returning False when edges has a different length --
+              exactly the v3 20-500 window (10 edges vs. 9). Once a fresh snapshot exists,
+              relaunch `ptbins.py run --points 0 16 32 48 64 80 96 112 --batch 256` (a
+              representative 8-point subset, not the full 128 -- the gate's verdict is
+              already decisive and ptbins costs the same per point) to see whether the
+              mismatch concentrates in a jet-pT range. **Then: this is a decision point for
+              the user, not a mechanical next phase** -- P5 onward (NLE numerics, likelihood,
+              closure) should not run against a surrogate that fails fidelity this badly;
+              doing so would test the surrogate's own mismatch, not the NLE methodology.
 RUNNING:      nothing
 DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
               + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
               four splits under a `splits` key -- see FORMAT doc §4)
 CHECKPOINTS:  $JEST_NLE_ROOT/runs/jewel_v3/p3_train/{v3_set_d256_L6_400k_s0,_s1,_s2,
               v3_set_d256_L6_200k_ctl}/checkpoint.pt (+ run.json, resume.pt)
-SNAPSHOT:     b069395 is the latest (train_flow memory + resume/map_location fixes); cut fresh
+GATE RESULTS: $JEST_NLE_ROOT/runs/jewel_v3/p4_gate/s0/point_NNNNN.json (all 128, checkpoint
+              s0); $JEST_NLE_ROOT/runs/jewel_v3/p4_ptbins/ (not yet produced -- see above)
+SNAPSHOT:     c9ed27f is the latest committed (FlowSurrogate.sample jet_pt fix); the
+              ptbins.py fix above is uncommitted as of this entry -- commit and cut a fresh
+              snapshot before relaunching ptbins
 BLOCKED ON:   nothing
 
 TODO before P7: closure.py's jewel_ensembles (toy/closure.py:121-124) has the same hardcoded
@@ -47,7 +60,7 @@ so fixing it now would be speculative work ahead of need. Noted here so it isn't
 | P1 | config v3, Δη/log E/pid, v3 format + sidecar | **done** |
 | P2 | generation (train/val/fidelity/test) **with event stores** | **done** |
 | P3 | training (jet_pT conditioning, no standardisation) | **done** (4 checkpoints) |
-| P4 | fidelity: gate + ptbins, weighted estimators | not started |
+| P4 | fidelity: gate + ptbins, weighted estimators | gate **done -- decisive fail**; ptbins pending a snapshot |
 | P5 | NLE numerics (rule 6) | not started |
 | P6 | three-factor likelihood + Jacobian + scan | not started |
 | P7 | closure at the 4 withheld θ | not started |
