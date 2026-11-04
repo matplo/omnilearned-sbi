@@ -559,7 +559,11 @@ def train_flow(model, base, train, val, options, log=print, on_best=None,
     if resume_from is not None:
         # weights_only=False: this file is our own optimizer/scheduler state, not external
         # data -- torch 2.6+ defaults to weights_only=True, which cannot deserialize it.
-        ck = torch.load(resume_from, map_location=device, weights_only=False)
+        # map_location="cpu", not device: gen_state is a CPU generator's ByteTensor (gen is
+        # always created with device="cpu"), and map_location=cuda forced it onto the GPU
+        # too, so gen.set_state() rejected it outright. load_state_dict below handles the
+        # CPU -> device copy into the already-.to(device) model/ema/opt on its own, as usual.
+        ck = torch.load(resume_from, map_location="cpu", weights_only=False)
         model.load_state_dict(ck["model"])
         ema.load_state_dict(ck["ema"])
         opt.load_state_dict(ck["opt"])
