@@ -123,7 +123,7 @@ def run(a):
     from omnilearned.sbi.device import resolve_device
     from omnilearned.sbi.flow import FlowSurrogate
     from omnilearned.sbi.toy.datasets import host_info
-    from omnilearned.sbi.toy.gate import direct_by_point, selection
+    from omnilearned.sbi.toy.gate import _resample_jet_pt, direct_by_point, selection
     from omnilearned.sbi.toy.sample_select import sample_and_select
     from omnilearned.sbi.toy.selection import select_clouds
     from omnilearned.sbi.toy.simulator import PARAMETERS
@@ -139,13 +139,22 @@ def run(a):
         if js.exists():
             continue
         t0 = time.time()
-        xd, md, theta, _wd = direct[pid]   # direct_by_point now also returns per-jet weights
+        xd, md, theta, _wd, jpd = direct[pid]   # direct_by_point now also returns per-jet weights
         _, _, rd = select_clouds(xd.astype(np.float64), sel, md)
+        # v3 (jet_pt-conditioned): resampled from the direct sample (no p(pT_J|theta) model
+        # yet). This makes the jet_pt boundary/density comparison this tool exists for a
+        # near-tautology for v3 -- it reproduces whatever jet_pt was fed in. Left running
+        # (not crashing) rather than reworked: boundary.py is not one of P4's two required
+        # checks (gate.py, ptbins.py); its v3 interpretation is an open question, flagged in
+        # FINDINGS, not resolved here.
+        jet_pt = (_resample_jet_pt(jpd, _wd, a.n_generate, np.random.default_rng(a.seed + pid))
+                 if "jet_pt" in sur.layout.known else None)
         xs, ms = sur.sample(np.asarray(theta), a.n_generate, None, seed=a.seed + pid, nsteps=a.nsteps,
-                            candidate_names=list(PARAMETERS), batch=a.batch, sort_by_length=True)
+                            candidate_names=list(PARAMETERS), batch=a.batch, sort_by_length=True,
+                            jet_pt=jet_pt)
         ok, reason, rs = select_clouds(xs.astype(np.float64), sel, ms)
         xr, mr, rep = sample_and_select(sur, theta, a.n_generate, sel, seed=a.seed + pid, nsteps=a.nsteps,
-                                        batch=a.batch, redraw=True)
+                                        batch=a.batch, redraw=True, jet_pt=jet_pt)
         doc = point_report(xs, ms, ok, reason, rs["jet_pt"], xd, md, rd["jet_pt"], xr=xr, mr=mr)
         doc.update({"point_id": pid, "theta": np.asarray(theta).tolist(), "checkpoint": a.checkpoint,
                     "checkpoint_sha256": sur.metadata.get("checkpoint_sha256"), "nsteps": a.nsteps,

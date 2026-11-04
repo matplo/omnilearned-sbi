@@ -36,7 +36,7 @@ REDRAW_SEED_STRIDE = 1 << 24  # redraw round r uses seed + r * stride (gate seed
 
 
 def sample_and_select(surrogate, theta, n, sel, seed=0, nsteps=128, solver="midpoint",
-                      batch=4096, sort_by_length=True, redraw=False, max_rounds=50):
+                      batch=4096, sort_by_length=True, redraw=False, max_rounds=50, jet_pt=None):
     """Selected surrogate clouds at ``theta``: (x, mask, report).
 
     Default: N from p(N | theta), the cloud from q(x | N, theta), rejected clouds dropped,
@@ -45,12 +45,17 @@ def sample_and_select(surrogate, theta, n, sel, seed=0, nsteps=128, solver="midp
     N until it passes (at most ``max_rounds``), so the selected sample keeps p(N | theta) and
     follows q(x | N, theta) 1_S(x) / Pr_q(S | N, theta). The report's acceptance is always the
     first-pass Pr_q(S | theta); ``acceptance_by_n`` holds the first-pass counts per N.
+
+    ``jet_pt``: required ([n] GeV) for a v3 (jet_pt-conditioned) surrogate -- there is no
+    p(pT_J | theta) model yet, so the caller supplies it (gate.py resamples it from the direct
+    jets at this theta, so the gate is read at matched jet kinematics). Ignored by a surrogate
+    without jet_pt in its known context (the toy/v2 backends).
     """
     t0 = time.time()
     theta = np.asarray(theta, np.float64)
     x, mask = surrogate.sample(theta, n, None, seed=seed, nsteps=nsteps,
                                solver=solver, candidate_names=list(PARAMETERS), batch=batch,
-                               sort_by_length=sort_by_length)
+                               sort_by_length=sort_by_length, jet_pt=jet_pt)
     ok, reason, _ = select_clouds(x.astype(np.float64), sel, mask)
     counts = mask.sum(1)
     rep = {"generated": int(n), "selected": int(ok.sum()), "acceptance": float(ok.mean()),
@@ -65,7 +70,8 @@ def sample_and_select(surrogate, theta, n, sel, seed=0, nsteps=128, solver="midp
             idx = np.flatnonzero(~ok)
             xr, mr = surrogate.sample(theta, idx.size, counts[idx], seed=seed + rounds * REDRAW_SEED_STRIDE,
                                       nsteps=nsteps, solver=solver, candidate_names=list(PARAMETERS),
-                                      batch=batch, sort_by_length=sort_by_length, pad_to=mask.shape[1])
+                                      batch=batch, sort_by_length=sort_by_length, pad_to=mask.shape[1],
+                                      jet_pt=None if jet_pt is None else np.asarray(jet_pt)[idx])
             okr, _, _ = select_clouds(xr.astype(np.float64), sel, mr)
             x[idx[okr]], mask[idx[okr]], ok[idx[okr]] = xr[okr], mr[okr], True
         rep["redraw"] = {"rounds": rounds, "redrawn": redrawn, "unfilled": int((~ok).sum()),

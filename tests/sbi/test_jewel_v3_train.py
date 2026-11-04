@@ -123,3 +123,39 @@ def test_v3_train_end_to_end_writes_a_loadable_checkpoint(merged_dirs, tmp_path)
     assert run["meta"]["box"]["T_ref"] == [0.1, 0.9]  # the v3 box, not toy.datasets.BOX (0.25-0.55)
     sur = FlowSurrogate.load(out / "checkpoint.pt")
     assert sur.layout.dim == 3 + 2  # theta (3) + n_constituents + jet_pt
+
+
+def test_v3_sample_needs_jet_pt_and_uses_it_correctly(merged_dirs, tmp_path):
+    """Regression: FlowSurrogate.sample() on a v3 checkpoint needs jet_pt, with a clear error
+    if it is missing, not the bare "known context ['jet_pt'] must be supplied" that crashed
+    gate.py's very first real run (2026-11-03): no p(pT_J|theta) model exists yet, so jet_pt
+    must come from the caller (gate.py resamples it from the direct sample).
+    """
+    from omnilearned.sbi.flow import FlowSurrogate
+    from omnilearned.sbi.toy import train
+    from omnilearned.sbi.toy.simulator import PARAMETERS
+
+    train_dir, val_dir = merged_dirs
+    out = tmp_path / "run"
+    train.main(["--data-dir", str(train_dir), "--val-dir", str(val_dir), "--config", str(V3_CONFIG),
+               "--out", str(out), "--steps", "4", "--val-every", "2", "--warmup-steps", "1",
+               "--dim", "16", "--depth", "1", "--heads", "2", "--mult-steps", "4",
+               "--mult-hidden", "8", "--mult-depth", "1", "--batch-size", "8", "--device", "cpu"])
+    sur = FlowSurrogate.load(out / "checkpoint.pt")
+    theta = [4.5, 0.45, 0.65]
+
+    with pytest.raises(ValueError, match="jet_pt"):
+        sur.sample(theta, 10, None, candidate_names=list(PARAMETERS), sort_by_length=True)
+
+    x, mask = sur.sample(theta, 10, None, candidate_names=list(PARAMETERS), sort_by_length=True,
+                         jet_pt=np.full(10, 120.0))
+    assert x.shape[0] == 10 and mask.shape[0] == 10 and mask.any()
+
+    # sort_by_length reorders internally (by drawn N) then restores draw order on return --
+    # jet_pt (varying per row, not uniform) must travel with the SAME permutation through
+    # that reorder, or this crashes (shape mismatch feeding mcond/cond) or produces NaNs.
+    varying = np.linspace(30.0, 400.0, 10)
+    for sbl in (True, False):
+        xv, mv = sur.sample(theta, 10, None, candidate_names=list(PARAMETERS), sort_by_length=sbl,
+                            jet_pt=varying, seed=0)
+        assert xv.shape[0] == 10 and np.isfinite(xv[mv]).all()

@@ -285,7 +285,7 @@ class FlowSurrogate:
     @ieee_float32()
     def sample(self, candidate, n, num_particles=None, seed=0, nsteps=64, solver="midpoint",
                candidate_names=None, batch=4096, pad_to=None, return_mask=False,
-               sort_by_length=False):
+               sort_by_length=False, jet_pt=None):
         """Physical-coordinate samples at one candidate.
 
         ``num_particles`` fixes the multiplicity (returns ``x`` [n, P, F], or
@@ -297,15 +297,34 @@ class FlowSurrogate:
         to its largest N, so this saves most of the padded work) and returns them
         in draw order; the base noise is then assigned in sorted order, so the
         samples differ from the unsorted ones (same distribution, same N).
+
+        ``jet_pt``: required (scalar or [n] GeV) when the multiplicity or constituent
+        layout was trained with jet_pt as known context (the v3 backend) -- there is no
+        p(pT_J | theta) model yet (reserved for P6), so the caller must supply it, e.g. by
+        resampling it from the direct sample at this theta (what gate.py does, so the
+        comparison is at matched jet kinematics rather than testing the pT_J marginal here).
+        Log-transformed internally, matching the convention toy.train.context_for_layout used
+        to build this same known-context column during training.
         """
         F = self.base.num_features
         gen = torch.Generator().manual_seed(int(seed))
         cand = np.atleast_2d(candidate)
+        jp = None
+        if jet_pt is not None:
+            jp = np.broadcast_to(np.asarray(jet_pt, np.float64).reshape(-1) if np.ndim(jet_pt)
+                                 else np.full(1, float(jet_pt)), (n,)).copy()
+        def _need_jet_pt(known):
+            return "jet_pt" in known and jp is None
         if num_particles is None:
             if self.multiplicity is None:
                 raise ValueError("variable multiplicity needs a multiplicity model")
+            mknown = self.multiplicity.layout.known
+            if _need_jet_pt(mknown):
+                raise ValueError(f"multiplicity model needs known context {mknown}; pass jet_pt")
+            mctx = np.log(jp)[:, None] if "jet_pt" in mknown else None
             mcond = torch.from_numpy(
-                self.multiplicity.layout.assemble(np.repeat(cand, n, 0), candidate_names)
+                self.multiplicity.layout.assemble(np.repeat(cand, n, 0), candidate_names,
+                                                  context=mctx, context_names=["jet_pt"] if mctx is not None else None)
             ).to(self.device)
             counts = self.multiplicity.sample(mcond, gen).numpy()
         elif np.ndim(num_particles):
@@ -314,6 +333,8 @@ class FlowSurrogate:
                 raise ValueError("num_particles needs n positive counts")
         else:
             counts = np.full(n, int(num_particles))
+        if _need_jet_pt(self.layout.known):
+            raise ValueError(f"flow needs known context {self.layout.known}; pass jet_pt")
         variable = num_particles is None or np.ndim(num_particles) > 0
         width = int(pad_to or max(1, counts.max() if n else 1))
         if counts.max(initial=0) > width:
@@ -322,6 +343,8 @@ class FlowSurrogate:
         if sort_by_length and variable:
             order = np.argsort(counts, kind="stable")
             counts = counts[order]
+            if jp is not None:
+                jp = jp[order]
         xs, ms = [], []
         with frozen_for_inference(self.model):
             for s in range(0, n, batch):
@@ -331,6 +354,13 @@ class FlowSurrogate:
                 mask = torch.arange(w)[None, :] < cnt[:, None]
                 noise = self.base.sample_like(torch.zeros(m, w, F), mask, gen)
                 context, context_names = self._context(mask.numpy(), None, None)
+                if jp is not None and "jet_pt" in self.layout.known:
+                    jp_batch = np.log(jp[s:s + m])[:, None]
+                    if context is None:
+                        context, context_names = jp_batch, ["jet_pt"]
+                    else:
+                        context = np.concatenate([context, jp_batch], 1)
+                        context_names = context_names + ["jet_pt"]
                 cond = self.layout.assemble_torch(
                     np.repeat(cand, m, 0), self.device,
                     candidate_names=candidate_names, context=context,

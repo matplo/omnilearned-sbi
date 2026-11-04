@@ -60,20 +60,37 @@ def direct_by_point(fidelity_dir, config=None):
     """
     paths, reader = shards_for_config(config) if config else (shard_paths, read_shards)
     d = reader(paths(fidelity_dir, "fidelity"))
+    jpt_col = list(d["global_names"]).index("jet_pt")
     out = {}
     for pid in np.unique(d["point_id"]):
         sel = d["point_id"] == pid
         x, m = d["x"][sel], d["mask"][sel]
         w = max(1, int(m.sum(1).max()))
         weights = d["weight"][sel]  # per-jet weights (ones for unweighted shards)
-        out[int(pid)] = (x[:, :w], m[:, :w], d["theta"][sel][0], weights)
+        jet_pt = d["global"][sel, jpt_col]
+        out[int(pid)] = (x[:, :w], m[:, :w], d["theta"][sel][0], weights, jet_pt)
     return out
 
 
+def _resample_jet_pt(jet_pt, weight, n, rng):
+    """n jet_pt draws from the direct sample's own (weighted) distribution at this point.
+
+    There is no p(pT_J | theta) model yet (P6), so a surrogate with jet_pt as known context
+    needs it supplied for every generated cloud. Resampling it from the direct sample keeps
+    the gate reading constituent-level fidelity at matched jet kinematics, rather than also
+    testing the pT_J marginal here -- that is ptbins.py's job, binned over the real window.
+    """
+    p = np.asarray(weight, np.float64)
+    p = p / p.sum() if p.sum() > 0 else None
+    return rng.choice(np.asarray(jet_pt, np.float64), size=n, replace=True, p=p)
+
+
 def gate_point(sur, sel, theta, xd, md, wd, n_generate, nsteps, seed, n_perm, solver="midpoint",
-               batch=4096, redraw=False):
+               batch=4096, redraw=False, jet_pt_pool=None):
+    jet_pt = (_resample_jet_pt(jet_pt_pool, wd, n_generate, np.random.default_rng(seed))
+             if jet_pt_pool is not None and "jet_pt" in sur.layout.known else None)
     xs, ms, rep = sample_and_select(sur, theta, n_generate, sel, seed=seed, nsteps=nsteps,
-                                    solver=solver, batch=batch, redraw=redraw)
+                                    solver=solver, batch=batch, redraw=redraw, jet_pt=jet_pt)
     w = max(xd.shape[1], xs.shape[1])
     t0 = time.time()
     res = fidelity.evaluate(_pad(xd, w), _pad(xs, w), n_events=max(ANALYSIS_N), n_perm=n_perm,
@@ -106,12 +123,12 @@ def run(a):
         js = out / f"point_{pid:05d}.json"
         if js.exists():
             continue
-        xd, md, theta, wd = direct[pid]
+        xd, md, theta, wd, jpd = direct[pid]
         if a.max_direct:
-            xd, md, wd = xd[:a.max_direct], md[:a.max_direct], wd[:a.max_direct]
+            xd, md, wd, jpd = xd[:a.max_direct], md[:a.max_direct], wd[:a.max_direct], jpd[:a.max_direct]
         t0 = time.time()
         res, xs, ms = gate_point(sur, sel, theta, xd, md, wd, a.n_generate, a.nsteps, a.seed + pid,
-                                 a.n_perm, batch=a.batch, redraw=a.redraw)
+                                 a.n_perm, batch=a.batch, redraw=a.redraw, jet_pt_pool=jpd)
         res.update({"point_id": pid, "theta": theta.tolist(), "checkpoint": a.checkpoint, "redraw": a.redraw,
                     "checkpoint_sha256": sur.metadata.get("checkpoint_sha256"),
                     "nsteps": a.nsteps, "device": dev.to_dict(), "host": host,
@@ -179,13 +196,15 @@ def convergence(a):
     direct = direct_by_point(a.fidelity_dir, a.config)
     out = {}
     for pid in a.points:
-        theta = direct[pid][2]
+        _, _, theta, wd, jpd = direct[pid]
+        jet_pt = (_resample_jet_pt(jpd, wd, a.n_generate, np.random.default_rng(a.seed))
+                 if "jet_pt" in sur.layout.known else None)
         obs = {}
         for ns in a.steps:
             t0 = time.time()
             x, m = sur.sample(theta, a.n_generate, None, seed=a.seed, nsteps=ns, solver="midpoint",
                               candidate_names=["b", "T_ref", "tau_init"], batch=a.batch,
-                              sort_by_length=True)
+                              sort_by_length=True, jet_pt=jet_pt)
             ok, _, _ = __import__("omnilearned.sbi.toy.selection", fromlist=["x"]).select_clouds(
                 x.astype(np.float64), sel, m)
             o = fidelity.all_obs(x, m)  # all clouds (paired across step counts)

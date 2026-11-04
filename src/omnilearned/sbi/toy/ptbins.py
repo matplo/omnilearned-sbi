@@ -164,7 +164,7 @@ def run(a):
     from omnilearned.sbi.device import resolve_device
     from omnilearned.sbi.flow import FlowSurrogate
     from omnilearned.sbi.toy.datasets import host_info
-    from omnilearned.sbi.toy.gate import direct_by_point, selection
+    from omnilearned.sbi.toy.gate import _resample_jet_pt, direct_by_point, selection
     from omnilearned.sbi.toy.sample_select import sample_and_select
     from omnilearned.sbi.toy.selection import select_clouds
 
@@ -185,10 +185,16 @@ def run(a):
         if js.exists():
             continue
         t0 = time.time()
-        xd, md, theta, wd = direct[pid]
+        xd, md, theta, wd, jpd = direct[pid]
         _, _, rd = select_clouds(xd.astype(np.float64), sel, md)
+        # v3 (jet_pt-conditioned): resampled from the direct sample, same as gate.py, since
+        # there is no p(pT_J|theta) model yet. doc["spectrum"]'s surrogate side is then a
+        # near-tautology (it reproduces whatever was fed in), not a test of the model -- the
+        # real test here is the per-bin substructure comparison, now at matched jet_pt.
+        jet_pt = (_resample_jet_pt(jpd, wd, a.n_generate, np.random.default_rng(a.seed + pid))
+                 if "jet_pt" in sur.layout.known else None)
         xs, ms, rep = sample_and_select(sur, theta, a.n_generate, sel, seed=a.seed + pid, nsteps=a.nsteps,
-                                        batch=a.batch, redraw=a.redraw)
+                                        batch=a.batch, redraw=a.redraw, jet_pt=jet_pt)
         _, _, rs = select_clouds(xs.astype(np.float64), sel, ms)
         od, os_ = jet_observables(xd, md), jet_observables(xs, ms)
         doc = pt_binned(rd["jet_pt"], od, rs["jet_pt"], os_, edges=edges, weights_d=wd, weights_s=None)
