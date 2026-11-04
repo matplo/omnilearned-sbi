@@ -227,3 +227,34 @@ QOS with `--resume` set, to pick up cleanly whenever fairshare lets them through
 the different constituent width (v3: 184-225, pT/log-E conditioned; v2: absolute eta, no
 log E) -- per-step cost is apparently dominated by batch size and model width, not cloud
 width, at least in this range.
+
+## P3: a second resume bug, then all four runs complete
+
+The first `--resume` attempt on both seed0 and seed1 crashed within seconds of being
+submitted, each after ~3h of real training: `torch.load(resume_from, map_location=device,
+weights_only=False)` moves *every* tensor in the checkpoint to the compute device, including
+`gen_state` -- the minibatch-stream generator's RNG state, which is a CPU-only ByteTensor by
+construction (`gen = torch.Generator(device="cpu")`). `gen.set_state()` on a CUDA tensor
+raised `TypeError: RNG state must be a torch.ByteTensor` immediately. Fixed with
+`map_location="cpu"`; `load_state_dict` on the already-`.to(device)` model/optimizer casts
+the loaded state to match on its own, same as always. The existing resume test did not catch
+this because it runs on `device="cpu"`, where the two map_locations are identical -- a gap
+now stated explicitly in the test's own docstring rather than quietly left.
+
+All four runs finished after that, each resumed at most once (seed2's first segment also
+stopped cleanly at 300000, same as seed0/1):
+
+| run | steps | best_step | best val | checkpoint sha256 (12) |
+|---|---|---|---|---|
+| s0 | 400 000 | 400 000 | 0.88637 | `7ce2e63d5504` |
+| s1 | 400 000 | 364 000 | 0.88637 | `4c059d6268fc` |
+| s2 | 400 000 | 388 000 | 0.88650 | `8c2a1579a212` |
+| ctl | 200 000 | 198 000 | 0.88659 | `929670be5409` |
+
+Seed spread across the three 400k runs is ~0.00013; the 200k control is only ~0.0002 worse.
+Unlike the toy/v2 pattern that motivated running three seeds plus a shorter control (400k
+beating 200k clearly, outside the seed spread), val loss here looks nearly converged by
+200k. **This is val loss, not fidelity** -- per the standing rule, it is not comparable
+across differently-biased splits and is never the thing P4's gate judges on. Whether 400k
+actually buys anything on the gate/`ptbins` metrics is P4's question to answer, not this
+number's.

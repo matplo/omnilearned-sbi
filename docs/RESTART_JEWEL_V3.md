@@ -10,27 +10,29 @@ Brief: `docs/PLAN_JEWEL_V3.md`. Format: `docs/FORMAT_JEWEL_V3.md`. Log: `FINDING
 ## Current state
 
 ```
-PHASE:        P2 done. P3 genuinely training as of 2026-11-03 ~13:40, after two real bugs
-                found and fixed post-launch: (1) regular-QOS GPU jobs sat PENDING on a
-                fairshare penalty (sshare: 89% effective usage vs ~1% share) for 12+ h, not
-                congestion -- worked around with interactive QOS (grants in ~20s, 2-node cap,
-                4h wall); (2) train_flow moved the WHOLE train set to GPU unconditionally
-                (~38.5 GiB for 10.7M jets, OOM on a 40 GiB A100) -- fixed to transfer only the
-                active minibatch; added --resume/--stop-after-step since interactive's 4h cap
-                is close to a 400k-step run's wall time. See FINDINGS for both in full.
-NEXT ACTION:  watch the 4 runs (seeds 0,1 interactive jobs 60761953/60761969, stop_after_step
-              300000; seed2 + 200k control queued on regular QOS 60763011/60763012, --resume
-              set). Once seed0/1 hit their step cap or the 4h wall, relaunch with --resume
-              (same --out) to continue to 400000; once ANY checkpoint exists, run P4 (gate.py
-              run/summarize, then ptbins.py, both --config configs/jewel-2.6.0-cs-v3.toml
-              --fidelity-dir $JEST_NLE_ROOT/data/jewel_v3/merged -- direct_by_point already
-              reads this correctly, wired ahead of need).
-RUNNING:      60761953 (s0), 60761969 (s1) on interactive GPU; 60763011 (s2), 60763012 (ctl)
-              queued on regular GPU QOS
+PHASE:        P2 and P3 both done (2026-11-03). P3 needed three real bugs fixed after launch
+                (fairshare-penalized queue, train_flow OOM at real scale, a resume/map_location
+                bug) -- see FINDINGS. All four runs finished clean:
+                  s0  400k steps  val 0.88637  sha 7ce2e63d5504
+                  s1  400k steps  val 0.88637  sha 4c059d6268fc
+                  s2  400k steps  val 0.88650  sha 8c2a1579a212
+                  ctl 200k steps  val 0.88659  sha 929670be5409
+                Tight seed spread (~0.00013) and only marginal gain 200k->400k (~0.0002) --
+                looks largely converged by 200k, unlike the toy/v2 pattern that motivated the
+                4-run design; P4's fidelity numbers are the real test of that, not val loss.
+NEXT ACTION:  P4 -- gate.py run (128 fidelity points, --redraw, sharded over however many
+              GPUs are free) then summarize, using s0's checkpoint as the reference (or run
+              all 4 and compare -- cheap, same gate.py invocation each time) against
+              $JEST_NLE_ROOT/data/jewel_v3/merged with --config configs/jewel-2.6.0-cs-v3.toml;
+              then ptbins.py over the 20-500 GeV window. direct_by_point already reads v3
+              merged files correctly (wired ahead of need in P3).
+RUNNING:      nothing
 DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
               + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
               four splits under a `splits` key -- see FORMAT doc §4)
-SNAPSHOT:     89e5f94 is the latest (train_flow memory fix + resume support); always cut fresh
+CHECKPOINTS:  $JEST_NLE_ROOT/runs/jewel_v3/p3_train/{v3_set_d256_L6_400k_s0,_s1,_s2,
+              v3_set_d256_L6_200k_ctl}/checkpoint.pt (+ run.json, resume.pt)
+SNAPSHOT:     b069395 is the latest (train_flow memory + resume/map_location fixes); cut fresh
 BLOCKED ON:   nothing
 
 TODO before P7: closure.py's jewel_ensembles (toy/closure.py:121-124) has the same hardcoded
@@ -44,7 +46,7 @@ so fixing it now would be speculative work ahead of need. Noted here so it isn't
 | P0 | branch, worktree, docs | **done** |
 | P1 | config v3, Δη/log E/pid, v3 format + sidecar | **done** |
 | P2 | generation (train/val/fidelity/test) **with event stores** | **done** |
-| P3 | training (jet_pT conditioning, no standardisation) | **running** (job 60730550) |
+| P3 | training (jet_pT conditioning, no standardisation) | **done** (4 checkpoints) |
 | P4 | fidelity: gate + ptbins, weighted estimators | not started |
 | P5 | NLE numerics (rule 6) | not started |
 | P6 | three-factor likelihood + Jacobian + scan | not started |
@@ -158,3 +160,12 @@ Do not commit data, checkpoints, run trees, figures or binaries; never force-pus
     standing in for train) would not have caught this -- it only breaks at real scale, which
     is exactly why nothing was confirmed on the full real train set until a live GPU job hit
     it. Test real-scale data paths on real-scale data before trusting a smaller proxy.
+22. **`torch.load(..., map_location=device)` on a resume checkpoint moved a CPU-only tensor
+    (the minibatch generator's RNG state) onto the GPU too**, and `Generator.set_state`
+    rejects anything but a CPU ByteTensor. Cost both seeds their first `--resume` attempt,
+    after ~3h of training each. `map_location="cpu"` always for a mixed CPU/GPU state dict;
+    `load_state_dict` casts to the destination's actual device on its own.
+23. **A CPU-only test cannot catch a CPU/GPU boundary bug.** The resume tests in
+    `test_resume_training.py` all pass `device="cpu"`, where `map_location="cpu"` and
+    `map_location=device` are the same thing -- trap 22 only exists on real GPU hardware and
+    was found there, not in CI. Noted in the test file itself rather than left implicit.
