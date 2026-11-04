@@ -5,6 +5,12 @@ Motivation: P3 (JEWEL v3 surrogate training) runs on interactive-QOS GPU allocat
 hard 4 h walltime, and a single run (400k steps) is close to that limit. Without this,
 a run killed at e.g. step 350k would either be silently mislabeled "400k" at a worse step, or
 have to restart its ~4 h from scratch -- losing the GPU time already spent either way.
+
+Coverage gap, left open rather than faked: everything here runs on device="cpu", so it
+cannot catch a CPU/GPU boundary bug in the resume path (map_location on torch.load applying
+to every tensor in the checkpoint, including the minibatch generator's CPU-only ByteTensor
+state -- hit for real on both seed0 and seed1's first --resume attempt, 2026-11-03, after
+~3h of training each). Confirmed directly on a real GPU resume instead of simulated here.
 """
 
 import torch
