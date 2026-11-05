@@ -331,3 +331,96 @@ likelihood, closure) should not proceed on this checkpoint until the fidelity fa
 understood or a retrained/fixed surrogate is available** -- running the likelihood and
 closure machinery against a surrogate that fails this gate this badly would not test the NLE
 methodology, it would just reproduce the surrogate's own mismatch.
+
+## P5 numerics check (2026-11-05): decisive FAIL -- midpoint and rk4 disagree ~20-25x
+
+User decision: despite the P4 caution above, the user judged the beyond-R=0.4 mismatch a
+known, acceptable, low-priority tail (see the reports repo's `explorer_core.html`, which
+shows excellent core-jet fidelity once that halo is excluded) and asked to proceed to P5 on
+checkpoint `v3_set_d256_L6_400k_s0` anyway. P5 (rule 6: no fits before this passes) checks
+that Δlog L between nearby candidates converges in solver steps and divergence probes at the
+analysis N, via `toy/numerics.py` (`python -m omnilearned.sbi.toy.numerics run`/`merge`).
+
+**Setup bug found and fixed first.** `scripts/p5_prepare_observations.py` (new; builds a
+1000-real-jet `observations.h5` at the `primary_test` holdout θ=(4.5, 0.45, 0.65) from the
+merged v3 test split, via `write_observations` directly rather than `toy.closure`'s
+P7-scoped, still-toy-only `jewel_ensembles`) first wrote `jet_pt` context as raw GeV. But
+`train.py`'s `context_for_layout` -- the function that actually built jet_pt context during
+training -- applies `np.log()` first ("recommended with log(pT/GeV) scaling, centered near
+0", `multiplicity.py`'s `layout_with_multiplicity` docstring). `FlowSurrogate.sample()` takes
+raw GeV and logs it internally for convenience; `log_prob()` does not -- its `context` must
+already be in trained units. Passing raw GeV (20-389) instead of log(GeV) (3-6) pushed the
+condition ~50-100x outside the trained manifold and produced multi-million-magnitude,
+sign-flipping summed log-likelihoods across probe seeds. Fixed to `context=np.log(jet_pt)`;
+verified sane magnitudes (tens, not millions) on a 20-event CPU smoke test before any GPU time
+was spent. **Also found and fixed in the same pass:** `numerics.py`'s `summed_logl()` never
+forwarded `obs.context` to `log_prob()` at all -- it would have raised `ValueError: known
+context ['jet_pt'] must be supplied` the moment a v3 checkpoint's known-context layout met a
+context-less call. Patched to slice and forward `obs.context` per chunk; regression test
+`tests/sbi/test_numerics_context.py` (a `_RecordingSurrogate` stub, no real checkpoint needed)
+covers slicing-per-chunk, the context-less (toy/v2) backward-compatible path, and that
+`deltas()` threads context through. Full `tests/sbi` suite (231 passed, 7 skipped) green
+after the patch.
+
+**Formal result, 4 pairs of nearby θ around primary_test (single-axis ±2%-of-range steps in
+b/T_ref/tau_init, plus one combined diagonal step), 1000 real jets, 12 probe seeds each,
+`numerics merge`:**
+
+```
+numerics FAIL (limit 0.5; 12 test / 12 reference seeds)
+                        pair0 (b)   pair1 (T_ref)  pair2 (tau_init)  pair3 (diagonal)
+single_seed_shift        315.58       1291.96          212.26           1179.43
+seed_averaged_shift       315.63       1292.40          212.30           1179.87
+probe_std                   0.079         0.358            0.071             0.376
+test_mean (midpoint-64/8probes)   -14.09        52.63            13.33             51.19
+reference_mean (rk4-64/16probes) -329.72      1345.04           225.62           1231.06
+```
+
+Not a marginal miss and not probe noise: `probe_std` (seed-to-seed scatter *within* each
+solver setting) is tiny, 0.07-0.38, so both the production (`midpoint`, 64 steps, 8 probes --
+`toy/numerics.py`'s `TEST` dict, the actual fit solver) and reference (`rk4`, 64 steps, 16
+probes -- `REFERENCE` dict) settings are each internally well-converged. But the two settings
+disagree with each other by a reproducible ~20-25x on every pair.
+
+**Follow-up diagnostics to characterize the cause (3 seeds each, same 4 pairs), done before
+writing this up so the finding is actionable rather than just "it failed":**
+
+| config | pair0 | pair1 | pair2 | pair3 | seeds |
+|---|---|---|---|---|---|
+| midpoint-64/8probes (production) | -14.09 | 52.63 | 13.33 | 51.19 | 12 |
+| midpoint-**128**/8probes (2x steps) | -21.27 | 54.71 | 15.33 | 48.28 | 3 |
+| rk4-64/**16**probes (reference) | -329.72 | 1345.04 | 225.62 | 1231.06 | 12 |
+| rk4-64/**8**probes (reference's probe count halved) | -330.43 | 1347.94 | 226.20 | 1234.00 | 3 |
+
+Doubling the production solver's step count (64 -> 128) barely moved the values
+(-14.09 -> -21.27 for pair0) -- nowhere near the ~23x gap to rk4's -329.72, which rules out
+"production just needs more steps" as the explanation; midpoint is already essentially
+step-converged at 64. Halving rk4's probe count (16 -> 8) left its values essentially
+unchanged (-329.72 -> -330.43) -- ruling out probe count as the driver too. **This isolates
+the cause to the solver method itself: `midpoint` and `rk4` integrating the identical flow
+ODE for the identical Δlog L give answers that differ by a large, systematic, highly
+reproducible factor, not a resolution or noise effect.** That is not supposed to happen for
+two consistent ODE integrators at nsteps=64 each on a reasonably smooth vector field, and
+looks like a genuine implementation discrepancy -- most likely in how log-Jacobian/divergence
+contributions accumulate differently along the two solver code paths in
+`src/omnilearned/sbi/likelihood.py` (unexamined; flagged for the user, not fixed here) --
+rather than something a different choice of solver settings could paper over.
+
+**CUDA vs CPU agreement (secondary check, orthogonal to the finding above):** `midpoint-64/
+8probes`, seeds 0 and 1, same checkpoint/observations/pairs, run once on `--device cuda` and
+once on `--device cpu`. Agreement is excellent -- absolute differences were all < 0.03 across
+every pair and seed (e.g. pair0 seed0: CUDA -14.139 vs CPU -14.162). This rules out a CUDA/CPU
+numerical-precision explanation for the midpoint-vs-rk4 gap; the discrepancy is specific to
+solver choice, not device.
+
+**This is a decision point, not a mechanical next phase.** P5 as specified in
+`docs/PLAN_JEWEL_V3.md` did not pass. Per rule 6 ("no fits before this passes"), **P6
+(likelihood/scan) and P7 (closure) should not proceed against the current numerics defaults**
+-- the production fit solver (`midpoint`, 64 steps, 8 probes) and the higher-fidelity
+reference it's supposed to agree with disagree by over an order of magnitude, meaning the
+Δlog L that would drive every posterior shape and credible interval in a real fit cannot
+currently be trusted. The likely next step is to read `src/omnilearned/sbi/likelihood.py`'s
+`midpoint` and `rk4` solver/divergence-accumulation code paths side by side looking for where
+they diverge (a sign, a missing term, a per-step vs. per-solve normalization, or similar) --
+but that investigation, and any change to `numerics.py`'s `TEST`/`REFERENCE` defaults or to
+`LikelihoodOptions`, is left for the user's explicit decision rather than made here.

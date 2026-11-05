@@ -10,31 +10,37 @@ Brief: `docs/PLAN_JEWEL_V3.md`. Format: `docs/FORMAT_JEWEL_V3.md`. Log: `FINDING
 ## Current state
 
 ```
-PHASE:        P2, P3, P4's gate.py part all done (2026-11-04). P4's gate: checkpoint s0
-                (sha 7ce2e63d5504), all 128 fidelity points, --redraw. Needed two real fixes
-                along the way -- FlowSurrogate.sample() had never been taught to accept
-                jet_pt (v3's layouts condition on it), and a rare-large-N redraw spiked GPU
-                memory (fixed with --batch 256; default 1024 OOM'd every shard in turn, each
-                after producing several good points first) -- see FINDINGS. Family-wise
-                result: **decisive fail**. `gate.py summarize --alpha 0.05`:
-                  128 of 128 points, alpha/S 3.91e-04: 19 FAIL, 19 significant
-                  uniformity ks_p=1.78e-58, n_below_0.01=52/128, binomial_p=1.2e-68
-                Not a marginal miss -- the p-value distribution overwhelmingly rejects the
-                null of no mismatch. `width`/`outer_fraction` recur across most FAIL points'
-                flagged-observable lists; worth following before any retraining attempt.
-NEXT ACTION:  ptbins.py over the 20-500 GeV window hit a real bug on its first real run
-              (fixed, see FINDINGS and the new regression test in test_ptbins.py -- NOT YET
-              IN A SNAPSHOT, cut one before launching): `run()`'s spectrum_edges line did a
-              bare `np.allclose(edges, PT_EDGES_60_200)`, which raises ValueError (cannot
-              broadcast) rather than returning False when edges has a different length --
-              exactly the v3 20-500 window (10 edges vs. 9). Once a fresh snapshot exists,
-              relaunch `ptbins.py run --points 0 16 32 48 64 80 96 112 --batch 256` (a
-              representative 8-point subset, not the full 128 -- the gate's verdict is
-              already decisive and ptbins costs the same per point) to see whether the
-              mismatch concentrates in a jet-pT range. **Then: this is a decision point for
-              the user, not a mechanical next phase** -- P5 onward (NLE numerics, likelihood,
-              closure) should not run against a surrogate that fails fidelity this badly;
-              doing so would test the surrogate's own mismatch, not the NLE methodology.
+PHASE:        P2, P3, P4's gate.py part, P5 all done (2026-11-05). P4's gate: checkpoint s0
+                (sha 7ce2e63d5504), all 128 fidelity points, --redraw. Family-wise result:
+                **decisive fail** (19/128 FAIL at alpha/S=3.91e-04). Root-caused in the
+                reports repo (`reports/m3-surrogate-fidelity/.../root_cause.html`) to the
+                surrogate under-producing real constituents beyond the jet's R=0.4 cone (up
+                to 39x deficit near dR~0.5); `explorer_core.html` showed core-jet (dR<0.4)
+                fidelity is excellent once that known halo is excluded. **User decision:
+                accepted as a known, low-priority tail issue and approved proceeding to P5
+                on this checkpoint** (not blocked on a retrain).
+                P5 (NLE numerics, rule 6) then found its own, independent, more serious
+                problem: **decisive FAIL -- the production fit solver (`midpoint`, 64 steps,
+                8 probes) and a higher-order reference (`rk4`, 64 steps, 16 probes) disagree
+                on Delta-log-L by a reproducible ~20-25x on every one of 4 nearby-theta
+                pairs** (e.g. pair0: -14.09 vs -329.72), while each setting's own seed-to-seed
+                scatter is tiny (probe_std 0.07-0.38) -- not noise, not a step-count issue
+                (doubling midpoint's steps barely moved its value), not a probe-count issue
+                (halving rk4's probes barely moved ITS value), not a CUDA/CPU issue (CPU vs
+                CUDA agree to <0.03). Isolated to the solver method itself -- see FINDINGS,
+                "P5 numerics check (2026-11-05)".
+NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user decision.**
+              Per rule 6, no fit should run against untrusted Delta-log-L. Likely next step:
+              read `src/omnilearned/sbi/likelihood.py`'s `midpoint` and `rk4` solver /
+              divergence-accumulation code paths side by side for where they diverge (a sign,
+              a missing term, a per-step vs. per-solve normalization are the usual suspects
+              for this kind of large, systematic, reproducible gap) -- not attempted yet,
+              left for the user. Only after that is resolved (and `numerics.py`'s `TEST`/
+              `REFERENCE` or `LikelihoodOptions` defaults are updated accordingly, if needed)
+              should P6 proceed. ptbins.py (the P4 followup, 20-500 GeV window) was
+              deprioritized in favor of P5 per the user's direction and was not run this
+              session; its fix is in FINDINGS/test_ptbins.py but still uncommitted as of the
+              last P4 snapshot (c9ed27f) -- revisit if/when useful again, not urgent.
 RUNNING:      nothing
 DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
               + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
@@ -42,11 +48,19 @@ DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (pe
 CHECKPOINTS:  $JEST_NLE_ROOT/runs/jewel_v3/p3_train/{v3_set_d256_L6_400k_s0,_s1,_s2,
               v3_set_d256_L6_200k_ctl}/checkpoint.pt (+ run.json, resume.pt)
 GATE RESULTS: $JEST_NLE_ROOT/runs/jewel_v3/p4_gate/s0/point_NNNNN.json (all 128, checkpoint
-              s0); $JEST_NLE_ROOT/runs/jewel_v3/p4_ptbins/ (not yet produced -- see above)
-SNAPSHOT:     c9ed27f is the latest committed (FlowSurrogate.sample jet_pt fix); the
-              ptbins.py fix above is uncommitted as of this entry -- commit and cut a fresh
-              snapshot before relaunching ptbins
-BLOCKED ON:   nothing
+              s0); $JEST_NLE_ROOT/runs/jewel_v3/p4_ptbins/ (not produced -- deprioritized)
+NUMERICS:     $JEST_NLE_ROOT/runs/jewel_v3/p5_numerics/ (p5_obs.h5 -- 1000 real jets at the
+              primary_test holdout theta, built by scripts/p5_prepare_observations.py;
+              part_test_cuda.json, part_reference_cuda.json, numerics_cuda.json -- the formal
+              merge/evaluate result; diag_midpoint128.json, diag_rk4_8probes.json,
+              part_test_cpu.json -- the follow-up diagnostics, see FINDINGS)
+SNAPSHOT:     c9ed27f is the latest committed (FlowSurrogate.sample jet_pt fix). P5's fixes
+              (numerics.py context forwarding, tests/sbi/test_numerics_context.py,
+              scripts/p5_prepare_observations.py) are committed on top of it as of this
+              entry -- cut a fresh snapshot before any future batch (sbatch, not interactive
+              srun) job that needs them.
+BLOCKED ON:   user decision on the P5 solver discrepancy (see NEXT ACTION) before P6 can
+              proceed
 
 TODO before P7: closure.py's jewel_ensembles (toy/closure.py:121-124) has the same hardcoded
 toy/v2 shard reader direct_by_point had -- needs the same shards_for_config(config) dispatch
@@ -60,8 +74,8 @@ so fixing it now would be speculative work ahead of need. Noted here so it isn't
 | P1 | config v3, Δη/log E/pid, v3 format + sidecar | **done** |
 | P2 | generation (train/val/fidelity/test) **with event stores** | **done** |
 | P3 | training (jet_pT conditioning, no standardisation) | **done** (4 checkpoints) |
-| P4 | fidelity: gate + ptbins, weighted estimators | gate **done -- decisive fail**; ptbins pending a snapshot |
-| P5 | NLE numerics (rule 6) | not started |
+| P4 | fidelity: gate + ptbins, weighted estimators | gate **done -- decisive fail, user accepted (core dR<0.4 fidelity is excellent)**; ptbins not pursued further |
+| P5 | NLE numerics (rule 6) | **done -- decisive FAIL: midpoint vs rk4 solver disagree ~20-25x; blocks P6** |
 | P6 | three-factor likelihood + Jacobian + scan | not started |
 | P7 | closure at the 4 withheld θ | not started |
 | P8 | composite-likelihood correction | not started |

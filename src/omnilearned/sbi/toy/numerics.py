@@ -36,12 +36,17 @@ LIMIT = 0.5
 
 
 def summed_logl(surrogate, obs, candidates, options, event_chunk=256, names=PARAMETERS):
-    """Σ over events of log p for each candidate row; [n_candidates]."""
+    """Σ over events of log p for each candidate row; [n_candidates].
+
+    Forwards ``obs.context`` (e.g. jet_pt) when present -- the v3 backend's flow has
+    jet_pt as known context, and ``ConditionLayout.assemble`` raises if a known-context
+    layout is asked to assemble without it (see FINDINGS_JEWEL_V3.md, P5)."""
     total = np.zeros(len(candidates))
     for e0 in range(0, len(obs), event_chunk):
         sl = slice(e0, e0 + event_chunk)
+        ctx = obs.context[sl] if obs.context is not None else None
         lp, _ = surrogate.log_prob(obs.x[sl], obs.mask[sl], candidates, obs.event_id[sl], options,
-                                   candidate_names=list(names))
+                                   candidate_names=list(names), context=ctx)
         total += np.asarray(lp, np.float64).sum(1)
     return total
 
