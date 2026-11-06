@@ -30,14 +30,20 @@ PHASE:        P2, P3, P4's gate.py part, P5 all done (2026-11-05). P4's gate: ch
                 CUDA agree to <0.03). Isolated to the solver method itself -- see FINDINGS,
                 "P5 numerics check (2026-11-05)".
 NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user decision.**
-              Per rule 6, no fit should run against untrusted Delta-log-L. Likely next step:
-              read `src/omnilearned/sbi/likelihood.py`'s `midpoint` and `rk4` solver /
-              divergence-accumulation code paths side by side for where they diverge (a sign,
-              a missing term, a per-step vs. per-solve normalization are the usual suspects
-              for this kind of large, systematic, reproducible gap) -- not attempted yet,
-              left for the user. Only after that is resolved (and `numerics.py`'s `TEST`/
-              `REFERENCE` or `LikelihoodOptions` defaults are updated accordingly, if needed)
-              should P6 proceed. ptbins.py (the P4 followup, 20-500 GeV window) was
+              Per rule 6, no fit should run against untrusted Delta-log-L. Follow-up
+              (2026-11-05, FINDINGS "P5 follow-up"): compared midpoint vs rk4 directly on 5
+              real jets with exact (non-stochastic) divergence -- the absolute accumulated
+              term only disagrees 1.2-3.1x per jet (not 20-25x), but the pairwise Delta a fit
+              actually uses is far smaller than either solver's own noise floor at nsteps=64,
+              so the ratio of the two solvers' pairwise shifts swings wildly and even flips
+              sign across jets (+2x to +53x). This reframes the likely fix: not "which
+              solver," but whether nsteps needs to go well beyond 64 (for whichever solver is
+              kept) or the integration needs float64 instead of float32 -- neither tested yet,
+              both left for the user. `scripts/p5_trajectory_diagnostic.py` reproduces this
+              on any jet/theta. Only after the per-jet signal is confirmed above the
+              discretization floor (and `numerics.py`'s `TEST`/`REFERENCE` or
+              `LikelihoodOptions` defaults are updated accordingly, if needed) should P6
+              proceed. ptbins.py (the P4 followup, 20-500 GeV window) was
               deprioritized in favor of P5 per the user's direction and was not run this
               session; its fix is in FINDINGS/test_ptbins.py but still uncommitted as of the
               last P4 snapshot (c9ed27f) -- revisit if/when useful again, not urgent.

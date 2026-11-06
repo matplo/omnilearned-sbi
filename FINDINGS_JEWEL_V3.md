@@ -424,3 +424,48 @@ currently be trusted. The likely next step is to read `src/omnilearned/sbi/likel
 they diverge (a sign, a missing term, a per-step vs. per-solve normalization, or similar) --
 but that investigation, and any change to `numerics.py`'s `TEST`/`REFERENCE` defaults or to
 `LikelihoodOptions`, is left for the user's explicit decision rather than made here.
+
+## P5 follow-up (2026-11-05): compared directly on real jets -- the gap is a noise-floor
+## effect, not simply "rk4 is right, midpoint is wrong"
+
+Took the recommended next step above literally: `scripts/p5_trajectory_diagnostic.py` (new)
+replicates `FlowSurrogate.log_prob`'s setup for one real jet and one candidate θ, then
+manually drives both solvers' step loops with **exact** (autograd, non-stochastic) divergence
+-- no Hutchinson probes anywhere -- logging every stage. Run on 5 real jets spanning the
+sample's multiplicity (5-93 constituents) and jet-p_T (25-389 GeV) range, at θ0 = primary_test
+and at θ1 = θ0 with b += 0.22 (pair0's step).
+
+**Absolute accumulated term** (one θ, ∫div(v)dt over the trajectory) disagrees only modestly
+between solvers -- 1.17x-3.13x, growing with multiplicity (N=5: 1.67x; N=25: 1.52x; N=30 but
+highest p_T: 1.17x; N=43: 2.46x; N=93: 3.13x) -- consistent with higher-dimensional jets
+exposing more of the fine-scale structure §3's toy-field sanity check showed a lower-order
+solver under-resolving. **Nowhere near the formal check's 20-25x.**
+
+**Pairwise Δ (θ1-θ0), what a fit actually computes**, resolves the puzzle: midpoint's shift
+from this one small step in b is only 0.0009-0.12 across these jets -- tiny against the
+54-870 absolute scale, because differencing cancels almost all of the shared accumulated
+term. The real per-jet θ-signal is far smaller than either solver's own ~1-3x absolute
+disagreement. The *ratio* of the two solvers' pairwise shifts is accordingly wild and even
+sign-flipping: +4.6x (N=5), +53.1x (N=25), +2.1x (N=30), **-20.7x (N=43)**, +19.2x (N=93) --
+exactly what dividing two small, uncorrelated numerical residuals looks like, not what
+dividing two estimates of the same real quantity looks like.
+
+**This refines, not reverses, the P5 FAIL above.** It is not that `rk4` is accurate and
+`midpoint` is wrong at the single-jet level -- per-jet, they're close to each other, and both
+are probably far from the true continuous-time integral's θ-dependent part specifically,
+because at nsteps=64 that part is smaller than each solver's own discretization error. The
+aggregate 20-25x gap is plausibly what happens when ~1000 such noise-dominated per-jet
+residuals are summed: if each solver's residual carries even a little net consistency of sign
+across jets (both see the same real b-dependence, just resolve it with different, uncontrolled
+error), the sums diverge by a large, reproducible factor without either solver being "right"
+in an absolute sense.
+
+**Reframes the likely fix:** not simply "pick rk4 over midpoint," but "at nsteps=64, the
+per-jet θ-dependence a fit needs may be below either solver's own discretization floor."
+Before deciding on a solver, check whether raising `nsteps` well beyond 64 makes the pairwise
+Δ in the table above converge to a stable, cross-solver-consistent value instead of the
+current wild swings, and whether running the integration in float64 (both this diagnostic and
+the production pipeline run in float32 throughout) changes anything -- neither tested yet.
+Full write-up with figures: the reports repo's
+`reports/m4-nle-numerics/2026-11-05T0530-0800_jewel-v3_p5-numerics-solver-fail/index.html`
+§6. Nothing in the production code was changed to act on this.
