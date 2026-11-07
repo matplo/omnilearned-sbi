@@ -32,9 +32,19 @@ GRID_HALF_WIDTH_FRAC = 0.25  # of the box's own half-range, per axis
 
 
 def pick_theta_points(direct, lo, hi, n=N_POINTS):
+    """n points spread across the box by b, excluding any point within one grid
+    half-width of a box edge on any axis -- otherwise the per-ensemble grid clips
+    against the box there, giving an asymmetric window that conflates "truth sits
+    at the box edge" with the numerics question this explorer is actually asking.
+    """
+    half_width = (hi - lo) / 2 * GRID_HALF_WIDTH_FRAC
     pids = sorted(direct)
     thetas = {pid: direct[pid][2] for pid in pids}
-    order = sorted(pids, key=lambda p: thetas[p][0])
+    interior = [pid for pid in pids
+               if np.all(thetas[pid] - half_width >= lo) and np.all(thetas[pid] + half_width <= hi)]
+    if len(interior) < n:
+        raise ValueError(f"only {len(interior)} fidelity points have an unclipped grid window, need {n}")
+    order = sorted(interior, key=lambda p: thetas[p][0])
     idx = np.linspace(0, len(order) - 1, n).astype(int)
     return [order[i] for i in idx]
 
