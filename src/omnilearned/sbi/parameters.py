@@ -55,15 +55,19 @@ class ConditionLayout:
         return out
 
     def assemble(self, candidates, candidate_names=None, context=None,
-                 context_names=None):
+                 context_names=None, dtype=np.float32):
         """Build normalized condition rows.
 
         Args:
             candidates: [M, n_unknown] candidate parameter values.
             candidate_names: order of the candidate columns (default: layout).
             context: optional [M, n_known] measured context aligned with rows.
+            dtype: output dtype. Default float32 (every caller before this
+                parameter existed); pass np.float64 for a double-precision
+                condition row (the normalization itself is always done in
+                float64 regardless, only the final cast changes).
         Returns:
-            float32 numpy array [M, dim].
+            numpy array [M, dim] in ``dtype``.
         """
         candidate_names = list(candidate_names or self.unknown)
         if sorted(candidate_names) != sorted(self.unknown):
@@ -85,7 +89,7 @@ class ConditionLayout:
                 col = self.columns.index(name)
                 src = context_names.index(name)
                 out[:, col] = (context[:, src] - self.center[name]) / self.scale[name]
-        return out.astype(np.float32)
+        return out.astype(dtype)
 
     def assemble_torch(self, candidates, device, **kwargs):
         return torch.from_numpy(self.assemble(candidates, **kwargs)).to(device)

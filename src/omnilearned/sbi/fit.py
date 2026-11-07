@@ -50,6 +50,7 @@ import os
 import time
 
 import numpy as np
+import torch
 
 from omnilearned.sbi.flow import FlowSurrogate
 from omnilearned.sbi.device import resolve_device
@@ -100,6 +101,19 @@ def check_fit_config(cfg):
 
 def _grid(spec):
     return Grid.from_spec(spec)
+
+
+def _dtype(cfg):
+    """torch dtype from [likelihood].dtype ("float32" default, "float64" allowed).
+
+    Not a LikelihoodOptions field (that dataclass is passed through
+    ``LikelihoodOptions.from_dict``, which silently drops unknown keys) --
+    read separately so a typo here raises instead of being ignored.
+    """
+    name = cfg.get("likelihood", {}).get("dtype", "float32")
+    if name not in ("float32", "float64"):
+        raise ValueError(f"likelihood.dtype must be 'float32' or 'float64', got {name!r}")
+    return torch.float64 if name == "float64" else torch.float32
 
 
 def _prior(cfg, grid):
@@ -166,12 +180,15 @@ class LogpCache:
         self._last = time.time()
 
 
-def make_logp_fn(surrogate, obs, options, names, fixed=None, cache=None):
+def make_logp_fn(surrogate, obs, options, names, fixed=None, cache=None, dtype=torch.float32):
     """(event_slice, candidates) -> [m, n] per-event log densities.
 
     ``fixed`` maps parameter names held fixed (e.g. a local node value) when
     ``names`` covers only part of the condition layout. ``cache`` (a
     :class:`LogpCache`) reuses values computed before an interruption.
+    ``dtype``: precision for the integration, forwarded to
+    :meth:`FlowSurrogate.log_prob` (default float32, every caller before this
+    parameter existed).
     """
     diag = {"seconds": 0.0, "nfe": 0, "rows": 0, "nonfinite": 0, "cached_rows": 0}
 
@@ -183,7 +200,8 @@ def make_logp_fn(surrogate, obs, options, names, fixed=None, cache=None):
             full_names += list(fixed)
         ctx = None if obs.context is None else obs.context[sl]
         lp, d = surrogate.log_prob(obs.x[sl], obs.mask[sl], cand, obs.event_id[sl],
-                                   options, candidate_names=full_names, context=ctx)
+                                   options, candidate_names=full_names, context=ctx,
+                                   dtype=dtype)
         diag["seconds"] += d["seconds"]
         diag["nfe"] += d["nfe"]
         diag["rows"] += d["rows"]
@@ -224,6 +242,7 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
     if cfg.get("observations_sha256") and obs.sha256 != cfg["observations_sha256"]:
         raise ValueError("observation hash does not match fit configuration")
     options = LikelihoodOptions.from_dict(cfg.get("likelihood", {}))
+    dtype = _dtype(cfg)
     scan_cfg = cfg.get("scan", {})
     # Evaluate events in order of multiplicity: a chunk costs its largest N, so sorted
     # chunks skip most padded work. Per-event values do not depend on the chunking
@@ -267,13 +286,13 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
         if scan_cfg.get("support") or int(scan_cfg.get("refine", {}).get("rounds", 0)):
             raise ValueError("scan.ridge excludes scan.support and scan.refine")
         doc = _run_ridge(cfg, surrogate, obs, options, scan_cfg, log_norm_fn, provenance,
-                         out_prefix, progress, log, file_order, logp_cache)
+                         out_prefix, progress, log, file_order, logp_cache, dtype)
     elif mode == "fixed_vector" and scan_cfg.get("support"):
         if int(scan_cfg.get("refine", {}).get("rounds", 0)):
             raise ValueError("scan.support and scan.refine are exclusive")
         sup = scan_cfg["support"]
         grid = _grid(cfg["grid"])
-        fn, diag = make_logp_fn(surrogate, obs, options, grid.names, cache=logp_cache)
+        fn, diag = make_logp_fn(surrogate, obs, options, grid.names, cache=logp_cache, dtype=dtype)
         res = support_scan(fn, len(obs), grid, sup["seed_stride"],
                            delta_logpost=sup.get("delta_logpost", 10.0),
                            event_chunk=scan_cfg.get("event_chunk", 256),
@@ -293,7 +312,7 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
         rounds = []
         refine = scan_cfg.get("refine", {})
         for r in range(1 + int(refine.get("rounds", 0))):
-            fn, diag = make_logp_fn(surrogate, obs, options, grid.names, cache=logp_cache)
+            fn, diag = make_logp_fn(surrogate, obs, options, grid.names, cache=logp_cache, dtype=dtype)
             res = joint_scan(fn, len(obs), grid,
                              event_chunk=scan_cfg.get("event_chunk", 256),
                              candidate_chunk=scan_cfg.get("candidate_chunk", 8),
@@ -316,7 +335,7 @@ def run_fit(cfg, log_norm_fn=None, local_log_weight_fn=None, log=print,
     elif mode == "local_variable":
         doc = _run_local(cfg, surrogate, obs, options, scan_cfg, local_log_weight_fn,
                          log_norm_fn, provenance, out_prefix, progress, log, file_order,
-                         logp_cache)
+                         logp_cache, dtype)
     else:
         raise ValueError(f"unknown fit mode {mode}")
     doc["wall_seconds"] = time.time() - start
@@ -346,7 +365,7 @@ def _total_logpost_fn(fn, n_events, event_chunk, log_norm_fn=None):
 
 
 def _run_ridge(cfg, surrogate, obs, options, scan_cfg, log_norm_fn, provenance, out_prefix,
-               progress, log, file_order, logp_cache):
+               progress, log, file_order, logp_cache, dtype=torch.float32):
     """Ridge-following lattice scan (``omnilearned.sbi.ridge``)::
 
         [scan]
@@ -373,7 +392,7 @@ def _run_ridge(cfg, surrogate, obs, options, scan_cfg, log_norm_fn, provenance, 
                               {**logp_cache.identity, "stage": "locate", "likelihood": cheap.to_dict()},
                               every=logp_cache.every)
     t0 = time.time()
-    fn_c, diag_c = make_logp_fn(surrogate, obs, cheap, grid.names, cache=loc_cache)
+    fn_c, diag_c = make_logp_fn(surrogate, obs, cheap, grid.names, cache=loc_cache, dtype=dtype)
     coarse = support_scan(fn_c, len(obs), grid, loc.get("seed_stride", [4] * len(grid.names)),
                           delta_logpost=loc.get("delta_logpost", 15.0), event_chunk=ec,
                           candidate_chunk=cc, log_prior=_prior(cfg, grid), log_norm_fn=log_norm_fn,
@@ -390,7 +409,7 @@ def _run_ridge(cfg, surrogate, obs, options, scan_cfg, log_norm_fn, provenance, 
     if loc_cache is not None:
         loc_cache.flush()
     t_locate = time.time() - t0
-    fn, diag = make_logp_fn(surrogate, obs, options, grid.names, cache=logp_cache)
+    fn, diag = make_logp_fn(surrogate, obs, options, grid.names, cache=logp_cache, dtype=dtype)
     res = ridge_scan(fn, len(obs), rmap, bounds, rc["step"], rc["h"], u_max=rc.get("u_max", 6.0),
                      delta_logpost=rc.get("delta_logpost", 10.0), event_chunk=ec, candidate_chunk=cc,
                      log_norm_fn=log_norm_fn, keep_per_event=True, progress=progress,
@@ -407,7 +426,8 @@ def _run_ridge(cfg, surrogate, obs, options, scan_cfg, log_norm_fn, provenance, 
 
 
 def _run_local(cfg, surrogate, obs, options, scan_cfg, weight_fn, log_norm_fn,
-               provenance, out_prefix, progress, log, file_order=lambda r: r, logp_cache=None):
+               provenance, out_prefix, progress, log, file_order=lambda r: r, logp_cache=None,
+               dtype=torch.float32):
     """Shared parameters on a grid; local variable integrated per event."""
     if weight_fn is None:
         raise ValueError("local_variable mode needs local_log_weight_fn")
@@ -416,7 +436,7 @@ def _run_local(cfg, surrogate, obs, options, scan_cfg, weight_fn, log_norm_fn,
     nodes = np.linspace(loc["nodes"]["min"], loc["nodes"]["max"], int(loc["nodes"]["n"]))
     grid = _grid(cfg["grid"])  # shared parameters only
     full = Grid([name] + grid.names, [nodes] + grid.axes)
-    fn, diag = make_logp_fn(surrogate, obs, options, full.names, cache=logp_cache)
+    fn, diag = make_logp_fn(surrogate, obs, options, full.names, cache=logp_cache, dtype=dtype)
     # log_norm_fn (if any) acts per (local, shared) node and per event.
     res = joint_scan(fn, len(obs), full, event_chunk=scan_cfg.get("event_chunk", 256),
                      candidate_chunk=scan_cfg.get("candidate_chunk", 8),

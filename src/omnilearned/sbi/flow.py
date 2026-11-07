@@ -14,6 +14,7 @@ log p(N | theta), the known condition column ``n_constituents`` is filled from
 the mask, and ``sample`` draws N first.
 """
 
+import contextlib
 import copy
 import hashlib
 import io
@@ -76,6 +77,24 @@ class TrainOptions:
 
     def to_dict(self):
         return asdict(self)
+
+
+@contextlib.contextmanager
+def _cast_model(model, dtype):
+    """Temporarily cast ``model``'s parameters/buffers to ``dtype``, restoring the
+    original dtype on exit (even on error) -- the model is never left mutated.
+    No-op if the model is already in ``dtype`` (the common float32 case) or has no
+    parameters at all (a fixed field, e.g. test fixtures -- nothing to cast)."""
+    current = next(model.parameters(), None)
+    if current is None or current.dtype == dtype:
+        yield
+        return
+    current = current.dtype
+    model.to(dtype)
+    try:
+        yield
+    finally:
+        model.to(current)
 
 
 def active_width(mask):
@@ -176,21 +195,28 @@ class FlowSurrogate:
     # ---- density --------------------------------------------------------
     @ieee_float32()
     def log_prob(self, x_phys, mask, candidates, event_ids, options,
-                 candidate_names=None, context=None):
+                 candidate_names=None, context=None, dtype=torch.float32):
         """Per-(event, candidate) physical-coordinate log densities.
 
         Args:
             x_phys: [N, P, F] float numpy/tensor observations.
             candidates: [M, n_unknown] candidate parameter values.
+            dtype: precision for the integration (model, condition row and
+                every tensor below the feature transform). Default float32,
+                matching every caller before this parameter existed. float64
+                temporarily casts ``self.model``'s parameters for the call
+                and restores them on exit (even on error) -- the surrogate
+                is never left mutated. ``ConditionLayout.assemble`` follows
+                the same dtype (it used to hardcode float32 regardless).
         Returns:
             (float64 array [M, N], diagnostics)
         """
         x_phys, mask = self._trim(x_phys, mask)
         context, context_names = self._context(mask, context, None)
-        x = torch.as_tensor(np.asarray(x_phys), dtype=torch.float32)
+        x = torch.as_tensor(np.asarray(x_phys), dtype=dtype)
         mask_t = torch.as_tensor(np.asarray(mask), dtype=torch.bool)
         u, logj = self.transform.forward(x.double(), mask_t)
-        u = u.float()
+        u = u.to(dtype)
         candidates = np.atleast_2d(candidates)
         M, N = candidates.shape[0], x.shape[0]
         ctx = None
@@ -199,11 +225,12 @@ class FlowSurrogate:
         cond = self.layout.assemble(
             np.repeat(candidates, N, axis=0), candidate_names, context=ctx,
             context_names=context_names,
+            dtype=np.float64 if dtype == torch.float64 else np.float32,
         )
         xs = u.repeat(M, 1, 1).to(self.device)
         ms = mask_t.repeat(M, 1).to(self.device)
         ids = np.tile(np.asarray(event_ids), M)
-        with frozen_for_inference(self.model):
+        with frozen_for_inference(self.model), _cast_model(self.model, dtype):
             lp, diag = log_prob(
                 self.model,
                 xs,
