@@ -45,7 +45,7 @@ def select_clouds(x_phys, sel, mask=None):
 
 
 def acceptance_table(surrogate, sel, axes, n_samples, seed, nsteps=32, solver="midpoint",
-                     log=print, jet_pt_pool_fn=None):
+                     log=print, jet_pt_pool_fn=None, batch=256):
     """Pr_q(S | theta) on the product grid ``axes`` (PARAMETERS order).
 
     For v2 selections the surrogate draws N from its multiplicity model.
@@ -57,6 +57,11 @@ def acceptance_table(surrogate, sel, axes, n_samples, seed, nsteps=32, solver="m
     fidelity theta point (resolution-dependent choice, left to the caller -- this
     function only resamples from whatever pool it is given, via the same
     ``toy.gate._resample_jet_pt`` convention the fidelity gate already uses).
+
+    ``batch``: ``FlowSurrogate.sample``'s own ``batch`` default is 4096 -- effectively
+    unchunked when ``n_samples`` is that large or more, which OOMs after a few grid
+    points (memory fragments across un-freed allocations; P4's gate hit the identical
+    pattern, fixed the same way -- see FINDINGS_JEWEL_V3.md).
     """
     from omnilearned.sbi.toy.gate import _resample_jet_pt
 
@@ -77,10 +82,11 @@ def acceptance_table(surrogate, sel, axes, n_samples, seed, nsteps=32, solver="m
                 jet_pt = _resample_jet_pt(pool, weight, n_samples, np.random.default_rng(seed))
             x, mask = surrogate.sample(th, n_samples, None, seed=seed, nsteps=nsteps,
                                        solver=solver, candidate_names=list(PARAMETERS),
-                                       jet_pt=jet_pt)
+                                       jet_pt=jet_pt, batch=batch)
         else:
             x = surrogate.sample(th, n_samples, sel.fixed_constituent_count, seed=seed,
-                                 nsteps=nsteps, solver=solver, candidate_names=list(PARAMETERS))
+                                 nsteps=nsteps, solver=solver, candidate_names=list(PARAMETERS),
+                                 batch=batch)
             mask = None
         ok, reason, _ = select_clouds(x.astype(np.float64), sel, mask)
         idx = np.unravel_index(i, shape)

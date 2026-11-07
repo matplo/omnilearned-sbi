@@ -25,7 +25,7 @@ class _RecordingSurrogate:
         self.calls = []
 
     def sample(self, theta, n, fixed_count, seed=0, nsteps=32, solver="midpoint",
-              candidate_names=None, jet_pt=None):
+              candidate_names=None, jet_pt=None, batch=256):
         self.calls.append(jet_pt)
         n_particles = 4
         x = np.zeros((n, n_particles, 3))
