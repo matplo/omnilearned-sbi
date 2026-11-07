@@ -7,9 +7,22 @@ for ONE real jet and ONE candidate theta, then manually drives the same step loo
 likelihood._fixed_step uses for "midpoint" and "rk4", logging every stage's divergence value
 (d2 for midpoint; d1..d4 for rk4) instead of only the final accumulated sum.
 
+Runs under ``likelihood.ieee_float32()`` (full-precision float32 matmuls, no TF32) matching
+what the decorated ``log_prob`` already does -- confirmed this process's default matmul
+precision is "highest" regardless (FlowSurrogate never imports omnilearned.train, which is
+the only place TF32 gets turned on), so this is a belt-and-braces guard, not a fix to a bug
+found in the original run.
+
+``--dtype float64`` casts the network, base and every tensor to double precision throughout
+(ConditionLayout.assemble forces float32 at its last line regardless of input, so the
+condition row is rebuilt by hand here to stay in float64 end to end) -- tests whether the
+wild, sign-flipping pairwise ratios in the first pass (float32, nsteps=64) are a
+discretization-truncation effect (should persist in float64) or partly float32 rounding
+noise in a catastrophic-cancellation setup (should shrink in float64).
+
     PYTHONPATH=$PWD/src henv -n omni-sbi -x python scripts/p5_trajectory_diagnostic.py \\
         --checkpoint CKPT --observations OBS.h5 --jet-index N --theta b T_ref tau_init \\
-        --nsteps 64 --out traj.json
+        --nsteps 64 --dtype float32 --out traj.json
 """
 
 import argparse
@@ -28,19 +41,42 @@ def main():
                          "multiplicity is closest to the sample median")
     ap.add_argument("--theta", type=float, nargs=3, required=True, metavar=("b", "T_ref", "tau_init"))
     ap.add_argument("--nsteps", type=int, default=64)
+    ap.add_argument("--dtype", choices=["float32", "float64"], default="float32")
     ap.add_argument("--device", default="auto")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
     from omnilearned.sbi.device import resolve_device
     from omnilearned.sbi.flow import FlowSurrogate
-    from omnilearned.sbi.likelihood import LikelihoodOptions, _rhs_factory, frozen_for_inference
+    from omnilearned.sbi.likelihood import (
+        LikelihoodOptions, _rhs_factory, frozen_for_inference, ieee_float32,
+    )
     from omnilearned.sbi.observations import read_observations
     from omnilearned.sbi.toy.simulator import PARAMETERS
 
+    dtype = torch.float64 if a.dtype == "float64" else torch.float32
     dev = resolve_device(a.device)
     sur = FlowSurrogate.load(a.checkpoint, device=dev.device)
+    if dtype == torch.float64:
+        sur.model.double()
     obs = read_observations(a.observations)
+
+    def assemble_f64(layout, candidates, candidate_names, context, context_names):
+        """ConditionLayout.assemble, but kept in float64 (the library version forces
+        float32 at its last line regardless of input dtype)."""
+        candidates = np.atleast_2d(np.asarray(candidates, dtype=np.float64))
+        out = np.zeros((candidates.shape[0], layout.dim), dtype=np.float64)
+        for j, name in enumerate(candidate_names):
+            col = layout.columns.index(name)
+            out[:, col] = (candidates[:, j] - layout.center[name]) / layout.scale[name]
+        if layout.known:
+            ctx = np.atleast_2d(np.asarray(context, dtype=np.float64))
+            cnames = list(context_names or layout.known)
+            for name in layout.known:
+                col = layout.columns.index(name)
+                src = cnames.index(name)
+                out[:, col] = (ctx[:, src] - layout.center[name]) / layout.scale[name]
+        return out
 
     indices = a.jet_index
     if indices is None:
@@ -63,17 +99,16 @@ def main():
         x = torch.as_tensor(np.asarray(x_phys), dtype=torch.float32)
         mask_t = torch.as_tensor(np.asarray(mask), dtype=torch.bool)
         u, logj = sur.transform.forward(x.double(), mask_t)
-        u = u.float()
-        cond_np = sur.layout.assemble(np.asarray([a.theta]), list(PARAMETERS), context=context_row,
-                                      context_names=context_names)
-        cond = torch.from_numpy(cond_np).to(sur.device)
-        x0 = u.to(sur.device) * mask_t.to(sur.device).float().unsqueeze(-1)
+        u = u.to(dtype)
+        cond_np = assemble_f64(sur.layout, [a.theta], list(PARAMETERS), context_row, context_names)
+        cond = torch.from_numpy(cond_np).to(sur.device, dtype=dtype)
+        x0 = u.to(sur.device) * mask_t.to(sur.device).to(dtype).unsqueeze(-1)
         mask_d = mask_t.to(sur.device)
         mask_f = mask_d.to(x0.dtype).unsqueeze(-1)
 
         options = LikelihoodOptions(solver="midpoint", nsteps=a.nsteps, divergence="exact").validate()
         counter = [0]
-        with frozen_for_inference(sur.model):
+        with ieee_float32(), frozen_for_inference(sur.model):
             rhs = _rhs_factory(sur.model, cond, mask_d, mask_f, options, probes=None, counter=counter)
 
             h = 1.0 / a.nsteps
