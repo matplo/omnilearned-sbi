@@ -45,21 +45,39 @@ def select_clouds(x_phys, sel, mask=None):
 
 
 def acceptance_table(surrogate, sel, axes, n_samples, seed, nsteps=32, solver="midpoint",
-                     log=print):
+                     log=print, jet_pt_pool_fn=None):
     """Pr_q(S | theta) on the product grid ``axes`` (PARAMETERS order).
 
     For v2 selections the surrogate draws N from its multiplicity model.
+
+    ``jet_pt_pool_fn``: required when ``surrogate.layout.known`` includes ``"jet_pt"``
+    (the v3 backend -- there is no p(pT_J | theta) model yet, so sampling needs it
+    supplied). Called as ``jet_pt_pool_fn(theta) -> (jet_pt_values, weights)``; a
+    caller typically returns the weighted jet_pT spectrum of the nearest real
+    fidelity theta point (resolution-dependent choice, left to the caller -- this
+    function only resamples from whatever pool it is given, via the same
+    ``toy.gate._resample_jet_pt`` convention the fidelity gate already uses).
     """
+    from omnilearned.sbi.toy.gate import _resample_jet_pt
+
     variable = isinstance(sel, simulator_v2.Selection)
     nreason = len(simulator_v2.REJECTION_REASONS if variable else simulator.REJECTION_REASONS)
     shape = tuple(len(a) for a in axes)
     acc = np.zeros(shape)
     reasons = np.zeros(shape + (nreason,), dtype=np.int64)
     pts = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, len(axes))
+    needs_jet_pt = variable and "jet_pt" in getattr(surrogate.layout, "known", ())
+    if needs_jet_pt and jet_pt_pool_fn is None:
+        raise ValueError("surrogate needs known context 'jet_pt'; pass jet_pt_pool_fn")
     for i, th in enumerate(pts):
         if variable:
+            jet_pt = None
+            if needs_jet_pt:
+                pool, weight = jet_pt_pool_fn(th)
+                jet_pt = _resample_jet_pt(pool, weight, n_samples, np.random.default_rng(seed))
             x, mask = surrogate.sample(th, n_samples, None, seed=seed, nsteps=nsteps,
-                                       solver=solver, candidate_names=list(PARAMETERS))
+                                       solver=solver, candidate_names=list(PARAMETERS),
+                                       jet_pt=jet_pt)
         else:
             x = surrogate.sample(th, n_samples, sel.fixed_constituent_count, seed=seed,
                                  nsteps=nsteps, solver=solver, candidate_names=list(PARAMETERS))
