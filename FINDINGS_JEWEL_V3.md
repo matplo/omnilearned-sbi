@@ -598,5 +598,41 @@ measure a shift in. Full suite green (`tests/sbi`, 242 passed, 7 skipped) after 
 
 P7 itself still has not started (needs P3-P6 done first, per the plan), so this fix has not
 been exercised against real JEWEL test-split data yet -- only the synthetic fixture above.
-`direct_by_point`'s own hardcoded toy/v2 reader (the other half of trap 24's dispatch gap)
-is still open too.
+
+## P5 follow-up addendum 2: `jewel_ensembles` also had the hardcoded toy/v2 reader
+## `direct_by_point` had (2026-11-08)
+
+Source revision febc2a3 (dirty: `src/omnilearned/sbi/toy/closure.py`,
+`tests/sbi/test_jewel_closure_source.py` modified -- committed at the end of this entry).
+
+The weight fix above (addendum 1) only touched `jewel_ensembles`'s sampling; its reader was
+still the hardcoded `from omnilearned.sbi.toy.datasets import read_shards, shard_paths`
+import, unconditionally -- the exact gap `docs/RESTART_JEWEL_V3.md`'s original TODO named
+("needs the same `shards_for_config(config)` dispatch [`direct_by_point`] had"). Added a
+`config=None` parameter and the same `shards_for_config(config) if config else (shard_paths,
+read_shards)` dispatch `gate.direct_by_point` already uses; threaded from `prepare()`'s
+already-resolved `config` path. `jewel_ensembles` is now capable of reading real v3
+test-split data, not just the toy/v2 schema.
+
+**One real wrinkle found while wiring this up**: v3 shards already carry `event_id` (unique
+per jet) and `group_id` (the originating JEWEL event; inclusive jets share it) as *separate*
+columns (`src/omnilearned/sbi/jewel/v3format.py`'s own schema). The toy/v2 schema has only
+one `event_id` column that plays both roles, which is what `jewel_ensembles`'s grouping logic
+(both the weighted-event resampling, addendum 1, and the returned record's `group_id`) was
+built against -- unconditionally reading `d["event_id"]` as the shared-event key would have
+silently grouped v3 jets by their already-unique-per-jet id (grouping by almost-nothing,
+one "event" per jet) instead of the real JEWEL event. Fixed by using `d["group_id"]` when
+present, falling back to `d["event_id"]` for the toy/v2 schema
+(`group_source = d["group_id"] if "group_id" in d else d["event_id"]`).
+
+New test `test_jewel_ensembles_v3_dispatch_respects_weight_and_group_id` (a v3-format fixture
+via `jewel.v3format.write_jets`, config pointed at `configs/jewel-2.6.0-cs-v3.toml`) checks
+both the dispatch (data genuinely comes from the v3 reader) and that the returned `group_id`
+reflects the v3 file's real grouping, not a 1:1 copy of the synthetic per-record `event_id`.
+Full suite green after this fix too.
+
+`direct_by_point` itself needed no change here -- it already had this dispatch (from earlier,
+pre-this-session P4 work); only `jewel_ensembles` was still missing it. `direct_by_point` is
+still hardcoded to the `"fidelity"` split name specifically (not a parameter), which is a
+separate, narrower gap than "hardcoded reader" -- not touched, since nothing calls it needing
+a different split yet.

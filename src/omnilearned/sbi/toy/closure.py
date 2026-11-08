@@ -107,7 +107,7 @@ def load_sample_config(path):
     return cfg, sel
 
 
-def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6, seed=0):
+def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6, seed=0, config=None):
     """``n_ensembles`` disjoint ensembles of ``n`` JEWEL jets at ``theta``, from merged shards.
 
     JEWEL pseudo data cannot be made on the fly the way the toy's can, so it is drawn from a
@@ -115,8 +115,15 @@ def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6, seed=0):
     Ensembles are disjoint (drawn without replacement from the pool at this theta, then split
     into consecutive chunks of ``n``), so they share no jet.
 
+    ``config`` picks the reader, same convention as ``gate.direct_by_point``: a v3 backend's
+    merged files (``jewel.v3format``) or the historical toy/v2 shard schema (default, for
+    backward compatibility with existing callers that never passed one). v3 shards already
+    carry a separate ``group_id`` (the originating JEWEL event; several inclusive jets share
+    it) from ``event_id`` (already unique per jet); the toy/v2 schema has only one ``event_id``
+    column that doubles as both, which this function used to assume unconditionally.
+
     Draws are weighted by sampling-importance-resampling on each *event's* own ``weight``
-    column (1 for an unbiased split, read as 1 by ``read_shards`` when the shard has none;
+    column (1 for an unbiased split, read as 1 by the reader when the shard has none;
     averaged over an event's jets, which should already be uniform within one event), not an
     unweighted slice by file order. Resampling whole events, not individual jets, keeps an
     event's jets together, which is what the within-event correlation check needs an
@@ -131,9 +138,11 @@ def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6, seed=0):
     of an inclusive sample visible to the closure report.
     """
     from omnilearned.sbi.toy.datasets import read_shards, shard_paths
+    from omnilearned.sbi.toy.train import shards_for_config
 
-    paths = shard_paths(jewel_dir, split)
-    d = read_shards(paths, trim=True)
+    paths, reader = shards_for_config(config) if config else (shard_paths, read_shards)
+    d = reader(paths(jewel_dir, split), trim=True)
+    group_source = d["group_id"] if "group_id" in d else d["event_id"]
     want = np.asarray(theta, float)
     sel = np.all(np.abs(d["theta"] - want) <= atol, axis=1)
     idx = np.flatnonzero(sel)
@@ -142,7 +151,7 @@ def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6, seed=0):
         raise ValueError(f"{jewel_dir} split {split} has {have} jets at theta={want.tolist()}, "
                          f"need {need} ({n_ensembles} x {n}); generate more of this split")
     weights = np.asarray(d["weight"])[idx]
-    events = d["event_id"][idx]
+    events = group_source[idx]
     uniq_events, inv = np.unique(events, return_inverse=True)
     event_weight = np.bincount(inv, weights=weights) / np.bincount(inv)
     by_event = {ev: [] for ev in uniq_events}
@@ -167,8 +176,8 @@ def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6, seed=0):
         # diagnostics read (the composite-likelihood coverage check).
         recs.append({"x": d["x"][take], "mask": d["mask"][take],
                      "event_id": np.arange(k * n, (k + 1) * n, dtype=np.int64),
-                     "group_id": d["event_id"][take]})
-    ev = d["event_id"][chosen]
+                     "group_id": group_source[take]})
+    ev = group_source[chosen]
     info = {"source": "jewel", "split": split, "jewel_dir": str(jewel_dir),
             "jets_available_at_theta": int(have), "jets_used": int(need),
             "distinct_events": int(np.unique(ev).size),
@@ -242,7 +251,7 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
     if source == "jewel":  # drawn once, so the K ensembles are disjoint by construction
         jewel_recs, jewel_info = jewel_ensembles(
             spec["jewel_dir"], spec.get("jewel_split", "test"), theta, n, K,
-            seed=int(spec.get("seed", 0)))
+            seed=int(spec.get("seed", 0)), config=config)
         log(f"  jewel: {jewel_info['jets_used']} jets of "
             f"{jewel_info['jets_available_at_theta']} at theta={list(theta)}, "
             f"{jewel_info['distinct_events']} distinct events "

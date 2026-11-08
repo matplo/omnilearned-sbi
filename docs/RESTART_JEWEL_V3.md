@@ -85,10 +85,14 @@ T_ref as the clean result, b/tau_init with the caveat stated plainly. The same b
 pre-existing P7 helper `toy.closure.jewel_ensembles` is also fixed now (see trap 24) --
 differently, by resampling whole events rather than individual jets.
 
-TODO before P7: closure.py's jewel_ensembles (toy/closure.py:121-124) has the same hardcoded
-toy/v2 shard reader direct_by_point had -- needs the same shards_for_config(config) dispatch
-before closure can read real v3 test-split data. Not fixed yet: P7 needs P3-P6 done first,
-so fixing it now would be speculative work ahead of need. Noted here so it isn't missed.
+DONE (2026-11-08, ahead of P7, since trap 24 flagged it): closure.py's jewel_ensembles now
+takes a `config` param and dispatches via shards_for_config, same as direct_by_point already
+did -- it can read real v3 test-split data now, not just the toy/v2 schema. Found and fixed
+a real wrinkle while doing it: v3 shards have event_id and group_id as separate columns
+(event_id already unique per jet); the toy/v2 schema has only one column playing both roles,
+which jewel_ensembles's grouping logic was built against. See FINDINGS "P5 follow-up
+addendum 2". Still not exercised against real JEWEL test-split data (only test fixtures),
+since P7 itself has not started.
 ```
 
 | phase | what | status |
@@ -228,5 +232,16 @@ Do not commit data, checkpoints, run trees, figures or binaries; never force-pus
     `jewel_ensembles` resamples whole *events* (not individual jets) weighted by event
     weight, to keep an inclusive sample's within-event jet grouping intact for the
     composite-likelihood correlation check -- a plain jet-level resample breaks that, see
-    FINDINGS "P5 follow-up addendum". Not yet exercised against real JEWEL test-split data
-    (only the synthetic test fixture) since P7 itself has not started.
+    FINDINGS "P5 follow-up addendum". `jewel_ensembles` also still hardcoded the toy/v2
+    reader itself (not just the weight) -- fixed the same day by giving it the same `config`
+    + `shards_for_config` dispatch `direct_by_point` already had (FINDINGS "addendum 2").
+    Not yet exercised against real JEWEL test-split data (only test fixtures) since P7 itself
+    has not started.
+25. **v3 shards split `event_id` (unique per jet) and `group_id` (the originating JEWEL
+    event) into separate columns; the toy/v2 schema has only one column that plays both
+    roles.** Code written against the toy/v2 schema that reads `event_id` as "the shared
+    event" (as `jewel_ensembles`'s grouping did, until trap 24's addendum 2) silently groups
+    v3 jets by their already-unique-per-jet id instead -- one "event" per jet, not an error,
+    just a wrong number (the composite-likelihood correlation check would see no correlation
+    to check). Read `group_id` when present, fall back to `event_id` only for the legacy
+    schema: `d["group_id"] if "group_id" in d else d["event_id"]`.

@@ -96,6 +96,65 @@ def test_jewel_ensembles_respects_per_jet_weight(tmp_path):
     assert (group_ids >= 20).all(), "a zero-weight jet was drawn"
 
 
+def _v3_shard(path, n_events=20, jets_per_event=2, width=6):
+    """A v3-format shard at two theta, group_id and event_id already distinct columns.
+
+    theta0's first half of events has weight 0 (must never be drawn); theta1 is uniform.
+    """
+    from omnilearned.sbi.jewel.v3format import write_jets
+
+    rng = np.random.default_rng(11)
+    n = n_events * jets_per_event
+    next_event_id = 0
+    for pid, th in enumerate(THETAS):
+        x = np.zeros((n, width, 5))
+        mask = np.zeros((n, width), bool)
+        for i in range(n):
+            k = int(rng.integers(2, width + 1))
+            pt = np.sort(rng.gamma(2.0, 3.0, k))[::-1] + 0.2
+            e = pt * (1.0 + rng.uniform(0, 0.05, k))  # keep log E >= log pT
+            x[i, :k, 0] = rng.normal(0, 0.12, k)
+            x[i, :k, 1] = rng.normal(0, 0.12, k)
+            x[i, :k, 2] = np.log(pt)
+            x[i, :k, 3] = np.log(e)
+            x[i, :k, 4] = 211
+            mask[i, :k] = True
+        event_id = np.arange(next_event_id, next_event_id + n, dtype=np.int64)
+        next_event_id += n
+        group_id = event_id[0] + np.repeat(np.arange(n_events, dtype=np.int64), jets_per_event)
+        weight = np.ones(n)
+        if pid == 0:
+            weight[: n // 2] = 0.0
+        write_jets(path.with_name(f"test_{pid:05d}.h5"), x=x, mask=mask,
+                  theta=np.tile(th, (n, 1)), jet_pt=np.full(n, 50.0), jet_eta=np.zeros(n),
+                  jet_phi=np.zeros(n), jet_mass=np.zeros(n), event_id=event_id,
+                  group_id=group_id, point_id=np.full(n, pid, np.int32), weight=weight)
+
+
+def test_jewel_ensembles_v3_dispatch_respects_weight_and_group_id(tmp_path):
+    """``config`` must switch to the v3 reader, and use its own group_id (not event_id).
+
+    v3 shards already separate event_id (unique per jet) from group_id (the originating
+    JEWEL event); the toy/v2 schema has only one column that doubles as both. This checks
+    both the dispatch (data actually comes from the v3 files) and that group_id in the
+    output is the v3 file's real group_id, plus the same weight-respecting behavior as the
+    toy/v2 path.
+    """
+    from pathlib import Path
+
+    _v3_shard(tmp_path / "test_00000.h5")
+    v3_config = Path(__file__).resolve().parents[2] / "configs" / "jewel-2.6.0-cs-v3.toml"
+    n, K = 8, 2  # need 16 <= 20 nonzero-weight jets (10 events x 2 jets) at theta0
+    recs, info = jewel_ensembles(tmp_path, "test", THETAS[0], n, K, config=v3_config)
+    assert info["jets_used"] == n * K
+    group_ids = np.concatenate([r["group_id"] for r in recs])
+    assert (group_ids >= 10).all(), "a zero-weight event's jet was drawn"
+    for r in recs:
+        # group_id must reflect the real (shared) originating event, not a 1:1 copy of the
+        # per-record synthetic event_id -- i.e. v3's own group_id column was actually used
+        assert np.unique(r["group_id"]).size < len(r["group_id"])
+
+
 def test_jewel_ensembles_refuse_to_recycle_jets(tmp_path):
     _shard(tmp_path / "test_00000.h5")
     with pytest.raises(ValueError, match="need"):
