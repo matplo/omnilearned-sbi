@@ -468,4 +468,86 @@ current wild swings, and whether running the integration in float64 (both this d
 the production pipeline run in float32 throughout) changes anything -- neither tested yet.
 Full write-up with figures: the reports repo's
 `reports/m4-nle-numerics/2026-11-05T0530-0800_jewel-v3_p5-numerics-solver-fail/index.html`
+
+## P5 follow-up: true-vs-inferred θ explorer, a weighted-resample bug, and a real
+## identifiability limit for b/tau_init (2026-11-07 -- 2026-11-08)
+
+Source revision f8cb11f (dirty: `scripts/p5_explorer_ensembles.py` modified,
+`scripts/p5_explorer_widen_check.py` new -- both committed at the end of this entry).
+Device: Perlmutter GPU, `alice_g`, interactive QOS throughout (`gpu_premium` remains
+inaccessible -- see the standing note below; not revisited this session per the user's own
+"revisit premium later").
+
+Built the explorer the user asked for directly ("x-axis TRUE theta, y-axis INFERRED theta,
+most probable value + std, per-theta-point HTML selector") at nsteps=256/float64 (§ the
+follow-up above): `scripts/p5_explorer_ensembles.py` (Phase D) fits 3 independent 250-jet
+ensembles at each of 5 withheld fidelity θ points, 3x3x3 candidate grid, using a real
+Pr_q(S|θ) acceptance table built via `scripts/p5_build_acceptance_table.py` (6x6x6 -> reduced
+to 5x5x5 for cost). Required two real library fixes first (both tested,
+`tests/sbi/test_log_prob_dtype.py` and `tests/sbi/test_acceptance_jet_pt.py`): float64
+threaded through `FlowSurrogate.log_prob`/`ConditionLayout.assemble`/`fit.py` (was hardcoded
+float32), and `acceptance_table` given a `jet_pt_pool_fn` + `batch` chunking (v3 checkpoints
+need jet_pt as known context; the OOM pattern was identical to P4's).
+
+**First Phase D run: every point's T_ref MLE pinned to its 3x3x3 grid's own edge**, with
+near-total posterior mass there, and a consistent +0.11-0.17 bias once the grid was widened
+(1D profile sweep, `scripts/p5_explorer_widen_check.py`, b/tau_init fixed at truth). Ruled out
+the acceptance-table correction as the cause by decomposing `loglik` into the data term and
+`-n_events*log_norm` directly: the argmax is bit-identical with or without the correction at
+all 5 points (correction range ~15-50 log-units vs. the data term's ~4000-8500). Verified the
+`ConditionLayout`'s center/scale for every axis exactly match `design.box` in the config (no
+train/inference box mismatch). The curves themselves were smooth, unimodal, and extremely
+sharply peaked (hundreds to thousands of log-units between adjacent 0.096-spaced grid nodes)
+-- not noise.
+
+**Root cause: the fidelity split is a weighted MC sample (per-jet `weight` spans ~1e-4 to
+~1e2, confirmed directly), and both `direct_by_point`'s callers here (and the existing P7
+`toy.closure.jewel_ensembles`) sliced the first N_JETS jets unweighted, in file order.**
+Because `merge_v3` groups shards by generation bin, that slice is not representative: its
+jet_pt ran ~2x the properly-weighted population mean at *every* point (checked directly,
+all 5). Since jet_pt is the surrogate's known context and T_ref's effect couples to it
+through energy loss, feeding a systematically high-jet_pt "observed" sample biased the
+likelihood's T_ref argmax in a consistent direction.
+
+**Fix: sampling-importance-resampling by the jet's own weight** (`np.random.default_rng(...)
+.choice(..., p=weight/weight.sum(), replace=True)`) instead of an unweighted file-order slice
+-- added as `--weighted-resample` to the widen-check script and made the only sampling mode
+in `p5_explorer_ensembles.py` (ensembles are no longer disjoint in file order; each ensemble
+index gets its own resample seed instead). Verified on 2 points before committing to a full
+rerun: point 0's T_ref bias dropped +0.153 -> +0.057, and point 1's edge-pinning resolved
+entirely (turned over inside the window, though with a new, smaller, seed-dependent bias
+-0.11 to -0.21 -- plausibly resampling variance, since drawing only 250 jets from weights
+spanning 5 orders of magnitude leaves a much smaller *effective* sample than 250).
+
+**Full Phase D rerun with the fix (15/15 ensembles, ~3h15m, no walltime kill): T_ref is
+essentially fixed.** `mle_mean.T_ref` bias is now 0.0000 at 4 of 5 points (the grid's center
+node, which equals theta_true exactly for this grid construction, is now the argmax) and
++0.067 at the remaining point (0, where 2 of 3 ensembles still land on the narrow grid's own
+edge). T_ref is no longer edge-pinned in 13 of 15 ensembles.
+
+**This surfaced a second, pre-existing, and larger problem: b is now edge-pinned with
+near-total posterior mass (0.9-0.9999) at the *same* node across independent ensembles, at 4
+of 5 points** (bias exactly +/-1.375, the grid's own half-width) -- the earlier Phase D run
+had already shown an echo of this (`b`'s MLE bit-identical, mle_std=0.000, across ensembles
+at 3 points) but it was not investigated at the time. `tau_init` shows the same pattern more
+weakly (edge mass 0.8-0.995 at most ensembles).
+
+**Widened 1D sweeps for b and tau_init (all 5 points, weighted-resample) show this is not
+the same bug: both parameters' likelihoods do turn over well inside a window spanning most of
+the box, but the peak lands far from truth with large, inconsistent-sign scatter** -- b off by
++1.43, +3.05, -2.69, +0.33, -1.47 (box width 11); tau_init off by +0.11, -0.50, +0.50, +0.15,
++0.16 (box width 0.8), i.e. up to ~60% of the box range, both directions, point to point. This
+looks like a genuine identifiability limit, not a bug: T_ref directly rescales the local
+temperature that sets energy loss and leaves a strong, sharply-peaked per-jet signature;
+b (impact parameter / path length geometry) and tau_init (formation time) plausibly have much
+weaker single-jet signatures that only average out over many more than 250 jets, or need
+observables beyond the four per-constituent features (deta, dphi, log_pt, log_e) this
+checkpoint conditions on. **Phase D's narrow 3x3x3 grid (half-width = 25% of the box's own
+half-range) is simply too narrow for b and tau_init** -- any report built from it needs to
+say so explicitly rather than present their panels as if on the same footing as T_ref's.
+
+Next: Phase E (the HTML explorer itself, reports repo) built from the corrected Phase D data,
+with T_ref as the clean headline result and b/tau_init shown with this limitation stated
+plainly. The old, bug-affected Phase D output is kept for the record under
+`$JEST_NLE_ROOT/runs/jewel_v3/p5_explorer/ensembles_unweighted_buggy/`, not deleted.
 §6. Nothing in the production code was changed to act on this.

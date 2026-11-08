@@ -1,8 +1,18 @@
 """Phase D of the true-vs-inferred theta explorer: for 5 real, withheld fidelity theta
-points, fit 3 disjoint 250-jet ensembles each with a 3x3x3 candidate grid around the truth,
+points, fit 3 independent 250-jet ensembles each with a 3x3x3 candidate grid around the truth,
 at nsteps=256/float64 (the setting the P5 follow-up found substantially more trustworthy
 than production, though not fully converged for the highest-multiplicity jets -- see
 FINDINGS_JEWEL_V3.md), using the real Pr_q(S|theta) acceptance table from Phase C.
+
+Each ensemble's jets are drawn by sampling-importance-resampling on the fidelity split's own
+per-jet ``weight`` (weight spans ~1e-4 to ~1e2 -- this is a weighted MC sample, not unbiased).
+The original version of this script sliced the first N_JETS jets unweighted, in file order;
+since merge_v3 groups shards by generation bin, that slice's jet_pt ran ~2x the properly
+weighted population mean at every point -- a systematically wrong "observed" sample that the
+2026-11-07 widen-check diagnostic traced the explorer's T_ref bias and point-1 edge-pinning
+to (see FINDINGS_JEWEL_V3.md, "P5 follow-up: weighted-resample fix"). Ensembles are no longer
+disjoint in file order (draws are with replacement from the full weighted pool); each
+ensemble index gets its own resample seed instead.
 
 Writes one JSON per ensemble immediately after it finishes (ensembles/<point>_<ens>.json),
 so a walltime kill or crash partway through a multi-hour run never loses completed work --
@@ -98,13 +108,11 @@ def main():
             print(f"point {pi} ensemble {ei}: already done, skipping")
             continue
         x, mask, theta_true, weight, jet_pt = direct[pid]
-        sl = slice(ei * N_JETS, (ei + 1) * N_JETS)
-        if mask[sl].shape[0] < N_JETS:
-            raise ValueError(f"point {pid} has only {mask.shape[0]} jets, "
-                             f"need {(ei + 1) * N_JETS} for ensemble {ei}")
+        rng = np.random.default_rng(a.seed * 1000 + pi * N_ENSEMBLES + ei)
+        idx = rng.choice(len(weight), size=N_JETS, replace=True, p=weight / weight.sum())
         obs = Observations(
-            x=x[sl], mask=mask[sl], event_id=np.arange(N_JETS, dtype=np.int64),
-            context=np.log(jet_pt[sl])[:, None], context_names=("jet_pt",),
+            x=x[idx], mask=mask[idx], event_id=np.arange(N_JETS, dtype=np.int64),
+            context=np.log(jet_pt[idx])[:, None], context_names=("jet_pt",),
         )
         grid_axes = {
             name: {"min": float(max(lo[k], theta_true[k] - half_width[k])),
@@ -131,6 +139,7 @@ def main():
         doc = run_fit(cfg, surrogate=sur, observations=obs, log_norm_fn=log_norm_fn)
         record = {"point_index": pi, "point_id": int(pid), "ensemble_index": ei,
                  "theta_true": theta_true.tolist(), "grid": grid_axes,
+                 "sampling": "weighted_resample_with_replacement",
                  "summary": doc["summary"], "wall_seconds": doc["wall_seconds"]}
         out_path.write_text(json.dumps(record, indent=1))
         print(f"  mle={doc['summary']['mle']} std={doc['summary']['posterior_std']} "

@@ -68,6 +68,20 @@ SNAPSHOT:     c9ed27f is the latest committed (FlowSurrogate.sample jet_pt fix).
 BLOCKED ON:   user decision on the P5 solver discrepancy (see NEXT ACTION) before P6 can
               proceed
 
+SIDE WORK (2026-11-07/08, does not unblock P6/P7 -- uses ad hoc nsteps=256/float64 scripts,
+not the production `LikelihoodOptions` defaults, which are UNCHANGED): built the
+true-vs-inferred theta explorer the user asked to see directly. Phase A (float64 now a real
+`FlowSurrogate.log_prob`/`fit.py` option, tested) and Phase B (acceptance_table's v3 jet_pt
+fix, tested) are committed library changes. Phase C (5x5x5 acceptance table) and Phase D (5
+points x 3 ensembles x 250 jets, 3x3x3 grid) are `scripts/p5_explorer_*.py` (code repo) +
+`$JEST_NLE_ROOT/runs/jewel_v3/p5_explorer/` (data, not committed). Phase D's first run had a
+real bug (unweighted slice of a weighted MC split biased T_ref) -- fixed by
+sampling-importance-resampling; see FINDINGS "P5 follow-up: true-vs-inferred theta explorer".
+Phase D rerun with the fix: T_ref recovers cleanly (bias ~0 at 4/5 points); b and tau_init do
+not (large, sign-inconsistent scatter even in a wide 1D sweep) -- a real identifiability
+limit at 250 jets/ensemble, not a bug. Phase E (the HTML report, reports repo) is next, to
+present T_ref as the clean result and b/tau_init with this caveat stated plainly.
+
 TODO before P7: closure.py's jewel_ensembles (toy/closure.py:121-124) has the same hardcoded
 toy/v2 shard reader direct_by_point had -- needs the same shards_for_config(config) dispatch
 before closure can read real v3 test-split data. Not fixed yet: P7 needs P3-P6 done first,
@@ -202,3 +216,11 @@ Do not commit data, checkpoints, run trees, figures or binaries; never force-pus
     `test_resume_training.py` all pass `device="cpu"`, where `map_location="cpu"` and
     `map_location=device` are the same thing -- trap 22 only exists on real GPU hardware and
     was found there, not in CI. Noted in the test file itself rather than left implicit.
+24. **The fidelity split is weighted MC (`weight` spans ~1e-4 to ~1e2), and slicing the
+    first N jets in file order is not a fair sample** -- `merge_v3` groups shards by
+    generation bin, so the unweighted slice's jet_pt ran ~2x the true weighted-population
+    mean at every theta point tested, biasing any likelihood that conditions on jet_pt.
+    Both `scripts/p5_explorer_ensembles.py` and the existing P7 helper
+    `toy.closure.jewel_ensembles` had this bug; only the former is fixed (resample by
+    `weight` with replacement). Fix `jewel_ensembles` before trusting P7 closure runs on the
+    fidelity or test splits.
