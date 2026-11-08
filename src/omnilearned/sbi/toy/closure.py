@@ -107,12 +107,24 @@ def load_sample_config(path):
     return cfg, sel
 
 
-def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6):
+def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6, seed=0):
     """``n_ensembles`` disjoint ensembles of ``n`` JEWEL jets at ``theta``, from merged shards.
 
     JEWEL pseudo data cannot be made on the fly the way the toy's can, so it is drawn from a
     split generated at the reserved settings (rule 1: the simulator, never the surrogate).
-    Ensembles are consecutive disjoint slices in file order, so they share no jet.
+    Ensembles are disjoint (drawn without replacement from the pool at this theta, then split
+    into consecutive chunks of ``n``), so they share no jet.
+
+    Draws are weighted by sampling-importance-resampling on each *event's* own ``weight``
+    column (1 for an unbiased split, read as 1 by ``read_shards`` when the shard has none;
+    averaged over an event's jets, which should already be uniform within one event), not an
+    unweighted slice by file order. Resampling whole events, not individual jets, keeps an
+    event's jets together, which is what the within-event correlation check needs an
+    ensemble to still show. A biased/weighted split (e.g. several pT-hat bins merged) is not
+    representative if sliced by file order -- the true-vs-inferred theta explorer's P5
+    follow-up found this exact bug in the sibling `scripts/p5_explorer_ensembles.py` (an
+    unweighted file-order slice of the weighted fidelity split ran ~2x the properly-weighted
+    jet_pt mean, biasing T_ref); see FINDINGS_JEWEL_V3.md.
 
     Returns (list of records, info). Each record has x, mask, event_id — and jets of one
     JEWEL event share their ``event_id``, which is what makes the within-event correlation
@@ -129,16 +141,34 @@ def jewel_ensembles(jewel_dir, split, theta, n, n_ensembles, atol=1e-6):
     if have < need:
         raise ValueError(f"{jewel_dir} split {split} has {have} jets at theta={want.tolist()}, "
                          f"need {need} ({n_ensembles} x {n}); generate more of this split")
+    weights = np.asarray(d["weight"])[idx]
+    events = d["event_id"][idx]
+    uniq_events, inv = np.unique(events, return_inverse=True)
+    event_weight = np.bincount(inv, weights=weights) / np.bincount(inv)
+    by_event = {ev: [] for ev in uniq_events}
+    for pos, ev in enumerate(events):
+        by_event[ev].append(idx[pos])
+    # zero-weight events can never be drawn without-replacement at full size; exclude them
+    # (if they ever leave fewer jets than `need`, that is a genuine shortage, caught below)
+    nonzero = event_weight > 0
+    uniq_nz, w_nz = uniq_events[nonzero], event_weight[nonzero]
+    rng = np.random.default_rng(seed)
+    event_order = rng.choice(uniq_nz.size, size=uniq_nz.size, replace=False, p=w_nz / w_nz.sum())
+    chosen = np.concatenate([by_event[ev] for ev in uniq_nz[event_order]])
+    if chosen.size < need:
+        raise ValueError(f"{jewel_dir} split {split} has only {chosen.size} jets with nonzero "
+                         f"weight at theta={want.tolist()}, need {need} ({n_ensembles} x {n})")
+    chosen = chosen[:need]
     recs = []
     for k in range(n_ensembles):
-        take = idx[k * n:(k + 1) * n]
+        take = chosen[k * n:(k + 1) * n]
         # event_id must be unique per jet: it seeds the Hutchinson probes, and an inclusive
         # sample has several jets per event. The JEWEL event goes to group_id, which only
         # diagnostics read (the composite-likelihood coverage check).
         recs.append({"x": d["x"][take], "mask": d["mask"][take],
                      "event_id": np.arange(k * n, (k + 1) * n, dtype=np.int64),
                      "group_id": d["event_id"][take]})
-    ev = d["event_id"][idx[:need]]
+    ev = d["event_id"][chosen]
     info = {"source": "jewel", "split": split, "jewel_dir": str(jewel_dir),
             "jets_available_at_theta": int(have), "jets_used": int(need),
             "distinct_events": int(np.unique(ev).size),
@@ -211,7 +241,8 @@ def prepare(spec, out, config=V2_CONFIG, log=print):
     jewel_recs = jewel_info = None
     if source == "jewel":  # drawn once, so the K ensembles are disjoint by construction
         jewel_recs, jewel_info = jewel_ensembles(
-            spec["jewel_dir"], spec.get("jewel_split", "test"), theta, n, K)
+            spec["jewel_dir"], spec.get("jewel_split", "test"), theta, n, K,
+            seed=int(spec.get("seed", 0)))
         log(f"  jewel: {jewel_info['jets_used']} jets of "
             f"{jewel_info['jets_available_at_theta']} at theta={list(theta)}, "
             f"{jewel_info['distinct_events']} distinct events "

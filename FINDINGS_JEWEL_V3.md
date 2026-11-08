@@ -551,3 +551,52 @@ with T_ref as the clean headline result and b/tau_init shown with this limitatio
 plainly. The old, bug-affected Phase D output is kept for the record under
 `$JEST_NLE_ROOT/runs/jewel_v3/p5_explorer/ensembles_unweighted_buggy/`, not deleted.
 §6. Nothing in the production code was changed to act on this.
+
+## P5 follow-up addendum: the same weighted-resample bug fixed in the pre-existing P7 helper
+## `toy.closure.jewel_ensembles` (2026-11-08)
+
+Source revision 78d6262 (dirty: `src/omnilearned/sbi/toy/closure.py`,
+`tests/sbi/test_jewel_closure_source.py` modified -- committed at the end of this entry).
+
+`docs/RESTART_JEWEL_V3.md` trap 24 flagged this as open: `toy.closure.jewel_ensembles` (the
+P7-scoped helper that draws disjoint JEWEL ensembles for the closure campaign) had the
+identical bug `scripts/p5_explorer_ensembles.py` had -- it sliced `n * n_ensembles` jets
+consecutively in file order from the pool matching the requested theta, with no reference to
+`weight` at all, even though the same weighted-MC-split caveat applies to any real JEWEL
+split it might be pointed at.
+
+**Fix is not identical to the explorer's**, because `jewel_ensembles` supports *inclusive*
+samples (several jets per JEWEL event, sharing `event_id` -> `group_id`), which the closure
+report's composite-likelihood correlation check needs intact *within one ensemble*. A plain
+jet-level sampling-importance-resampling (draw individual jets by weight, ignoring event
+membership) was tried first and breaks this: with 40 jets at theta0 (20 events x 2 jets/event)
+in the existing test fixture, a random jet-level draw of 8 can easily split both jets of a
+pair into different ensembles, where the original (buggy) file-order slice never did, simply
+because the shard happens to be written in event order. `test_inclusive_jets_get_unique_probe_ids_and_keep_their_event_grouping`
+caught this immediately (`np.unique(group_id).size == len(group_id)` for an ensemble that
+should have had repeats).
+
+**Actual fix: resample whole *events*, not individual jets**, weighted by each event's own
+weight (averaged over its jets, via `np.bincount` on `np.unique(..., return_inverse=True)`'s
+compact group index -- weight should already be uniform within one event, since it is
+assigned at generation/pT-hat-bin level, not per jet). Events are drawn without replacement
+in weighted-random order, their jets concatenated in that order (keeping each event's jets
+adjacent, exactly as file order happened to before), then truncated to `n * n_ensembles` and
+sliced into disjoint consecutive chunks of `n` -- the same "slice a reordered pool into K
+chunks" shape as the original code, just reordered by weight instead of file position. A
+zero-weight event can't be drawn at all (`rng.choice(..., replace=False, p=...)` requires
+every requested slot to have nonzero probability), so zero-weight events are filtered out
+before the draw and their absence is folded into the existing "not enough jets" `ValueError`
+rather than crashing.
+
+New `seed` parameter (default 0, threaded from `prepare()`'s `spec.get("seed", 0)`, matching
+the existing convention for the `source="surrogate"` branch). New test
+`test_jewel_ensembles_respects_per_jet_weight`: a fixture where half of theta0's pool has
+weight 0 asserts those jets (by `group_id`) are never drawn -- a deterministic version of the
+explorer's empirical "~2x jet_pt mean" check, since this fixture has no real jet_pt signal to
+measure a shift in. Full suite green (`tests/sbi`, 242 passed, 7 skipped) after the fix.
+
+P7 itself still has not started (needs P3-P6 done first, per the plan), so this fix has not
+been exercised against real JEWEL test-split data yet -- only the synthetic fixture above.
+`direct_by_point`'s own hardcoded toy/v2 reader (the other half of trap 24's dispatch gap)
+is still open too.

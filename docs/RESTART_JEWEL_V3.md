@@ -79,8 +79,11 @@ real bug (unweighted slice of a weighted MC split biased T_ref) -- fixed by
 sampling-importance-resampling; see FINDINGS "P5 follow-up: true-vs-inferred theta explorer".
 Phase D rerun with the fix: T_ref recovers cleanly (bias ~0 at 4/5 points); b and tau_init do
 not (large, sign-inconsistent scatter even in a wide 1D sweep) -- a real identifiability
-limit at 250 jets/ensemble, not a bug. Phase E (the HTML report, reports repo) is next, to
-present T_ref as the clean result and b/tau_init with this caveat stated plainly.
+limit at 250 jets/ensemble, not a bug. Phase E (the HTML report, reports repo) is done:
+`reports/m4-nle-numerics/2026-11-08T0000-0130_jewel-v3_true-vs-inferred-theta/index.html`,
+T_ref as the clean result, b/tau_init with the caveat stated plainly. The same bug in the
+pre-existing P7 helper `toy.closure.jewel_ensembles` is also fixed now (see trap 24) --
+differently, by resampling whole events rather than individual jets.
 
 TODO before P7: closure.py's jewel_ensembles (toy/closure.py:121-124) has the same hardcoded
 toy/v2 shard reader direct_by_point had -- needs the same shards_for_config(config) dispatch
@@ -221,6 +224,9 @@ Do not commit data, checkpoints, run trees, figures or binaries; never force-pus
     generation bin, so the unweighted slice's jet_pt ran ~2x the true weighted-population
     mean at every theta point tested, biasing any likelihood that conditions on jet_pt.
     Both `scripts/p5_explorer_ensembles.py` and the existing P7 helper
-    `toy.closure.jewel_ensembles` had this bug; only the former is fixed (resample by
-    `weight` with replacement). Fix `jewel_ensembles` before trusting P7 closure runs on the
-    fidelity or test splits.
+    `toy.closure.jewel_ensembles` had this bug; **both are now fixed** (2026-11-08).
+    `jewel_ensembles` resamples whole *events* (not individual jets) weighted by event
+    weight, to keep an inclusive sample's within-event jet grouping intact for the
+    composite-likelihood correlation check -- a plain jet-level resample breaks that, see
+    FINDINGS "P5 follow-up addendum". Not yet exercised against real JEWEL test-split data
+    (only the synthetic test fixture) since P7 itself has not started.

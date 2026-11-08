@@ -56,6 +56,46 @@ def test_jewel_ensembles_are_disjoint_and_at_the_requested_theta(tmp_path):
     assert info["distinct_events"] < info["jets_used"]
 
 
+def _weighted_shard(path, n_per_theta=40, width=6):
+    """theta0's first half has weight 0 (must never be drawn); theta1 is uniform weight 1."""
+    rng = np.random.default_rng(7)
+    parts = []
+    for pid, th in enumerate(THETAS):
+        x = np.zeros((n_per_theta, width, 3), np.float32)
+        mask = np.zeros((n_per_theta, width), bool)
+        for i in range(n_per_theta):
+            k = int(rng.integers(2, width + 1))
+            x[i, :k] = rng.normal(size=(k, 3)).astype(np.float32)
+            mask[i, :k] = True
+        ev = np.arange(n_per_theta, dtype=np.int64) + pid * 10_000
+        weight = np.ones(n_per_theta)
+        if pid == 0:
+            weight[: n_per_theta // 2] = 0.0
+        parts.append((pid, th, {"x": x, "mask": mask, "event_id": ev, "weight": weight,
+                                "pthat": np.full(n_per_theta, 60.0),
+                                "jet_pt": np.full(n_per_theta, 50.0),
+                                "jet_eta": np.zeros(n_per_theta),
+                                "jet_phi": np.zeros(n_per_theta),
+                                "diag": {"pthat": np.full(n_per_theta, 60.0)}}))
+    write_shard(path, parts, "test", "jewel-2.6.0-cs-v2", "0" * 64)
+
+
+def test_jewel_ensembles_respects_per_jet_weight(tmp_path):
+    """Draws must be sampling-importance-resampling on `weight`, not an unweighted slice.
+
+    An unweighted file-order slice of a biased split is not representative -- the
+    true-vs-inferred theta explorer's P5 follow-up found exactly this bug (a ~2x jet_pt
+    shift that biased T_ref) in the sibling scripts/p5_explorer_ensembles.py. Here a
+    deterministic version of the same check: half of theta0's pool has weight 0, so those
+    jets must never be drawn, regardless of file order.
+    """
+    _weighted_shard(tmp_path / "test_00000.h5")
+    n, K = 8, 2  # need 16 <= 20 nonzero-weight jets available
+    recs, _ = jewel_ensembles(tmp_path, "test", THETAS[0], n, K)
+    group_ids = np.concatenate([r["group_id"] for r in recs])
+    assert (group_ids >= 20).all(), "a zero-weight jet was drawn"
+
+
 def test_jewel_ensembles_refuse_to_recycle_jets(tmp_path):
     _shard(tmp_path / "test_00000.h5")
     with pytest.raises(ValueError, match="need"):
