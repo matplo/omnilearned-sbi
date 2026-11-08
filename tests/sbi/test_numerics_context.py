@@ -19,8 +19,9 @@ class _RecordingSurrogate:
         self.contexts = []
 
     def log_prob(self, x_phys, mask, candidates, event_ids, options, candidate_names=None,
-                 context=None):
+                 context=None, dtype=None):
         self.contexts.append(context)
+        self.dtype = dtype
         candidates = np.atleast_2d(candidates)
         return np.zeros((candidates.shape[0], x_phys.shape[0])), {}
 
@@ -70,3 +71,39 @@ def test_deltas_forwards_context_through_to_summed_logl():
     out = deltas(sur, obs, pairs, opts, seeds=[0, 1], event_chunk=5, log=lambda *a, **k: None)
     assert set(out) == {0, 1}
     assert all(c is not None for c in sur.contexts)
+
+
+def test_summed_logl_dtype_defaults_float32_and_threads_float64():
+    """The P5 follow-up's 'never tested' question needs dtype actually reaching log_prob."""
+    import torch
+
+    obs = _obs()
+    sur = _RecordingSurrogate()
+    summed_logl(sur, obs, candidates=np.zeros((1, 3)), options={}, event_chunk=4)
+    assert sur.dtype == torch.float32  # unchanged default, matching every caller before this
+
+    sur2 = _RecordingSurrogate()
+    summed_logl(sur2, obs, candidates=np.zeros((1, 3)), options={}, event_chunk=4, dtype="float64")
+    assert sur2.dtype == torch.float64
+
+
+def test_deltas_threads_dtype_through_to_summed_logl():
+    import torch
+
+    obs = _obs(n=5)
+    sur = _RecordingSurrogate()
+    pairs = [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]
+    opts = {"solver": "midpoint", "nsteps": 4, "divergence": "hutchinson", "num_probes": 2,
+            "probe": "rademacher", "probe_schedule": "per_step"}
+    deltas(sur, obs, pairs, opts, seeds=[0], event_chunk=5, log=lambda *a, **k: None,
+          dtype="float64")
+    assert sur.dtype == torch.float64
+
+
+def test_summed_logl_rejects_unknown_dtype():
+    import pytest
+
+    obs = _obs()
+    sur = _RecordingSurrogate()
+    with pytest.raises(ValueError, match="dtype"):
+        summed_logl(sur, obs, candidates=np.zeros((1, 3)), options={}, dtype="float16")
