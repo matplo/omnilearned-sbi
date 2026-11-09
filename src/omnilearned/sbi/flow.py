@@ -479,6 +479,40 @@ def _weighted_draw(weights, size, generator):
     return draw
 
 
+def stratified_weights(weight, strata):
+    """(sample_weight, loss_weight) that flatten ``strata`` in the training *draw* while
+    keeping the trained objective targeting the true physical (``weight``-weighted) law.
+
+    Mitigation for the P4 finding that the surrogate's beyond-R=0.4 constituent deficit
+    tracks T_ref directly, root-caused to genuine statistical scarcity of real examples in
+    rare strata (e.g. high multiplicity, high T_ref) -- see FINDINGS_JEWEL_V3.md. Oversampling
+    those strata during training (so the model sees them often enough to learn from) while
+    *not* correcting anything would bias the model toward whatever is typical of the
+    oversampled strata; this is the standard importance-sampling identity that avoids that:
+    for a stratum with total physical weight ``W``, ``sample_weight = weight / W`` gives
+    every stratum equal total draw probability (regardless of how rare it physically is),
+    and ``loss_weight = W`` (the self-normalizing correction ``weight / sample_weight``)
+    exactly cancels that boost in expectation, so ``(sample ~ sample_weight, loss weighted
+    by loss_weight)`` targets the same objective as ``(sample ~ weight, unweighted loss)`` --
+    just with far less draw-to-draw variance on the rare strata, which is the entire point.
+
+    ``strata``: integer bin index per event (e.g. a joint multiplicity x T_ref bucket).
+    Empty bins cannot occur -- every event belongs to exactly one bin, by construction.
+    """
+    weight = np.asarray(weight, np.float64)
+    strata = np.asarray(strata)
+    if weight.shape != strata.shape:
+        raise ValueError(f"weight and strata must align, got {weight.shape} vs {strata.shape}")
+    uniq, inv = np.unique(strata, return_inverse=True)
+    bin_weight = np.bincount(inv, weights=weight, minlength=uniq.size)
+    if np.any(bin_weight <= 0):
+        raise ValueError("every stratum must have positive total weight")
+    w_per_event = bin_weight[inv]
+    sample_weight = weight / w_per_event
+    loss_weight = w_per_event
+    return sample_weight, loss_weight
+
+
 def minibatch_sampler(lengths, batch_size, buckets=0, generator=None, weights=None):
     """Callable returning minibatch indices (CPU) over events with real ``lengths``.
 
@@ -572,11 +606,22 @@ def train_flow(model, base, train, val, options, log=print, on_best=None,
     tr, va = train, val
     ntr, nva = tr["u"].shape[0], va["u"].shape[0]
     mode = options.weight_mode
-    if mode not in ("none", "loss", "sample"):
-        raise ValueError(f"weight_mode must be none, loss or sample, not {mode!r}")
+    if mode not in ("none", "loss", "sample", "stratified"):
+        raise ValueError(f"weight_mode must be none, loss, sample or stratified, not {mode!r}")
     if mode != "none" and "w" not in tr:
         raise ValueError(f"weight_mode {mode!r} needs per-event weights 'w' in the training data")
-    wtr = tr.get("w") if mode == "loss" else None
+    if mode == "stratified" and "sample_w" not in tr:
+        raise ValueError("weight_mode 'stratified' needs per-event 'sample_w' (the "
+                         "stratification-boosted draw weight -- see flow.stratified_weights)."
+                         " 'w' stays the plain physical weight (unaffected, so validation's"
+                         " own uniformly-drawn loss is unaffected too); the training loss is"
+                         " corrected on the fly as w / sample_w per drawn row.")
+    # 'stratified': the draw is from sample_w (boosted), so the loss needs the
+    # self-normalized-importance-sampling correction w/sample_w, not plain w -- using plain
+    # w here would train against the *boosted* (flattened) distribution, not the physical
+    # one. Validation is untouched: it is drawn uniformly either way, so wva = plain w
+    # (below) is already the correct loss weight there, in every weighted mode.
+    wtr = (tr["w"] / tr["sample_w"]) if mode == "stratified" else (tr.get("w") if mode == "loss" else None)
     wva = va.get("w") if mode != "none" else None
 
     # Fixed validation noise/time so the selection metric is comparable. Built once: these
@@ -605,9 +650,13 @@ def train_flow(model, base, train, val, options, log=print, on_best=None,
         history["weights"] = {"mode": mode, "ess_train": float(w.sum() ** 2 / (w ** 2).sum()),
                               "n_train": ntr, "range": [float(w.min()), float(w.max())],
                               "val_weighted": wva is not None}
+        if mode == "stratified":
+            sw = tr["sample_w"].double()
+            history["weights"]["ess_sample_draw"] = float(sw.sum() ** 2 / (sw ** 2).sum())
+    draw_weights = tr["w"] if mode == "sample" else (tr["sample_w"] if mode == "stratified" else None)
     draw = minibatch_sampler(tr["mask"].sum(1).cpu(), options.batch_size,
                              options.length_buckets, gen,
-                             weights=tr["w"].cpu() if mode == "sample" else None)
+                             weights=draw_weights.cpu() if draw_weights is not None else None)
     history["length_buckets"] = draw.edges
     best = (float("inf"), -1)
     best_state = None

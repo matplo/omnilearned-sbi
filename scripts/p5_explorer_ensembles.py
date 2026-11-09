@@ -73,15 +73,22 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--only", type=int, nargs="+", default=None,
                     help="work-item indices (0..14) to run; default all 15")
+    ap.add_argument("--core-only", action="store_true", help="drop constituents beyond "
+                    "dR=0.4 before scoring (restrict_to_core) -- the P4 mitigation: the "
+                    "surrogate is known to under-produce the dR 0.4-0.5 halo, and that "
+                    "deficiency correlates with T_ref directly (FINDINGS_JEWEL_V3.md). "
+                    "Off by default so this stays an A/B toggle, not a silent default.")
     a = ap.parse_args()
 
     from omnilearned.sbi.fit import run_fit
     from omnilearned.sbi.flow import FlowSurrogate
     from omnilearned.sbi.jewel import cards
-    from omnilearned.sbi.observations import Observations
+    from omnilearned.sbi.observations import Observations, restrict_to_core
     from omnilearned.sbi.toy.gate import direct_by_point
     from omnilearned.sbi.toy.selection import TableLogNorm
     from omnilearned.sbi.toy.simulator import PARAMETERS
+
+    FEATURES_V3 = ("deta", "dphi", "log_pt", "log_e")
 
     out_dir = Path(a.out_dir)
     (out_dir / "ensembles").mkdir(parents=True, exist_ok=True)
@@ -102,8 +109,9 @@ def main():
     if a.only is not None:
         work = [work[i] for i in a.only]
 
+    suffix = "_core" if a.core_only else ""
     for pi, pid, ei in work:
-        out_path = out_dir / "ensembles" / f"{pi}_{ei}.json"
+        out_path = out_dir / "ensembles" / f"{pi}_{ei}{suffix}.json"
         if out_path.exists():
             print(f"point {pi} ensemble {ei}: already done, skipping")
             continue
@@ -113,7 +121,10 @@ def main():
         obs = Observations(
             x=x[idx], mask=mask[idx], event_id=np.arange(N_JETS, dtype=np.int64),
             context=np.log(jet_pt[idx])[:, None], context_names=("jet_pt",),
+            feature_names=FEATURES_V3,
         )
+        if a.core_only:
+            obs = restrict_to_core(obs)
         grid_axes = {
             name: {"min": float(max(lo[k], theta_true[k] - half_width[k])),
                   "max": float(min(hi[k], theta_true[k] + half_width[k])), "n": GRID_N}
@@ -122,7 +133,7 @@ def main():
         cfg = {
             "schema": "omnilearned-sbi-fit-v1",
             "checkpoint": a.checkpoint, "observations": "in_memory",
-            "output_prefix": str(out_dir / "ensembles" / f"{pi}_{ei}_scan"),
+            "output_prefix": str(out_dir / "ensembles" / f"{pi}_{ei}{suffix}_scan"),
             "device": a.device, "mode": "fixed_vector",
             "grid": grid_axes,
             "likelihood": {"solver": "midpoint", "nsteps": a.nsteps, "dtype": a.dtype,
@@ -139,7 +150,7 @@ def main():
         doc = run_fit(cfg, surrogate=sur, observations=obs, log_norm_fn=log_norm_fn)
         record = {"point_index": pi, "point_id": int(pid), "ensemble_index": ei,
                  "theta_true": theta_true.tolist(), "grid": grid_axes,
-                 "sampling": "weighted_resample_with_replacement",
+                 "sampling": "weighted_resample_with_replacement", "core_only": a.core_only,
                  "summary": doc["summary"], "wall_seconds": doc["wall_seconds"]}
         out_path.write_text(json.dumps(record, indent=1))
         print(f"  mle={doc['summary']['mle']} std={doc['summary']['posterior_std']} "

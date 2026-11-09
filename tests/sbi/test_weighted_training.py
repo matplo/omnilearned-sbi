@@ -8,7 +8,13 @@ import torch
 from torch import nn
 
 from omnilearned.sbi.base import GaussianBase
-from omnilearned.sbi.flow import TrainOptions, flow_matching_loss, minibatch_sampler, train_flow
+from omnilearned.sbi.flow import (
+    TrainOptions,
+    flow_matching_loss,
+    minibatch_sampler,
+    stratified_weights,
+    train_flow,
+)
 from omnilearned.sbi.multiplicity import MultiplicityModel, train_multiplicity
 
 
@@ -89,6 +95,64 @@ def test_weighted_minibatch_draws_follow_the_weights(buckets):
         assert draw.edges is not None and len(draw.edges) == buckets
     with pytest.raises(ValueError, match="non-negative"):
         minibatch_sampler(lengths, 8, buckets, weights=-w)
+
+
+def test_stratified_weights_flattens_draw_and_the_is_correction_undoes_it():
+    """Every stratum gets equal total sample_weight; loss_weight = weight / sample_weight
+    is the self-normalized-importance-sampling correction back to the physical law."""
+    rng = np.random.default_rng(0)
+    # 3 strata, wildly unequal physical weight totals (stratum 2 is the rare one)
+    strata = np.repeat([0, 1, 2], [500, 500, 20])
+    weight = np.ones(1020)
+    weight[:500] *= 10.0  # stratum 0: heavy
+    sample_w, loss_w = stratified_weights(weight, strata)
+    for s in (0, 1, 2):
+        m = strata == s
+        np.testing.assert_allclose(sample_w[m].sum(), 1.0)  # flattened: every stratum equal
+    # the IS identity: a weighted-by-sample_w draw, corrected by loss_w, reproduces the
+    # weighted-by-weight expectation of any function f, in expectation over many draws
+    f = rng.normal(size=1020)
+    p = weight / weight.sum()
+    target = float((p * f).sum())
+    draws = rng.choice(1020, size=200_000, replace=True, p=sample_w / sample_w.sum())
+    corrected = np.bincount(draws, weights=loss_w[draws] * f[draws], minlength=1020).sum()
+    norm = np.bincount(draws, weights=loss_w[draws], minlength=1020).sum()
+    assert abs(corrected / norm - target) < 0.05
+
+
+def test_stratified_weights_rejects_misaligned_shapes_and_empty_bins():
+    with pytest.raises(ValueError, match="align"):
+        stratified_weights(np.ones(5), np.zeros(4))
+    with pytest.raises(ValueError, match="positive"):
+        stratified_weights(np.array([1.0, -1.0]), np.array([0, 0]))
+
+
+@pytest.mark.parametrize("mode", ["loss", "sample", "stratified"])
+def test_weighted_flow_fit_on_a_1d_toy_recovers_the_true_density_stratified(mode):
+    """Same biased-draw setup as the loss/sample test above, but also exercises
+    weight_mode='stratified' end to end: strata from quantile bins of x itself (standing in
+    for the real use's joint multiplicity x T_ref bins), sample_w from stratified_weights,
+    'w' stays the plain physical weight (used for stratified's loss correction on the fly)."""
+    a, n = 1.0, 20000
+    g = torch.Generator().manual_seed(4)
+    x = (torch.randn(n, generator=g) + a)[:, None, None]
+    w = torch.exp(-a * x[:, 0, 0])
+    w = w * n / w.sum()
+    data = {"u": x, "mask": torch.ones(n, 1, dtype=torch.bool), "cond": torch.zeros(n, 1), "w": w}
+    if mode == "stratified":
+        strata = np.digitize(x[:, 0, 0].numpy(), np.quantile(x[:, 0, 0].numpy(), [0.25, 0.5, 0.75]))
+        sample_w, _ = stratified_weights(w.numpy(), strata)
+        data["sample_w"] = torch.as_tensor(sample_w, dtype=torch.float32)
+    out = {}
+    for m in (mode, "none"):
+        torch.manual_seed(5)
+        d = data if m == mode else {k: v for k, v in data.items() if k != "sample_w"}
+        opts = TrainOptions(steps=1500, batch_size=512, lr=2e-3, val_every=500, val_batches=2, warmup_steps=50,
+                            device="cpu", weight_mode=m, ema_decay=0.99)
+        best, _ = train_flow(TinyVelocity(1, 1), GaussianBase.standard(1), d, d, opts, log=lambda s: None)
+        out[m] = _flow_mean(best)
+    assert abs(out[mode][0]) < 0.12 and abs(out[mode][1] - 1) < 0.12, out
+    assert abs(out["none"][0] - a) < 0.12, out
 
 
 def _flow_mean(model, n=4000, steps=64):

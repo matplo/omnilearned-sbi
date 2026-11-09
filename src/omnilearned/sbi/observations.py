@@ -56,6 +56,43 @@ class Observations:
         )
 
 
+def restrict_to_core(obs, r_max=0.4, require_min=1):
+    """New ``Observations`` with constituents beyond ``r_max`` of the jet axis dropped.
+
+    Mitigation for the P4 finding that the surrogate under-produces constituents beyond
+    the jet's R=0.4 clustering cone (up to 39x deficit near dR~0.5), and that this
+    deficiency's severity correlates with T_ref directly, not only through multiplicity
+    (FINDINGS_JEWEL_V3.md, "the beyond-R=0.4 halo deficit correlates with T_ref directly").
+    `explorer_core.html` showed core-jet (dR<0.4) direct-vs-surrogate agreement is excellent
+    (1-3%); this applies that same restriction at the likelihood level, not just as a
+    diagnostic, so inference is not exposed to the known, theta-correlated bias. This does
+    not fix the surrogate -- it avoids scoring the region where it is known to be wrong, at
+    the cost of discarding whatever real quenching signal is in that region.
+
+    Needs ``deta``/``dphi`` in ``obs.feature_names`` (the v3 representation). Padded
+    entries stay exactly zero (the project's convention everywhere else); a constituent cut
+    by this function is masked out and its features zeroed, not merely masked, so it cannot
+    leak through a caller that reads ``x`` without ``mask``.
+
+    ``require_min``: a jet left with fewer than this many real constituents raises --
+    silently scoring a near-empty cloud is a worse failure mode than stopping to look at it.
+    """
+    if "deta" not in obs.feature_names or "dphi" not in obs.feature_names:
+        raise ValueError(f"restrict_to_core needs deta/dphi in feature_names, got {obs.feature_names}")
+    deta = obs.x[..., obs.feature_names.index("deta")]
+    dphi = obs.x[..., obs.feature_names.index("dphi")]
+    dr = np.hypot(deta, dphi)
+    core = obs.mask & (dr < r_max)
+    counts = core.sum(1)
+    if require_min > 0 and np.any(counts < require_min):
+        bad = int((counts < require_min).sum())
+        raise ValueError(f"{bad} of {len(obs)} jets have fewer than {require_min} core "
+                         f"(dR<{r_max}) constituents after the cut")
+    x = np.where(core[..., None], obs.x, 0.0)
+    return Observations(x, core, obs.event_id, obs.context, obs.context_names,
+                        obs.feature_names, obs.sha256, obs.path, obs.group_id)
+
+
 def file_sha256(path, chunk=1 << 20):
     h = hashlib.sha256()
     with open(path, "rb") as f:

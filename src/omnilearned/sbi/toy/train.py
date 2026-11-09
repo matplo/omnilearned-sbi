@@ -106,12 +106,36 @@ def context_for_layout(data, layout):
     return np.column_stack(cols)
 
 
-def prepare(data, transform, layout, chunk=200_000, weights=False):
+def joint_strata(n_constituents, t_ref, n_bins=8, t_bins=5):
+    """Joint (multiplicity x T_ref) stratum index per event, by quantile bins of each.
+
+    Mitigation for the P4 finding that the surrogate's beyond-R=0.4 deficit tracks T_ref
+    directly, root-caused to genuine statistical scarcity of real examples at high
+    multiplicity (root_cause.html) -- stratifying by multiplicity alone would miss the
+    T_ref-specific component found later (FINDINGS_JEWEL_V3.md). Quantile bins (not fixed-
+    width) so every stratum gets a comparable share of events regardless of how skewed the
+    underlying distribution is -- a fixed-width high-N bin would otherwise be the empty
+    stratum `stratified_weights` refuses.
+    """
+    n_constituents = np.asarray(n_constituents)
+    t_ref = np.asarray(t_ref)
+    n_edges = np.quantile(n_constituents, np.linspace(0, 1, n_bins + 1)[1:-1])
+    t_edges = np.quantile(t_ref, np.linspace(0, 1, t_bins + 1)[1:-1])
+    n_bin = np.digitize(n_constituents, n_edges)
+    t_bin = np.digitize(t_ref, t_edges)
+    return n_bin * t_bins + t_bin
+
+
+def prepare(data, transform, layout, chunk=200_000, weights=False, strata=None):
     """Model-coordinate tensors for ``train_flow``: u, mask, cond (and w if ``weights``).
 
     The transform runs in float64 on chunks of ``chunk`` events into a preallocated
     float32 array, so host memory stays near the size of the data (6 M jets × 81 slots
     would otherwise need several 12 GB float64 temporaries).
+
+    ``strata``: per-event stratum index (e.g. from ``joint_strata``); when given, also
+    computes ``sample_w`` via ``flow.stratified_weights`` for ``weight_mode='stratified'``.
+    Requires ``weights=True`` (strata boosts the physical weight, not a substitute for it).
     """
     mask = torch.as_tensor(data["mask"], dtype=torch.bool)
     u = torch.empty(data["x"].shape, dtype=torch.float32)
@@ -124,6 +148,13 @@ def prepare(data, transform, layout, chunk=200_000, weights=False):
     out = {"u": u, "mask": mask, "cond": torch.from_numpy(cond)}
     if weights:
         out["w"] = torch.as_tensor(np.asarray(data["weight"]), dtype=torch.float32)
+    if strata is not None:
+        if not weights:
+            raise ValueError("strata needs weights=True (it boosts the physical weight)")
+        from omnilearned.sbi.flow import stratified_weights
+
+        sample_w, _ = stratified_weights(np.asarray(data["weight"]), strata)
+        out["sample_w"] = torch.as_tensor(sample_w, dtype=torch.float32)
     return out
 
 
@@ -194,6 +225,8 @@ def build_surrogate(args, train, val, out, log=print):
     mcond = lambda d: torch.from_numpy(mlayout.assemble(  # noqa: E731
         d["theta"], list(PARAMETERS), context=context_for_layout(d, mlayout), context_names=mlayout.known))
     weighted = getattr(args, "weight_mode", "none") != "none"
+    stratified = getattr(args, "weight_mode", "none") == "stratified"
+    t_ref_idx = list(PARAMETERS).index("T_ref")
     mult, mhist = train_multiplicity(mult, mcond(train), train["n_constituents"], mcond(val),
                                      val["n_constituents"], steps=args.mult_steps,
                                      device=dev.device, log=log,
@@ -210,7 +243,10 @@ def build_surrogate(args, train, val, out, log=print):
                                   heads=args.heads, local_dim=args.local_dim)
     opts = TrainOptions(**{f.name: getattr(args, f.name) for f in fields(TrainOptions)
                            if hasattr(args, f.name)})
-    tr, va = prepare(train, transform, layout, weights=weighted), prepare(val, transform, layout, weights=weighted)
+    train_strata = (joint_strata(train["n_constituents"], train["theta"][:, t_ref_idx])
+                   if stratified else None)
+    tr = prepare(train, transform, layout, weights=weighted, strata=train_strata)
+    va = prepare(val, transform, layout, weights=weighted)  # validation is never stratified
     train.pop("x", None)  # the float32 model coordinates replace the physical ones
     val.pop("x", None)
     meta = {"backend": backend, "arch": args.arch, "parameters": list(PARAMETERS), "box": box,
@@ -264,9 +300,15 @@ def main(argv=None):
     ap.add_argument("--val-batches", dest="val_batches", type=int, default=8)
     ap.add_argument("--length-buckets", dest="length_buckets", type=int, default=0,
                     help="draw each minibatch inside one of k multiplicity quantile buckets")
-    ap.add_argument("--weight-mode", dest="weight_mode", default="none", choices=["none", "loss", "sample"],
-                    help="per-jet sampling weights of the shards: weighted loss, or minibatches drawn "
-                         "proportional to the weight (both target the unweighted law)")
+    ap.add_argument("--weight-mode", dest="weight_mode", default="none",
+                    choices=["none", "loss", "sample", "stratified"],
+                    help="per-jet sampling weights of the shards: weighted loss, minibatches "
+                         "drawn proportional to the weight (both target the physical law "
+                         "unchanged), or 'stratified' -- minibatches drawn to flatten the "
+                         "joint (multiplicity, T_ref) distribution (more draws of the rare, "
+                         "real tail the P4 halo-deficit finding traced to), loss-corrected "
+                         "(flow.stratified_weights) so the trained objective still targets "
+                         "the physical law despite the boosted draw -- see FINDINGS_JEWEL_V3.md")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--tf32", action="store_true", help="TF32 matmuls during training only")

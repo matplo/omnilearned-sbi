@@ -276,3 +276,13 @@ Do not commit data, checkpoints, run trees, figures or binaries; never force-pus
     `--which test` / `--which reference` jobs (already supported) before requesting a long
     run with this script, each sized to its own cost -- rk4 at the same nsteps costs
     several times more than midpoint (observed: ~3600s vs ~530s per seed at nsteps=256).
+27. **The premium QOS is named `premium`, not `gpu_premium`.** An earlier session spent
+    real effort concluding `gpu_premium` access needed NERSC provisioning -- every
+    `sbatch`/`salloc -q gpu_premium` failed ("Job request does not match any supported
+    policy") despite `alice_g`'s own entitlements and the `gpu_ss11` partition's
+    `AllowQos=ALL` both appearing to permit it. The QOS `alice_g` is actually entitled to
+    is called `premium` (`sacctmgr show assoc account=alice_g user=$USER format=qos`
+    lists it); `gpu_premium` simply is not a real QOS name here, which is exactly why
+    nothing about entitlements explained the failure. `-q premium -A alice_g` works
+    (verified via `sbatch --test-only`). No NERSC ticket needed; this was never a
+    provisioning gap, just a wrong flag value.

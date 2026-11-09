@@ -740,3 +740,167 @@ evaluations than that). This does not change the rule-6 block status (still unre
 it does suggest the next useful experiments are about the vector field's smoothness near the
 ODE's endpoints (t=0/1), not further brute-force step increases, if a practical production
 setting is the goal rather than a fully converged reference.
+
+## P4 re-opened: the beyond-R=0.4 halo deficit correlates with T_ref directly, not only
+## through multiplicity -- upgraded from "accepted, low-priority" (2026-11-09)
+
+P4's gate (2026-11-03/04) found the surrogate under-produces constituents beyond the jet's
+R=0.4 cone (up to 39x deficit near dR~0.5), root-caused to genuine statistical scarcity of
+real high-N training examples (`root_cause.html`: ~127 effective weighted examples at
+N>160 out of 1.44M). The user accepted this as a known, low-priority tail issue given
+excellent core-jet (dR<0.4) fidelity, and P5 proceeded. Asked directly whether this is
+accounted for anywhere in actual inference (it is not -- `fit.py`/`scan.py`/`likelihood.py`
+score the complete stored cloud unconditionally, no dR-based trim anywhere; `explorer_core.html`
+was a diagnostic only, explicitly stated not to change how the gate or "the eventual NLE
+likelihood" works), and then asked to test directly whether the deficit correlates with
+theta, not only through N as `root_cause.html`'s own narrative implied.
+
+**It does, and the correlation survives controlling for the multiplicity pathway.** Pulled
+`theta` and `relevance.{width,outer_fraction}.delta_mean` (surrogate - direct) from all 128
+P4 gate point JSONs (`$JEST_NLE_ROOT/runs/jewel_v3/p4_gate/s0/point_*.json`):
+
+```
+                        width_delta vs theta          outer_fraction_delta vs theta
+raw Pearson r (p):      T_ref -0.41 (<1e-4)            T_ref -0.36 (<1e-4)
+                        b     +0.24 (0.006)             b     +0.23 (0.011)
+                        tau   -0.09 (0.34, ns)          tau   -0.07 (0.47, ns)
+
+partial r | n_delta:    T_ref -0.56 (<1e-4)            T_ref -0.47 (<1e-4)
+                        b     +0.34 (1e-4)              b     +0.31 (4e-4)
+                        tau   -0.10 (0.26, ns)          tau   -0.07 (0.42, ns)
+```
+
+(`n_delta` = `relevance.n_constituents.delta_mean`, the surrogate's own multiplicity
+deficit/excess -- used as the control variable for the "is this just N" test.) The partial
+correlation controlling for the multiplicity pathway is **larger in magnitude**, not
+smaller, than the raw one -- the T_ref relationship is not an artifact of N, it strengthens
+once N's contribution is removed. Direction is physically sensible: higher T_ref -> stronger
+quenching -> more real large-angle radiated constituents in the direct sample -> a roughly
+fixed surrogate deficiency misses proportionally more of them, so `delta_mean` (surrogate
+minus direct) becomes more negative. `tau_init` shows no significant correlation either way.
+
+**Why this matters more than "low-priority tail":** T_ref is the parameter this project
+infers most successfully (see the true-vs-inferred explorer). A surrogate weakness that
+correlates with T_ref directly does not obviously cancel between nearby candidate thetas in
+a fit's Δlog L the way a theta-independent deficiency would -- it is a plausible, previously
+unverified source of T_ref bias, separate from (and not yet distinguished from) the
+weighted-resample bug already found and fixed, or the identifiability limits found for
+b/tau_init. Not yet known whether its magnitude at the likelihood level is large enough to
+matter in practice; not measured here.
+
+**Mitigation, three strands, discussed and approved to proceed (2026-11-09):**
+
+1. **Immediate, no retraining**: restrict inference to the core (dR<0.4) region, which
+   `explorer_core.html` already showed has excellent (1-3%) direct-vs-surrogate agreement.
+   Removes the demonstrated bias source at the cost of discarding whatever real quenching
+   signal lives in the halo (plausible, given the deficit's own severity tracks T_ref).
+2. **Addresses the root cause**: retrain with a stratified/importance-corrected sampling
+   scheme that oversamples rare high-N (and, per this finding, high-T_ref) events during
+   training while correcting the loss weight inversely so the trained objective still
+   targets the true physical distribution -- not simply `--weight-mode sample` (which
+   samples *by* physical weight, the opposite of oversampling the physically rare tail) or
+   `loss` (unweighted sampling, physical-weight loss) already in `train.py`; a new scheme.
+3. **Complementary**: generate additional targeted statistics concentrated at the high-T_ref
+   end of the design box, where real high-N jets are rarer to begin with -- (2) cannot
+   recover statistical power that was never generated in the first place.
+
+Implementation status of each, as of this entry, below.
+
+**(1) core-restriction, done.** `observations.restrict_to_core(obs, r_max=0.4, require_min=1)`:
+zeroes and masks out constituents at dR>=r_max, by name-lookup of `deta`/`dphi` in
+`feature_names` (not a hardcoded column index). Padded (already-False) slots are never
+revived by a small dR coincidence; a jet left with fewer than `require_min` core
+constituents raises rather than silently scoring a near-empty cloud. Wired into
+`scripts/p5_explorer_ensembles.py` as an opt-in `--core-only` flag (off by default, so this
+stays an A/B toggle rather than a silent behavior change) -- also fixed that script's
+`Observations` construction to pass `feature_names` at all, which it never did before
+(harmless until now, since nothing downstream needed it). Tested
+(`tests/sbi/test_observations_core.py`, 6 cases). Not yet re-run against real Phase D data
+to confirm it actually shrinks the T_ref bias/scatter empirically -- that is a GPU-hour
+cost, deferred alongside deciding whether to also re-run Phase D with (2)'s checkpoint once
+it exists, rather than doing two separate expensive re-runs.
+
+**(2) stratified training, mechanism implemented and tested, full retrain not yet launched.**
+New `flow.stratified_weights(weight, strata)`: for a per-event integer `strata` (e.g. a
+joint multiplicity x T_ref bucket from new `toy.train.joint_strata`), returns
+`(sample_weight, loss_weight)` where `sample_weight` gives every stratum equal total draw
+probability regardless of its physical rarity, and `loss_weight = weight/sample_weight` is
+the self-normalized-importance-sampling correction that exactly cancels that boost in
+expectation -- so training draws rare strata often enough to learn from while the trained
+objective still targets the true physical law, not the flattened one. New
+`weight_mode='stratified'` in `train_flow`/`train.py`'s CLI, alongside the existing `none`/
+`loss`/`sample`. Important design point found while implementing: `sample_w` (the boosted
+draw weight) is train-only; `w` stays the plain physical weight everywhere, including for
+validation, which is always drawn uniformly and therefore always needs the plain-weight
+correction regardless of how training draws -- conflating the two would have corrupted the
+validation metric used for model selection.
+
+Caught and fixed one real bug in this same change before it reached any real training: the
+draw-weight selection was originally written as a dict literal
+(`{"sample": tr["w"], "stratified": tr["sample_w"]}.get(mode)`), which evaluates every
+value in the literal eagerly regardless of which key is looked up -- `tr["sample_w"]` was
+being accessed (and raising `KeyError`) even in `none`/`loss` mode, where it does not
+exist. Caught by the existing `tests/sbi/test_weighted_training.py` suite failing on
+unrelated, pre-existing tests after the change (6 failures, all in modes this change was
+not even supposed to touch) -- exactly the value of running the *whole* suite after a
+shared-code change, not just the new tests. Fixed to a plain conditional; full suite green
+after.
+
+New tests: `stratified_weights`'s IS-correction identity verified directly (flatten +
+correct reproduces the plain-weighted expectation of an arbitrary function, Monte Carlo);
+`joint_strata`'s quantile binning (no empty strata, monotone in each axis); `prepare(...,
+strata=...)`'s wiring (`sample_w` matches `stratified_weights`, `w` stays physical,
+requires `weights=True`); and the existing biased-1D-toy end-to-end recovery test
+(`test_weighted_flow_fit_on_a_1d_toy_recovers_the_true_density`) extended to run
+`weight_mode='stratified'` through actual `train_flow` and confirm it still recovers the
+true (unbiased) density, same as `loss`/`sample`.
+
+**Not yet done: the actual full retrain.** This mechanism has only been exercised on tiny
+synthetic data (hundreds to thousands of points, CPU, seconds). Launching it on the real
+~10.7M-jet v3 train split (400k steps, ~4h GPU, matching P3's original run) is the next
+step, to a **new** checkpoint path (never overwriting `v3_set_d256_L6_400k_s0`, so this is
+purely additive and carries no risk to the existing production checkpoint or to anything
+already measured against it this session) -- not yet launched as of this entry.
+
+**(3) targeted high-T_ref generation, designed, not executed.** Proposed: ~40 additional
+Sobol-style theta points concentrated in T_ref in [0.6, 0.9] (b, tau_init spanning their
+full existing ranges), ~20,000 jets/point to match the existing train split's density,
+~800k new jets. Cost estimate from the plan's own measured rate (0.545 core-s/jet,
+`docs/PLAN_JEWEL_V3.md` §2): ~121 core-hours =~ 1.9 node-hours at 64 workers/node -- modest.
+
+**Why this one was not just launched tonight, unlike (1)/(2):** `jewel/generate.py`'s
+`plan()`/`cards.njob()` key NJOB uniqueness off `(split, point_id, chunk)` with a
+*per-split* constant base (`[randomness].njob_base.train = 100000`,
+`chunks_per_point = 100`); the existing train split already occupies point_id 0-511 under
+that base. Naively planning 40 new points as point_id 0-39 under `split="train"` would
+silently reuse NJOB values the existing 512-point design already used -- not an error,
+a wrong number, exactly the kind of silent trap this file's "traps already hit" list is
+for. Point_id 512-551 avoids that collision safely (NJOB tops out at ~155199, far below
+validation's base of 300000) -- but a second, harder question is still open: how to get
+the new shards into the dataset `prepare()`/training actually reads. The existing merged
+`train_*.h5` files under `$JEST_NLE_ROOT/data/jewel_v3/merged/` already represent the
+original 512-point design; adding 40 more points needs either a full re-merge including
+the new point's raw task shards (if those still exist) or a supplementary merged file plus
+a change to how training reads multiple merge directories -- not resolved here, and not a
+decision to make quickly at the end of an already long session, given a mistake in shared
+dataset state has a materially worse failure mode (silently wrong data for everyone, not
+just this run) than anything in (1)/(2). Left as the next concrete, scoped increment.
+
+## Correction: premium QOS access was never actually blocked -- the QOS name was wrong
+## (2026-11-09)
+
+Earlier this session (see the 2026-11-07/08 entry above): every `sbatch`/`salloc` attempt
+at `-q gpu_premium` failed ("Job request does not match any supported policy"), despite
+`alice_g`'s entitlements and the `gpu_ss11` partition's `AllowQos=ALL` both appearing to
+permit it; concluded (wrongly) that NERSC needed to provision a separate premium
+allocation bucket, and deferred per the user's "revisit premium later."
+
+**The QOS is named `premium`, not `gpu_premium` -- a name that does not exist was being
+requested the whole time, which is why nothing about entitlements or partitions explained
+the failure.** `sacctmgr show assoc account=alice_g user=$USER format=qos` lists
+`premium` (not `gpu_premium`) among `alice_g`'s entitled QOS; `sacctmgr show qos premium`
+confirms priority 73440, 2-day max walltime, `MaxSubmitPU=5` -- the exact figures the
+earlier investigation found for `gpu_premium` and attributed to a QOS that, it turns out,
+was never the one being requested. `sbatch --test-only -q premium -A alice_g ...` returns
+a real scheduled start time, confirming it actually works. No further NERSC action needed;
+this was not a provisioning gap.
