@@ -904,3 +904,29 @@ earlier investigation found for `gpu_premium` and attributed to a QOS that, it t
 was never the one being requested. `sbatch --test-only -q premium -A alice_g ...` returns
 a real scheduled start time, confirming it actually works. No further NERSC action needed;
 this was not a provisioning gap.
+
+## Mitigation (2) retrain: complete, checkpoint `v3_set_d256_L6_400k_s0_stratified`
+## (2026-11-09)
+
+Snapshot `86e7498` (the commit adding `weight_mode="stratified"`), submitted via
+`-q premium -A alice_g` (newly unblocked, see the entry above) -- 400,000 steps, otherwise
+identical hyperparameters to `v3_set_d256_L6_400k_s0` (`--arch set --dim 256 --depth 6
+--heads 8 --batch-size 512 --lr 3e-4 ... --weight-mode stratified`), writing to a **new**
+output path, never touching the existing production checkpoint. Completed cleanly, no
+errors: 400,000/400,000 steps, 13497s (~3h45m, comparable to the original run's ~4h11m),
+best step 364000, val loss 0.88611, multiplicity val NLL 3.3405 (weighted). Checkpoint sha256
+`d6a161f7a985...`.
+
+`run.json`'s `weights` record: `ess_train` (physical weight alone) 1,417,928 of 10,705,283
+jets; `ess_sample_draw` (the stratified draw) **890K -- lower, not higher**. This is the
+expected trade-off, not a problem: flattening draw probability *across* 40 strata while
+those strata hold wildly unequal event counts necessarily concentrates probability onto
+*fewer individual events* within the sparse strata (an event in a stratum of 1000 now shares
+the same total stratum mass a stratum of 1,000,000 shares one event each of) -- lower global
+ESS, much better coverage of the specific rare combinations (high multiplicity, high T_ref)
+the P4 finding traced the halo deficit to. Validation loss is not comparable across
+differently-weighted runs (standing project caveat) and was not used to judge this -- the
+real test is whether the beyond-R=0.4/T_ref correlation (the `width`/`outer_fraction` vs
+T_ref partial correlation measured earlier in this entry) shrinks when the P4 gate's
+correlation check is re-run against *this* checkpoint instead of the original. **Not yet
+done** -- the natural next step, not executed in this entry.
