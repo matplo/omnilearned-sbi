@@ -930,3 +930,49 @@ real test is whether the beyond-R=0.4/T_ref correlation (the `width`/`outer_frac
 T_ref partial correlation measured earlier in this entry) shrinks when the P4 gate's
 correlation check is re-run against *this* checkpoint instead of the original. **Not yet
 done** -- the natural next step, not executed in this entry.
+
+## Mitigation (2) validation: inconclusive, not clearly positive (2026-11-09)
+
+Ran `gate.py run` against the stratified checkpoint on 16 points evenly spaced across the
+T_ref range (point_ids 70,42,4,14,80,30,48,58,89,43,5,15,81,31,49,59 -- the same points
+re-read from the original campaign for a paired comparison), reduced cost
+(`--n-generate 4000 --n-perm 50`, vs. the original campaign's 22000/200) via the newly-fixed
+`premium` QOS. One real bug hit and fixed en route: the default `--batch 1024` OOM'd on the
+first high-multiplicity point after point 4 (21 GiB single allocation on an already
+67/79 GiB-used GPU) -- `run()` has no per-point isolation, so the whole process died, not
+just that point; resumed with `--batch 256` (already-done points skipped automatically) and
+it completed cleanly.
+
+**Result: no clear improvement, and if anything a very weak move in the wrong direction,
+though nothing here is statistically significant either way.**
+
+```
+                              T_ref vs width_delta      T_ref vs outer_delta
+original checkpoint (n=16)     r=-0.12 (p=0.67)          r=-0.10 (p=0.71)
+stratified checkpoint (n=16)   r=-0.21 (p=0.44)          r=-0.21 (p=0.43)
+```
+
+mean |width_delta| unchanged (0.0024 -> 0.0024); mean |outer_delta| dropped modestly
+(0.0107 -> 0.0099, ~8%). Per-point deltas show no consistent improvement pattern -- some
+points better, some worse, no systematic shift.
+
+**Caveat this isn't a clean disproof either**: the *original* checkpoint's own correlation
+on just this 16-point subsample (r=-0.12, p=0.67) is far weaker than the full 128-point
+result this session measured earlier (r=-0.41, p<1e-4) -- 16 points at reduced
+`n_generate`/`n_perm` is simply underpowered to reliably replicate the baseline effect, let
+alone detect a partial fix on top of it. This validation is inconclusive, not a clean
+negative result.
+
+**Most likely explanation if the null result holds up at full power: stratified
+resampling can only make training see the *same* limited set of rare real examples more
+often -- it cannot manufacture new statistical diversity.** `root_cause.html`'s own
+estimate (~127 effective weighted training examples at N>160, out of 1.44M total) may be
+the real ceiling; reweighting access to those same ~127 examples harder is a different
+intervention than having more of them to begin with. This is exactly why mitigation (3)
+(new targeted high-T_ref generation, designed but not executed this session -- see above)
+was scoped as *complementary* to (2), not redundant with it, and may be the one that
+actually matters if this result holds at proper statistical power.
+
+Not done in this entry, left as the honest next step rather than a decision made here: a
+properly-powered re-test (full 128 points or at least a larger, still-reduced-cost subset,
+at the original `n_generate`/`n_perm`) before concluding either way whether (2) helped.

@@ -286,3 +286,9 @@ Do not commit data, checkpoints, run trees, figures or binaries; never force-pus
     nothing about entitlements explained the failure. `-q premium -A alice_g` works
     (verified via `sbatch --test-only`). No NERSC ticket needed; this was never a
     provisioning gap, just a wrong flag value.
+28. **`gate.py run`'s default `--batch 1024` OOMs on a high-multiplicity point, and kills
+    the whole run, not just that point** -- it processes points sequentially in one
+    process with no per-point isolation, so one bad point takes every point after it down
+    too (2026-11-09: died on the 2nd of 16 points with a 21 GiB single allocation on an
+    already 67/79 GiB-used GPU). `--batch 256` fixed it; already-written `point_*.json`
+    files are skipped on resubmission, so nothing already done was lost.
