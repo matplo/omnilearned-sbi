@@ -686,3 +686,57 @@ grounds, or read `likelihood.py`'s accumulation code more closely (skimmed durin
 session's investigation -- the midpoint/rk4 divergence-accumulation logic looked
 mathematically consistent with each method's own order, no obvious implementation bug found,
 but not a line-by-line audit).
+
+## P5 follow-up: a full line-by-line audit of likelihood.py (no bug found), and rk4-512
+## confirms rk4 itself is nowhere near converged at nsteps=256 (2026-11-08/09)
+
+Requested directly ("I believe we are still looking for a bug"): read `likelihood.py`
+end-to-end. Checked: `_divergence`'s Hutchinson estimator (`eps^T J^T eps`, correctly
+estimates tr(J) for Rademacher eps since trace is transpose-invariant, identical code path
+for both solvers); `_fixed_step`'s midpoint branch (textbook 2-stage method, the companion
+log-density ODE accumulated at the same evaluation point used for `x`, which is the
+mathematically correct way to integrate it alongside the state); `_fixed_step`'s rk4 branch
+(classical 4-stage weights 1-2-2-1/6, matching `sample()`'s independent rk4 implementation
+elsewhere in the same file -- not a one-off inconsistency); sign conventions (`acc` added
+positively on both branches, matching `logp = base_lp + delta + log_jac`); probe scheduling
+(midpoint draws 1 fresh probe/step, rk4 draws 4 -- matches the documented `per_step` semantics
+of "independent probes for every divergence evaluation" exactly, not an asymmetry bug, and
+Hutchinson's estimator is unbiased for any fixed probe draw regardless). Also confirmed
+`scripts/p5_trajectory_diagnostic.py` (the earlier exact-divergence follow-up) imports and
+reuses `likelihood.py`'s own `_rhs_factory`/`rhs` closure directly, not a separate
+reimplementation -- that earlier finding is evidence from the real code path. **No
+implementation bug found.**
+
+Then ran the test the audit couldn't settle on its own: rk4 at nsteps=512 (1 seed, same
+checkpoint/pairs/observations), to check whether rk4 has actually converged by nsteps=256.
+**It has not, and not by a wide margin:**
+
+```
+rk4-256/float64 (seed 0):  [ -99.015,  370.627,   67.144,  336.148]
+rk4-512/float64 (seed 0):  [ -61.354,  214.043,   41.484,  192.755]
+relative change:              -38%      -42%       -38%      -43%
+```
+
+A genuine 4th-order method should cut its error by ~16x when steps double (error ~ h^4); a
+~40% change is nowhere close -- rk4 is not converging at its nominal order here. For
+comparison, midpoint's own change from 128 (float32, 2026-11-05) to 256 (float64, tonight) was
+much smaller in relative terms (0.8%, 12.5%, 4.1%, 15.8% -- though that comparison conflates
+nsteps and dtype same as everywhere else this session). **Both solvers are still far from a
+converged value**, and rk4's own degraded convergence rate (far below its nominal 4th order)
+points toward the trained velocity field itself having insufficient smoothness for either
+fixed-step method to resolve efficiently -- flow-matching ODEs integrated from the data
+endpoint are known to be able to develop sharp/near-singular behavior, which would explain
+degraded convergence for *any* fixed-step solver without requiring a bug in either one.
+Re-running the ratio with the better-converged reference: midpoint-256 vs rk4-512 gives
+ratios of 2.9-4.8x (down from 4.6-8.3x against rk4-256) -- consistent with both solvers
+slowly approaching a common limit as precision increases, not with a systematic bug that a
+convergence check would not shrink.
+
+**This changes the practical picture, not just the numbers**: if rk4 needs far more than 512
+steps to actually converge, "raise the reference's precision until it agrees with midpoint"
+may be prohibitively expensive for routine use (nsteps=512 here cost 6840s for a single
+4-pair, 1000-jet, 1-seed check -- a real fit's scan would need many more candidate
+evaluations than that). This does not change the rule-6 block status (still unresolved), but
+it does suggest the next useful experiments are about the vector field's smoothness near the
+ODE's endpoints (t=0/1), not further brute-force step increases, if a practical production
+setting is the goal rather than a fully converged reference.

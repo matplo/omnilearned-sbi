@@ -43,11 +43,20 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               formal check re-run at nsteps=256/float64 for both solvers shrinks the gap
               ~3-4x (23-26x -> 4.6-8.3x) but does NOT close it -- still a decisive FAIL by
               the same <0.5-log-L-unit criteria.** "Raise nsteps + float64" alone is not a
-              sufficient fix; whether rk4 itself has converged by nsteps=256 is itself an
-              open question this raised. Still blocked on a user decision: push further
-              (and separate the nsteps effect from the dtype effect, conflated in this
-              result), accept something on other grounds, or read `likelihood.py`'s
-              accumulation code more closely. `scripts/p5_trajectory_diagnostic.py`
+              sufficient fix. **Also now done (2026-11-09): a full line-by-line audit of
+              `likelihood.py` (divergence estimator, both solvers' accumulation formulas,
+              sign conventions, probe scheduling) found NO implementation bug -- both match
+              their textbook definitions, consistently. And: rk4 at nsteps=512 vs 256 shows
+              rk4 itself is NOT converged (~40% change, far short of the ~16x a true
+              4th-order method should show for a step doubling) -- the reference used for
+              the whole P5 campaign so far is itself unreliable, not just midpoint.** This
+              points toward the trained velocity field's own smoothness (likely near the
+              ODE's t=0/1 endpoints) as the real constraint, not a code bug -- see FINDINGS
+              "a full line-by-line audit... rk4-512 confirms rk4 itself is nowhere near
+              converged". Still blocked on a user decision: investigate the vector field's
+              smoothness directly (more promising than further brute-force step increases,
+              which cost ~2h GPU per doubling already with no sign of plateauing), or accept
+              something on other grounds. `scripts/p5_trajectory_diagnostic.py`
               reproduces the per-jet version of this on any jet/theta. Only after the
               per-jet signal is confirmed above the discretization floor (and
               `numerics.py`'s `TEST`/`REFERENCE` or `LikelihoodOptions` defaults are updated
