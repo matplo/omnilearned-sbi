@@ -636,3 +636,53 @@ pre-this-session P4 work); only `jewel_ensembles` was still missing it. `direct_
 still hardcoded to the `"fidelity"` split name specifically (not a parameter), which is a
 separate, narrower gap than "hardcoded reader" -- not touched, since nothing calls it needing
 a different split yet.
+
+## P5 follow-up, the formal re-test at nsteps=256/float64: gap shrinks ~3-4x, does NOT close
+## (2026-11-08/09)
+
+Source revision c38c282 (dirty: no). Device: Perlmutter GPU, alice_g, interactive QOS, 2
+sequential jobs (`--which test`, `--which reference`; split after a combined `--which both`
+2h run with no incremental save hit the walltime cap and lost everything -- see
+`docs/RESTART_JEWEL_V3.md` trap 26, added from this).
+
+The formal numerics check (`toy.numerics run`/evaluated directly via `evaluate()`, same
+checkpoint, same `p5_obs.h5`, same 4 pairs around `primary_test` as the original 2026-11-05
+FAIL), re-run at `nsteps=256`, `dtype=float64` for both solvers (3 seeds each,
+`--event-chunk 40`), using the new `--dtype` flag added this session:
+
+```
+                           pair0 (b)   pair1 (T_ref)  pair2 (tau_init)  pair3 (diagonal)
+midpoint-64/float32 (orig)   -14.09       52.63            13.33            51.19
+rk4-64/float32 (orig)       -329.72     1345.04           225.62          1231.06
+ratio (orig)                  23.4x       25.6x            16.9x            24.1x
+
+midpoint-256/float64         -21.44       47.88            14.70            40.64
+rk4-256/float64              -99.00      370.12            67.15           335.65
+ratio (tonight)                4.6x        7.7x             4.6x             8.3x
+```
+
+`probe_std` (seed-to-seed scatter within each setting) stays tiny at the new settings too
+(0.03-0.50), so both are again internally well-converged -- this is a real, reproducible
+discrepancy between the methods, not noise. **Raising precision helps a lot (the gap shrinks
+by roughly 3-4x) but does not resolve it**: by the same FAIL criteria as 2026-11-05 (single-
+seed and seed-averaged shift both < 0.5 log-L units), this is still a decisive FAIL -- shifts
+are 52-323 log-L units, not <0.5.
+
+**This run conflated two changes at once** (nsteps 64->256 *and* dtype float32->float64), so
+it cannot say how much of the 3-4x improvement came from which. Separating them (e.g.
+midpoint-256/float32 alone) is the natural next step to isolate the effect, not done yet --
+left for the user's direction given the cost already spent on this single data point (~4h
+GPU: the test/midpoint side took ~26 min for 3 seeds (~530-545s/seed); the reference/rk4 side
+took ~1h for 3 seeds (~3600s/seed, right against its own 3h45m walltime budget).
+
+**This remains a decision point, not resolved**: "raise nsteps and switch to float64" is
+*not* sufficient on its own to bring the production solver into agreement with the reference
+at the rigor the formal P5 check demands. Whether rk4 itself has actually converged by
+nsteps=256 (its own value moved by a similarly large factor between nsteps=64 and nsteps=256,
+not obviously plateaued) is itself an open question raised by this data, not settled by it.
+P6/P7 remain blocked per rule 6 until the user decides how to proceed: push nsteps/precision
+further (and separate the two factors), accept a reduced-rigor production default on other
+grounds, or read `likelihood.py`'s accumulation code more closely (skimmed during this
+session's investigation -- the midpoint/rk4 divergence-accumulation logic looked
+mathematically consistent with each method's own order, no obvious implementation bug found,
+but not a line-by-line audit).

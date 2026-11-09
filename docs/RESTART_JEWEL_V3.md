@@ -38,12 +38,20 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               so the ratio of the two solvers' pairwise shifts swings wildly and even flips
               sign across jets (+2x to +53x). This reframes the likely fix: not "which
               solver," but whether nsteps needs to go well beyond 64 (for whichever solver is
-              kept) or the integration needs float64 instead of float32 -- neither tested yet,
-              both left for the user. `scripts/p5_trajectory_diagnostic.py` reproduces this
-              on any jet/theta. Only after the per-jet signal is confirmed above the
-              discretization floor (and `numerics.py`'s `TEST`/`REFERENCE` or
-              `LikelihoodOptions` defaults are updated accordingly, if needed) should P6
-              proceed. ptbins.py (the P4 followup, 20-500 GeV window) was
+              kept) or the integration needs float64 instead of float32. **Now tested
+              (2026-11-08/09, FINDINGS "the formal re-test at nsteps=256/float64"): the
+              formal check re-run at nsteps=256/float64 for both solvers shrinks the gap
+              ~3-4x (23-26x -> 4.6-8.3x) but does NOT close it -- still a decisive FAIL by
+              the same <0.5-log-L-unit criteria.** "Raise nsteps + float64" alone is not a
+              sufficient fix; whether rk4 itself has converged by nsteps=256 is itself an
+              open question this raised. Still blocked on a user decision: push further
+              (and separate the nsteps effect from the dtype effect, conflated in this
+              result), accept something on other grounds, or read `likelihood.py`'s
+              accumulation code more closely. `scripts/p5_trajectory_diagnostic.py`
+              reproduces the per-jet version of this on any jet/theta. Only after the
+              per-jet signal is confirmed above the discretization floor (and
+              `numerics.py`'s `TEST`/`REFERENCE` or `LikelihoodOptions` defaults are updated
+              accordingly) should P6 proceed. ptbins.py (the P4 followup, 20-500 GeV window) was
               deprioritized in favor of P5 per the user's direction and was not run this
               session; its fix is in FINDINGS/test_ptbins.py but still uncommitted as of the
               last P4 snapshot (c9ed27f) -- revisit if/when useful again, not urgent.
@@ -59,7 +67,12 @@ NUMERICS:     $JEST_NLE_ROOT/runs/jewel_v3/p5_numerics/ (p5_obs.h5 -- 1000 real 
               primary_test holdout theta, built by scripts/p5_prepare_observations.py;
               part_test_cuda.json, part_reference_cuda.json, numerics_cuda.json -- the formal
               merge/evaluate result; diag_midpoint128.json, diag_rk4_8probes.json,
-              part_test_cpu.json -- the follow-up diagnostics, see FINDINGS)
+              part_test_cpu.json -- the follow-up diagnostics; part_n256_f64_test.json,
+              part_n256_f64_reference.json -- the 2026-11-08/09 nsteps=256/float64 re-test
+              (evaluated directly with numerics.evaluate(), not numerics.py's own `merge`
+              CLI, since each part recorded only one side's options at the new settings and
+              the other at the module default -- merge's consistency check correctly refuses
+              to combine them; see FINDINGS)
 SNAPSHOT:     c9ed27f is the latest committed (FlowSurrogate.sample jet_pt fix). P5's fixes
               (numerics.py context forwarding, tests/sbi/test_numerics_context.py,
               scripts/p5_prepare_observations.py) are committed on top of it as of this
@@ -245,3 +258,12 @@ Do not commit data, checkpoints, run trees, figures or binaries; never force-pus
     just a wrong number (the composite-likelihood correlation check would see no correlation
     to check). Read `group_id` when present, fall back to `event_id` only for the legacy
     schema: `d["group_id"] if "group_id" in d else d["event_id"]`.
+26. **A multi-hour script with no incremental save is a real walltime-cap risk on
+    `interactive` QOS (4h max).** `toy.numerics run --which both` writes its output JSON
+    only once, at the very end, after every seed of both test and reference options --
+    unlike the explorer scripts' one-JSON-per-ensemble pattern. A combined
+    midpoint-256/rk4-256/float64 run (2026-11-08) hit a 2h requested walltime with nothing
+    to show for it (no partial file, no error -- just gone). Split into separate
+    `--which test` / `--which reference` jobs (already supported) before requesting a long
+    run with this script, each sized to its own cost -- rk4 at the same nsteps costs
+    several times more than midpoint (observed: ~3600s vs ~530s per seed at nsteps=256).
