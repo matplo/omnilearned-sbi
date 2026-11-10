@@ -23,6 +23,11 @@ STREAMS = {
     "jewel_validation": 17,
     "jewel_test": 18,
     "jewel_fidelity": 19,  # JEWEL gate samples at the validation points (own NJOB streams)
+    "jewel_train_hightref": 20,  # P4 mitigation: supplementary high-T_ref training points
+                                 # (FINDINGS_JEWEL_V3.md, the beyond-R=0.4 halo deficit's
+                                 # T_ref correlation); point_id continues past the original
+                                 # train design's own point count, so this is additive, not
+                                 # a replacement of any existing point's generation.
 }
 
 

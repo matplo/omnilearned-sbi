@@ -221,6 +221,59 @@ def topup(directory, target_jets, margin=1.05, max_chunks=None, log=print):
     return new
 
 
+def add_points(directory, theta, point_ids, chunks, nevent=None, keep_hepmc=(), extra=None,
+               sampling=None, keep_events=True, log=print):
+    """Append brand-new points' tasks to an existing split's ``tasks.json``.
+
+    Unlike ``plan`` (which *writes* ``tasks.json``, replacing whatever was there), this
+    *appends* -- same atomic-rewrite pattern as ``topup``, so a directory mid-work from an
+    earlier wave is never put at risk. For extending an already-generated design (e.g. a
+    targeted supplement at theta the original design under-sampled) without touching any
+    task, claim, manifest or shard the original points already have.
+
+    ``point_ids`` must not already appear in ``tasks.json`` -- this is for genuinely new
+    points, not for adding chunks to existing ones (``topup`` does that). Picking ids that
+    continue past the directory's own ``max(point_id)`` keeps NJOB (``cards.njob``, keyed
+    on ``(split, point_id, chunk)`` with a fixed per-split base) from colliding with any
+    task this directory, or any other directory of the same split, has ever used.
+    """
+    directory = Path(directory)
+    doc = load(directory)
+    cfg = doc["config"]
+    point_ids = [int(p) for p in point_ids]
+    theta = np.atleast_2d(np.asarray(theta, float))
+    if theta.shape[0] != len(point_ids):
+        raise ValueError(f"{len(point_ids)} point_ids but {theta.shape[0]} theta rows")
+    existing = {t["point_id"] for t in doc["tasks"]}
+    overlap = existing & set(point_ids)
+    if overlap:
+        raise ValueError(f"point_id(s) {sorted(overlap)} already exist in {directory}/tasks.json "
+                         f"-- add_points is for new points only (topup adds chunks to existing ones)")
+    nev = int(nevent or cfg["design"]["events_per_task"])
+    per = {pid: int(chunks[pid] if isinstance(chunks, dict) else chunks) for pid in point_ids}
+    new = []
+    for c in range(max(per.values(), default=0)):  # chunk-major, matching plan()
+        for pid, th in zip(point_ids, theta):
+            if c >= per[pid]:
+                continue
+            name = task_name(doc["split"], pid, c)
+            new.append({"name": name, "split": doc["split"], "point_id": pid, "chunk": c,
+                       "theta": [float(v) for v in th], "nevent": nev,
+                       "njob": cards.njob(cfg, doc["split"], pid, c),
+                       "keep_hepmc": name in set(keep_hepmc), "keep_events": bool(keep_events),
+                       "extra_cards": extra or {},
+                       **({"sampling": dict(sampling)} if sampling else {})})
+    doc["tasks"] = doc["tasks"] + new
+    doc.setdefault("added_points", []).append(
+        {"point_ids": point_ids, "chunks": per, "time": time.time()})
+    tmp = directory / f"tasks.json.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(doc, f, indent=1)
+    os.replace(tmp, directory / "tasks.json")
+    log(f"added {len(point_ids)} point(s), {len(new)} tasks ({len(doc['tasks'])} in total)")
+    return new
+
+
 # ---------------------------------------------------------------------------
 # one task
 # ---------------------------------------------------------------------------
@@ -700,6 +753,15 @@ def main(argv=None):
     t.add_argument("--dir", required=True)
     t.add_argument("--target-jets", type=int, required=True)
     t.add_argument("--margin", type=float, default=1.05)
+    ap_ = sub.add_parser("add-points", help="append brand-new points to an existing split, "
+                         "without disturbing any task/claim/manifest/shard already there")
+    ap_.add_argument("--dir", required=True)
+    ap_.add_argument("--points", type=int, nargs="+", required=True, help="new point_ids, "
+                     "must not already exist in --dir")
+    ap_.add_argument("--theta", type=float, nargs="+", required=True, help="rows b TI TAUI, "
+                     "one per --points entry")
+    ap_.add_argument("--chunks", type=int, default=1)
+    ap_.add_argument("--nevent", type=int, default=None)
     i = sub.add_parser("index")
     i.add_argument("--dir", required=True)
     m = sub.add_parser("merge", help="merge a split's task shards into a few point-major shards")
@@ -730,6 +792,10 @@ def main(argv=None):
         tasklocks.unlock_stale(sorted(Path(a.dir).glob("claims/*.lock")))
     elif a.cmd == "topup":
         topup(a.dir, a.target_jets, a.margin)
+    elif a.cmd == "add-points":
+        theta = np.asarray(a.theta).reshape(-1, 3)
+        new = add_points(a.dir, theta, a.points, a.chunks, a.nevent)
+        print(f"{len(new)} tasks -> {a.dir}/tasks.json")
     elif a.cmd == "merge":
         merge(a.dir, a.out, a.shards, a.workers)
     elif a.cmd == "index":

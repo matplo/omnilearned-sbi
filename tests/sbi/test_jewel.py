@@ -302,6 +302,63 @@ def test_topup_warns_when_the_chunk_cap_stops_a_point_reaching_target(fake_cfg, 
     assert len(generate.load(d)["tasks"]) == 3            # clamped, not silently unbounded
 
 
+def test_add_points_appends_without_disturbing_existing_tasks(fake_cfg, tmp_path):
+    """The whole point of add_points over plan: existing tasks/manifests are untouched."""
+    pytest.importorskip("hepyy")
+    from omnilearned.sbi.jewel import generate
+
+    d = tmp_path / "farm"
+    generate.plan(fake_cfg, "probe", d, chunks=2, theta=[[4.5, 0.45, 0.65], [1.5, 0.3, 0.5]], nevent=10)
+    generate.work(d, scratch=str(tmp_path), log=lambda m: None)
+    before = generate.load(d)
+    man_before = (d / "probe_p00000_c000.json").read_bytes()
+
+    new = generate.add_points(d, [[9.0, 0.2, 0.9], [8.0, 0.7, 0.3]], [2, 3], chunks=1, nevent=10,
+                              log=lambda m: None)
+    assert [t["point_id"] for t in new] == [2, 3]
+    assert [t["chunk"] for t in new] == [0, 0]
+    doc = generate.load(d)
+    assert doc["tasks"][:len(before["tasks"])] == before["tasks"]  # untouched, same order
+    assert (d / "probe_p00000_c000.json").read_bytes() == man_before  # manifest untouched
+    assert len({t["njob"] for t in doc["tasks"]}) == len(doc["tasks"])  # no njob collision
+    assert doc["added_points"][0]["point_ids"] == [2, 3]
+
+    # the new points actually run end to end: work() picks them up, write_index sees everything
+    assert generate.work(d, scratch=str(tmp_path), log=lambda m: None) == 2  # just the 2 new tasks
+    idx = generate.write_index(d)
+    assert idx["tasks_done"] == len(doc["tasks"]) == 6  # 2 points x 2 chunks + 2 points x 1 chunk
+    assert {s["point_id"] for s in idx["shards"]} == {0, 1, 2, 3}
+
+
+def test_add_points_rejects_an_existing_point_id(fake_cfg, tmp_path):
+    from omnilearned.sbi.jewel import generate
+
+    d = tmp_path / "farm"
+    generate.plan(fake_cfg, "probe", d, chunks=1, theta=[[4.5, 0.45, 0.65]], nevent=10)
+    with pytest.raises(ValueError, match="already exist"):
+        generate.add_points(d, [[1.0, 0.2, 0.3]], [0], chunks=1, log=lambda m: None)
+
+
+def test_add_points_rejects_mismatched_theta_and_point_ids(fake_cfg, tmp_path):
+    from omnilearned.sbi.jewel import generate
+
+    d = tmp_path / "farm"
+    generate.plan(fake_cfg, "probe", d, chunks=1, theta=[[4.5, 0.45, 0.65]], nevent=10)
+    with pytest.raises(ValueError, match="theta rows"):
+        generate.add_points(d, [[1.0, 0.2, 0.3], [2.0, 0.3, 0.4]], [1], chunks=1, log=lambda m: None)
+
+
+def test_add_points_accepts_a_per_point_chunk_dict(fake_cfg, tmp_path):
+    from omnilearned.sbi.jewel import generate
+
+    d = tmp_path / "farm"
+    generate.plan(fake_cfg, "probe", d, chunks=1, theta=[[4.5, 0.45, 0.65]], nevent=10)
+    new = generate.add_points(d, [[1.0, 0.2, 0.3], [2.0, 0.3, 0.4]], [1, 2],
+                              chunks={1: 2, 2: 3}, log=lambda m: None)
+    assert sorted((t["point_id"], t["chunk"]) for t in new) == \
+        [(1, 0), (1, 1), (2, 0), (2, 1), (2, 2)]
+
+
 def test_toy_train_runs_on_jewel_shards(fake_cfg, tmp_path):
     pytest.importorskip("hepyy")
     from omnilearned.sbi.flow import FlowSurrogate
