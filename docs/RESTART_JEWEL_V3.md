@@ -67,7 +67,10 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
 RUNNING:      nothing
 DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
               + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
-              four splits under a `splits` key -- see FORMAT doc §4)
+              four splits under a `splits` key -- see FORMAT doc §4). As of 2026-11-10,
+              train/ also has merged_hightref/ -- a SEPARATE, non-production merge spanning
+              all 552 points (the original 512 + 40 new high-T_ref points, point_id 512-551,
+              mitigation (3) below); merged/ (512 points, production) is untouched.
 CHECKPOINTS:  $JEST_NLE_ROOT/runs/jewel_v3/p3_train/{v3_set_d256_L6_400k_s0,_s1,_s2,
               v3_set_d256_L6_200k_ctl}/checkpoint.pt (+ run.json, resume.pt)
 GATE RESULTS: $JEST_NLE_ROOT/runs/jewel_v3/p4_gate/s0/point_NNNNN.json (all 128, checkpoint
@@ -106,6 +109,26 @@ limit at 250 jets/ensemble, not a bug. Phase E (the HTML report, reports repo) i
 T_ref as the clean result, b/tau_init with the caveat stated plainly. The same bug in the
 pre-existing P7 helper `toy.closure.jewel_ensembles` is also fixed now (see trap 24) --
 differently, by resampling whole events rather than individual jets.
+
+P4 MITIGATIONS (2026-11-09/10, separate from and does not unblock the P5 solver question
+above): the P4 halo deficit (beyond-R=0.4) was found to correlate with T_ref directly, not
+just via multiplicity (raw r=-0.41, partial r=-0.56 controlling for n_constituents, p<1e-4
+both, all 128 fidelity points) -- see FINDINGS "P4 re-opened". Three mitigations, user-
+approved to implement and run all three:
+  (1) `observations.restrict_to_core` (core-dR<0.4 restriction at inference) -- implemented,
+      tested, wired into `p5_explorer_ensembles.py --core-only`. Not yet exercised in a real
+      fit run.
+  (2) `flow.stratified_weights` + `toy.train.joint_strata` (stratified training reweighting)
+      -- implemented, tested, retrained (checkpoint v3_set_d256_L6_400k_s0_stratified).
+      Validation on a 16-point subsample: **inconclusive, not clearly positive** (see
+      FINDINGS "Mitigation (2) validation") -- underpowered to either confirm or rule out at
+      this sample size.
+  (3) targeted high-T_ref generation campaign (40 new points, T_ref in [0.61, 0.89],
+      point_id 512-551) -- **generation and merge complete** (see FINDINGS "Mitigation (3)
+      campaign complete"). `merged_hightref/` now holds all 552 points, 12,014,987 jets.
+      **Not yet retrained or validated** -- this is the natural next step once resumed, and
+      the actual test of whether more real high-T_ref examples (vs. (2)'s reweighting of the
+      same existing ones) closes the gap.
 
 DONE (2026-11-08, ahead of P7, since trap 24 flagged it): closure.py's jewel_ensembles now
 takes a `config` param and dispatches via shards_for_config, same as direct_by_point already
@@ -292,3 +315,30 @@ Do not commit data, checkpoints, run trees, figures or binaries; never force-pus
     too (2026-11-09: died on the 2nd of 16 points with a 21 GiB single allocation on an
     already 67/79 GiB-used GPU). `--batch 256` fixed it; already-written `point_*.json`
     files are skipped on resubmission, so nothing already done was lost.
+29. **`generate.py`'s own generic `merge()`/`_merge_one()` is dead code for the v3
+    backend -- do not use it.** It reads an h5 attribute named `toy_config_sha256`, which
+    only the legacy toy/v2 writer (`toy.datasets.write_shard`) ever wrote; the v3 writer
+    (`v3format.write_jets`, used by `run_task` for `jewel-2.6.0-cs-v3`) writes
+    `config_sha256` instead (commit 7f602c6 added the v3 write path without updating
+    `_merge_one` to match), so `generate.py merge` crashes with
+    `KeyError: "...toy_config_sha256"` on any real v3 shard. The actual v3 merge path is
+    `v3format.merge_v3` (see `shell/nle/jewel_v3_merge.sbatch` for the correct invocation:
+    `index` first, then `merge_v3(dir, out, split, target_jets=1_000_000, cfg=cards.load_config(cfgp))`).
+    Found 2026-11-10 running mitigation (3)'s merge; `generate.py merge`'s CLI subcommand
+    should probably be removed or fixed, not used as-is.
+30. **A tens-of-thousands-of-small-files merge (`merge_v3`, train split: 23409 per-task
+    shards) is Lustre-metadata-latency-bound, not CPU- or bandwidth-bound, and serial
+    processing badly underuses a compute node.** A single-process `merge_v3` run managed
+    ~1.4 files/s (almost all wall time was I/O-wait: `sstat`'s `AveCPU` showed 40s of actual
+    CPU time over 8 minutes elapsed) -- at that rate the full split projects to ~4.5-5h,
+    which blew through both a 30-minute and a 3-hour walltime budget with ZERO output
+    written (merge_v3 only writes its combined index at the very end; a walltime kill mid-run
+    loses everything unless each group's own output is checked for on restart). Fix: since
+    `merge_v3`'s per-point-group output files are fully independent reads+writes, process
+    them with a multiprocessing pool (one worker per group) instead of serially, and check
+    for each group's own already-written `.h5`+`.json` on start so a kill only loses
+    whatever group was still in flight, not finished ones. This dropped the real elapsed
+    time for all 13 groups of the 552-point split to ~35 minutes. The resumable+parallel
+    wrapper is not yet lifted into `v3format.py` itself (it was written ad hoc in
+    `$JEST_NLE_ROOT/scratch/resumable_merge_v3_parallel.py`); worth promoting into the
+    library (with a test) if another large merge is needed, rather than rewriting it again.

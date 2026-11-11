@@ -976,3 +976,44 @@ actually matters if this result holds at proper statistical power.
 Not done in this entry, left as the honest next step rather than a decision made here: a
 properly-powered re-test (full 128 points or at least a larger, still-reduced-cost subset,
 at the original `n_generate`/`n_perm`) before concluding either way whether (2) helped.
+
+## Mitigation (3) campaign complete: 40 high-T_ref points generated and merged (2026-11-10)
+
+Generated the 40 supplementary high-T_ref points designed in `p4_hightref_design.json`
+(point_id 512-551, T_ref in [0.610, 0.893], b/tau_init spanning their full existing box
+ranges, scrambled Sobol on the dedicated `jewel_train_hightref` stream). Ran via
+`generate.py work` in waves (CPU interactive/premium QOS), `unlock-stale` + `index`'s own
+corrupt-manifest self-healing cleaning up walltime-kill artifacts between waves (9 zero-byte
+manifests from the first wave's walltime kill; the dedicated `unlock-stale` subcommand
+separately freed 17 stale claim locks from the same kill). Topped up points 512/513 (the
+original smoke-test points, which had only 2 chunks each -- 4,748 and 3,710 jets, both below
+the ~20,000/point target) to the same 15-chunk depth as the other 38 points via a manual
+`tasks.json` append mirroring `topup()`'s own per-point chunk-extension logic (NOT
+`topup()` itself, which tops up every under-target point in the WHOLE split including
+existing low-acceptance production points -- out of scope here and not what was wanted).
+
+Final per-point yield, all 40 points: min 27,244, mean 32,729 jets/point, none below the
+20,000 target. Full `train/` index: 23,409/23,409 tasks, 12,014,987 jets, 552 points.
+
+Merge hit a real bug: `generate.py`'s generic `merge()` is dead code for the v3 backend
+(reads an attribute name the v3 writer never writes -- see RESTART trap 29). Switched to
+the correct `v3format.merge_v3`, which in turn was far too slow run serially (projected
+~4.5-5h for 23,409 small-file reads, Lustre-metadata-latency-bound not CPU-bound -- see
+RESTART trap 30) and blew through two walltime budgets with zero output (no incremental
+save). Wrote a resumable, parallel wrapper (one worker per output group, skip-if-already-
+written per group) and reran: all 13 groups of the full 552-point split merged in ~35
+minutes. Verified: merged jet total (12,014,987) exactly matches the source index; per-file
+point counts sum to exactly 552 (every point present, none split across files, none
+duplicated).
+
+Output: `$JEST_NLE_ROOT/data/jewel_v3/merged_hightref/` -- a **separate, non-production**
+merged dataset (13 files, `index_train.json`, `dataset.json`/`.yaml`) spanning the original
+512 points plus the 40 new ones. The existing production `merged/` (512 points) is
+untouched; nothing here changes what the current production checkpoints were trained on.
+
+**Not yet done, and the actual point of the campaign**: retrain on this expanded dataset
+(possibly combined with mitigation (2)'s stratified weighting) and re-run the P4 gate's
+T_ref correlation check against that new checkpoint, at full statistical power (all 128
+fidelity points, not the underpowered 16-point subsample mitigation (2) alone was validated
+against). Until that retrain happens, mitigation (3) has supplied more real high-T_ref
+statistics but has not yet been shown to fix anything.
