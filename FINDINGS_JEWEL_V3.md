@@ -1017,3 +1017,35 @@ T_ref correlation check against that new checkpoint, at full statistical power (
 fidelity points, not the underpowered 16-point subsample mitigation (2) alone was validated
 against). Until that retrain happens, mitigation (3) has supplied more real high-T_ref
 statistics but has not yet been shown to fix anything.
+
+## Mitigation (2)+(3) combined retrain complete (2026-11-11)
+
+Retrained on `merged_hightref/` (the 552-point dataset from mitigation (3)) with
+`--weight-mode stratified` (mitigation (2)), same architecture/hyperparameters as the
+`v3_set_d256_L6_400k_s0_stratified` checkpoint otherwise (set arch, dim 256, depth 6,
+heads 8, batch 512, lr 3e-4, 400k steps, seed 0). `--val-dir` pointed at the existing
+production `merged/`'s validation split (unrelated to and untouched by mitigation (3),
+which only merged the train split into `merged_hightref/`) -- val loss is a monitoring
+signal only, never a fidelity judgment, per the standing project caveat, so reusing the
+existing validation set here is the right call, not a shortcut.
+
+One real bug hit on the first submission: `--val-dir merged_hightref` crashed with
+`ValueError: no v3 shard files given` (`v3format.read_v3_shards`), because `merged_hightref/`
+only has `index_train.json` -- mitigation (3) never merged a validation split into it (there
+was no reason to; mitigation (3) only adds *training* points). Fixed by pointing `--val-dir`
+at the production `merged/` instead.
+
+Checkpoint: `v3_set_d256_L6_400k_s0_hightref_stratified`, sha `3ea5328a5c86`, best step
+378,000, val(ema) 0.88604, multiplicity val NLL 3.3452, 15,597s total (~4h20m). Train ESS
+1,757,570 of 12,014,987 jets (vs. 1,417,928 of 10,705,283 for the stratified-only run on the
+original 512-point data -- a genuine +24% increase in effective training statistics, not
+just a reweighting of the same examples).
+
+**Val loss (0.88604) is essentially unchanged from the stratified-only run's 0.88611** --
+expected and not a concern: val loss is dominated by the bulk, low-multiplicity/low-T_ref
+population the halo-deficit finding never implicated; it is not sensitive to a fix
+targeted at a small tail. **Not yet done**: re-run the P4 gate's T_ref correlation check
+against this checkpoint (ideally at full statistical power -- all 128 fidelity points, not
+the underpowered 16-point subsample mitigation (2) alone was checked against) -- this is
+the actual test of whether mitigation (3)'s extra real statistics, combined with (2)'s
+reweighting, close the gap that (2) alone did not.
