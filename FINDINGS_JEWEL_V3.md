@@ -1049,3 +1049,52 @@ against this checkpoint (ideally at full statistical power -- all 128 fidelity p
 the underpowered 16-point subsample mitigation (2) alone was checked against) -- this is
 the actual test of whether mitigation (3)'s extra real statistics, combined with (2)'s
 reweighting, close the gap that (2) alone did not.
+
+## Mitigation (2)+(3) full 128-point P4 gate re-check: fixed the target, broke something else (2026-11-13)
+
+Ran the full-power P4 gate (`n_generate=22000`, `n_perm=200`, `--redraw`, `--batch 256`,
+matching the original production campaign's own settings exactly) against the combined
+checkpoint `v3_set_d256_L6_400k_s0_hightref_stratified`, all 128 fidelity points.
+
+**Headline: worse, not better. 30/128 FAIL (alpha/S=3.91e-04), vs. the original production
+checkpoint's 19/128 FAIL.** Not spin -- a real net regression in the family-wise result.
+
+Real bug hit and fixed along the way (separate from the result above): `sample_and_select`'s
+redraw loop could pass a 0-constituent cloud's count into `surrogate.sample`, which correctly
+refuses `num_particles=0` (see the commit fixing it; a 0-constituent cloud can never pass
+`min_constituents>=1` selection, so "redraw at the same N" is meaningless for it and it should
+just count as permanently unfilled). Crashed shard 3 of the first attempt after 14/32 points;
+fixed, tested, and the resumed run (gate.py's own existing-point skip) picked up cleanly from
+95/128 without redoing finished points.
+
+**But the regression is not uniform -- comparing per-point, per-observable against the
+original checkpoint's own 128 point JSONs shows a real, mixed picture:**
+
+- **3 points flip FAIL -> PASS**, all at the highest T_ref in the design (0.75, 0.78, 0.89 --
+  exactly mitigation (3)'s target band). Their original failure mode was `width` and
+  `outer_fraction` -- precisely the beyond-R=0.4 halo-deficit symptom `root_cause.html`
+  diagnosed. **This is the campaign's targeted fix actually working** at the points it was
+  built for.
+- **14 points newly fail** that passed under the original checkpoint. Every single one is
+  flagged by `n_constituents` (14/14); only 1 of 14 also shows `width`. Their T_ref is
+  moderate-high (mean 0.62) but spans a different, broader band than the 3 fixed points, not
+  concentrated at the extreme tail. This looks like a side effect of the retrain itself --
+  most likely the stratified reweighting (which boosts draw probability of rare
+  high-multiplicity/high-T_ref training examples) shifting the learned multiplicity
+  calibration p(N|theta) somewhat broadly, not a reappearance of the halo-specific problem.
+- 16 points fail under both checkpoints (an unrelated, persistent issue); 95 pass under both.
+  Net: 19 (orig) + 14 (new-only) - 3 (fixed) = 30 (new) -- the arithmetic behind the headline
+  number.
+
+**Implication, not yet acted on**: mitigation (3)'s extra high-T_ref statistics, combined with
+mitigation (2)'s stratified reweighting, did close the specific gap they targeted, but the
+reweighting (or some other side effect of the retrain) introduced a broader, different
+multiplicity-calibration cost elsewhere that outweighs it in the family-wise count. Candidates
+worth checking before concluding further: (a) retrain on the expanded `merged_hightref/`
+dataset WITHOUT stratified weighting (`--weight-mode loss`, isolating mitigation (3) alone
+from (2)) to see whether the extra data alone fixes the target without the new
+n_constituents-driven failures; (b) inspect whether the stratified multiplicity model
+specifically (not just the flow) was affected, since `joint_strata`'s stratification is over
+(n_constituents, T_ref) jointly and could plausibly be reweighting the multiplicity model's
+own training signal more than intended. **This checkpoint should not be treated as an
+improvement over production as it stands.**

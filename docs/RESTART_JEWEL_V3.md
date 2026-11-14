@@ -124,11 +124,21 @@ approved to implement and run all three:
       FINDINGS "Mitigation (2) validation") -- underpowered to either confirm or rule out at
       this sample size.
   (3) targeted high-T_ref generation campaign (40 new points, T_ref in [0.61, 0.89],
-      point_id 512-551) -- **generation and merge complete** (see FINDINGS "Mitigation (3)
-      campaign complete"). `merged_hightref/` now holds all 552 points, 12,014,987 jets.
-      **Not yet retrained or validated** -- this is the natural next step once resumed, and
-      the actual test of whether more real high-T_ref examples (vs. (2)'s reweighting of the
-      same existing ones) closes the gap.
+      point_id 512-551) -- generation and merge complete, `merged_hightref/` holds all 552
+      points, 12,014,987 jets. Retrained combined with (2)'s stratified weighting
+      (checkpoint `v3_set_d256_L6_400k_s0_hightref_stratified`) and validated at full
+      power (all 128 fidelity points, matching the production campaign's own settings) --
+      see FINDINGS "Mitigation (2)+(3) full 128-point P4 gate re-check". **Mixed, net
+      negative: 30/128 FAIL vs. the original 19/128.** Not uniform, though: 3 points at the
+      highest T_ref (0.75-0.89) flip FAIL->PASS, exactly the targeted `width`/
+      `outer_fraction` halo-deficit symptom fixed at the points mitigation (3) was built
+      for. But 14 different points newly fail, every one flagged by `n_constituents` (not
+      `width`/`outer_fraction`) -- most likely a side effect of (2)'s stratified reweighting
+      shifting the learned multiplicity calibration more broadly than intended, not a
+      reappearance of the halo problem. **This checkpoint is not an improvement over
+      production as it stands.** Next, not yet done: retrain on `merged_hightref/` WITHOUT
+      stratified weighting (`--weight-mode loss`) to isolate whether (3)'s extra data alone
+      (without (2)'s reweighting) fixes the target without the new n_constituents cost.
 
 DONE (2026-11-08, ahead of P7, since trap 24 flagged it): closure.py's jewel_ensembles now
 takes a `config` param and dispatches via shards_for_config, same as direct_by_point already
