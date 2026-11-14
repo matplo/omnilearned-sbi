@@ -64,10 +64,17 @@ def sample_and_select(surrogate, theta, n, sel, seed=0, nsteps=128, solver="midp
            "acceptance_by_n": {"generated": np.bincount(counts).tolist(),
                                "accepted": np.bincount(counts[ok], minlength=counts.max(initial=0) + 1).tolist()}}
     if redraw:
+        # A cloud generated with 0 constituents is correctly rejected by selection and can
+        # never be redrawn at "the same N" (FlowSurrogate.sample refuses num_particles=0,
+        # by design -- there is no such thing as a 0-particle cloud passing a
+        # min_constituents>=1 selection). Exclude it from redraw attempts up front rather
+        # than crash on it; it stays permanently unfilled, same as a cloud that exhausts
+        # max_rounds.
+        zero_n = counts == 0
         rounds, redrawn = 0, int((~ok).sum())
-        while (~ok).any() and rounds < max_rounds:
+        while (~ok & ~zero_n).any() and rounds < max_rounds:
             rounds += 1
-            idx = np.flatnonzero(~ok)
+            idx = np.flatnonzero(~ok & ~zero_n)
             xr, mr = surrogate.sample(theta, idx.size, counts[idx], seed=seed + rounds * REDRAW_SEED_STRIDE,
                                       nsteps=nsteps, solver=solver, candidate_names=list(PARAMETERS),
                                       batch=batch, sort_by_length=sort_by_length, pad_to=mask.shape[1],

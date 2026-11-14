@@ -71,6 +71,49 @@ def test_redraw_keeps_p_of_n_and_dropping_does_not(fake):
     assert g.sum() == n and a.sum() == r0["selected"]
 
 
+class _FakeSurrogateRejectsZero(_FakeSurrogate):
+    """Same contract as the real FlowSurrogate.sample: refuses num_particles containing 0
+    (test_flow_sample_with_explicit_counts asserts this is the real surrogate's behavior)."""
+
+    def sample(self, theta, n, num_particles=None, seed=0, pad_to=None, **kw):
+        if num_particles is not None and np.asarray(num_particles).min(initial=1) < 1:
+            raise ValueError("num_particles needs n positive counts")
+        return super().sample(theta, n, num_particles, seed=seed, pad_to=pad_to, **kw)
+
+
+def _fake_select_min1(x, sel, mask):
+    """Like _fake_select, but also enforces a real min_constituents>=1 floor: a 0-constituent
+    cloud always fails, regardless of the acceptance curve's value there."""
+    n = mask.sum(1)
+    ok = (n >= 1) & (x[:, 0, 0] < _accept(n))
+    return ok, np.where(ok, 0, 6), None
+
+
+def test_redraw_skips_zero_count_clouds_instead_of_crashing(monkeypatch):
+    """A cloud drawn with 0 constituents is correctly rejected by selection (min_constituents
+    >= 1) and can never pass "redrawn at the same N" -- the redraw loop must not hand a 0
+    into surrogate.sample (which rightly refuses it), and the cloud should just count as
+    unfilled, same as one that exhausts max_rounds."""
+    from omnilearned.sbi.toy import sample_select
+    from omnilearned.sbi.toy.sample_select import sample_and_select
+
+    monkeypatch.setattr(sample_select, "select_clouds", _fake_select_min1)
+    pn = np.exp(-0.5 * ((np.arange(81) - 35) / 10.0) ** 2)
+    pn[0] = pn.max() * 0.02  # a real, nonzero chance of drawing N=0
+    fake = _FakeSurrogateRejectsZero(pn)
+
+    n = 20000
+    _, m, rep = sample_and_select(fake, (7.5, 0.3, 0.95), n, None, seed=3, redraw=True, max_rounds=1000)
+    drawn = fake.sample(None, n, None, seed=3)[1].sum(1)
+    n_zero = int((drawn == 0).sum())
+    assert n_zero > 0  # the setup actually exercises the N=0 path
+    # every N=0 cloud is unfixable by construction (_fake_select_min1 always fails N=0) --
+    # so they are exactly the permanently-unfilled set, nothing more
+    assert rep["redraw"]["unfilled"] == n_zero
+    assert len(m) == n - n_zero
+    assert np.all(m.sum(1) > 0)  # no 0-constituent cloud ever made it into the selected output
+
+
 def test_logit_fit_recovers_known_acceptance():
     from omnilearned.sbi.toy.selection import _basis, fit_logit_in_n
 
