@@ -125,20 +125,27 @@ approved to implement and run all three:
       this sample size.
   (3) targeted high-T_ref generation campaign (40 new points, T_ref in [0.61, 0.89],
       point_id 512-551) -- generation and merge complete, `merged_hightref/` holds all 552
-      points, 12,014,987 jets. Retrained combined with (2)'s stratified weighting
-      (checkpoint `v3_set_d256_L6_400k_s0_hightref_stratified`) and validated at full
-      power (all 128 fidelity points, matching the production campaign's own settings) --
-      see FINDINGS "Mitigation (2)+(3) full 128-point P4 gate re-check". **Mixed, net
-      negative: 30/128 FAIL vs. the original 19/128.** Not uniform, though: 3 points at the
-      highest T_ref (0.75-0.89) flip FAIL->PASS, exactly the targeted `width`/
-      `outer_fraction` halo-deficit symptom fixed at the points mitigation (3) was built
-      for. But 14 different points newly fail, every one flagged by `n_constituents` (not
-      `width`/`outer_fraction`) -- most likely a side effect of (2)'s stratified reweighting
-      shifting the learned multiplicity calibration more broadly than intended, not a
-      reappearance of the halo problem. **This checkpoint is not an improvement over
-      production as it stands.** Next, not yet done: retrain on `merged_hightref/` WITHOUT
-      stratified weighting (`--weight-mode loss`) to isolate whether (3)'s extra data alone
-      (without (2)'s reweighting) fixes the target without the new n_constituents cost.
+      points, 12,014,987 jets. Retrained two ways and validated at full power (all 128
+      fidelity points, matching the production campaign's own settings) -- see FINDINGS
+      "Mitigation (2)+(3) full 128-point P4 gate re-check" and "Isolation retrain result":
+        - combined with (2)'s stratified weighting (`v3_set_d256_L6_400k_s0_hightref_stratified`):
+          30/128 FAIL.
+        - (3) alone, no reweighting, production's own `--weight-mode loss`
+          (`v3_set_d256_L6_400k_s0_hightref`): **31/128 FAIL -- WORSE**, refuting the
+          hypothesis that (2)'s reweighting caused the regression.
+      Both are net regressions vs. production's 19/128, **neither is an improvement as it
+      stands**, but both genuinely fix the targeted `width`/`outer_fraction` halo-deficit
+      symptom at the highest-T_ref points (3-4 points flip FAIL->PASS in each, exactly the
+      points mitigation (3) was built for) while introducing a broader `n_constituents`-driven
+      regression elsewhere (14-16 newly-failing points, T_ref spanning almost the whole box,
+      not just the target band) -- present with or without stratified reweighting, so it's a
+      side effect of adding the 40 points to training at all, not of the reweighting scheme.
+      Not yet understood: why adding training points changes the model's calibration broadly
+      rather than just locally; see FINDINGS for candidate explanations not yet investigated
+      (capacity/generalization trade-off; `merge_v3`'s per-point weight renormalization
+      changing every existing point's relative training influence, not just the new ones').
+      Not yet decided: pursue further (e.g. a non-equal-weight retrain) or accept the
+      beyond-R=0.4 halo deficit as the known limitation it was before mitigation (3) started.
 
 DONE (2026-11-08, ahead of P7, since trap 24 flagged it): closure.py's jewel_ensembles now
 takes a `config` param and dispatches via shards_for_config, same as direct_by_point already

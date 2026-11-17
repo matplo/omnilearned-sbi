@@ -1134,3 +1134,52 @@ script used each point JSON's own `verdict.fail` field, computed by `gate.py run
 alpha/S=3.91e-04 this whole campaign (and the original `collect.py`, which explicitly flagged
 this exact trap) uses everywhere else. Recomputing `fail` from `p_family < alpha_s` directly
 fixed it; the underlying means/standard errors were unaffected.
+
+## Isolation retrain result: mitigation (3) alone is not the fix -- it's (also) the cause (2026-11-17)
+
+Retrained on `merged_hightref/` with `--weight-mode loss` (production's own setting, no
+stratified reweighting) to isolate mitigation (3)'s extra high-T_ref data from mitigation
+(2)'s reweighting. Checkpoint `v3_set_d256_L6_400k_s0_hightref`, sha `cb2377b4fd2c`, best
+step 386,000, val(ema) 0.88629 -- essentially identical to every other run's val loss, as
+expected (not sensitive to this effect). Full 128-point gate re-check (same settings
+throughout: `n_generate=22000`, `n_perm=200`, `--redraw`), three resubmissions needed
+(walltime-killed at 92/128, then 120/128, then 125/128 -- each resumed cleanly, no lost
+work, final 3 points were simply slow).
+
+**Result: 31/128 FAIL -- WORSE than the combined mitigation (2)+(3) checkpoint's 30/128,
+and worse than production's 19/128.**
+
+**This retracts the hypothesis in the entry above** ("most likely a side effect of
+mitigation (2)'s stratified reweighting"). The n_constituents-driven regression is not
+caused by stratified reweighting -- it is present, if anything slightly *more* present,
+when mitigation (3)'s extra high-T_ref training data is added WITHOUT any reweighting at
+all. Three-way point-by-point comparison (production vs. mit(2)+(3) vs. mit(3)-alone):
+
+- mit(3)-alone: 16 points newly fail vs. production, flagged almost entirely by
+  `n_constituents` (16/16), plus `ptd`/`soft8_fraction`/`lead_fraction` -- same signature as
+  mit(2)+(3)'s newly-failing set. Their T_ref spans nearly the *entire* design range (0.15
+  to 0.86), not just the high-T_ref target band.
+- mit(3)-alone: 4 points fixed vs. production (vs. 3 for mit(2)+(3)), all at the highest
+  T_ref (0.75-0.86) -- the targeted width/outer_fraction halo-deficit fix happens whether or
+  not stratified weighting is used, and slightly more so without it.
+- mit(2)+(3) vs. mit(3)-alone directly: 26 points fail under both, 4 fail only under
+  mit(2)+(3), 5 fail only under mit(3)-alone -- stratified reweighting has a real but mixed,
+  roughly washed-out effect on top of the data addition; it is not the main driver of either
+  the fix or the regression.
+
+**Updated understanding**: simply adding more real high-T_ref training examples (mitigation
+3) is enough, by itself, both to fix the targeted beyond-R=0.4 halo-deficit symptom at the
+most extreme points AND to perturb the model's overall multiplicity (n_constituents)
+calibration broadly across the box. This is not obviously a training-weighting artifact;
+it looks more like a genuine capacity/generalization trade-off from this particular
+training-set change (552 points instead of 512, with the new 40 concentrated in a T_ref
+corner but otherwise ordinary-looking individual points) -- changing *what* the model is
+trained on shifted its calibration everywhere, not just near the new data. Not yet
+investigated: whether this is a capacity limit (same architecture, more/different data),
+a side effect of the per-point weight renormalization (`merge_v3` rescales weight so
+sum(weight)=n_jets *per point*, so adding 40 points changes every point's relative
+influence on the loss slightly, not just the new ones' own), or something else. Next step,
+not yet decided: whether to pursue this further (e.g. retrain with the new points added but
+reweighted down to their "natural" share rather than equal per-point weight) or treat the
+beyond-R=0.4 halo deficit as the known, accepted limitation it was before mitigation (3)
+started (per the original P4 gate's own accepted-known-issue decision).
