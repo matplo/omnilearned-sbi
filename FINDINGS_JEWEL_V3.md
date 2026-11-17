@@ -1098,3 +1098,39 @@ specifically (not just the flow) was affected, since `joint_strata`'s stratifica
 (n_constituents, T_ref) jointly and could plausibly be reweighting the multiplicity model's
 own training signal more than intended. **This checkpoint should not be treated as an
 improvement over production as it stands.**
+
+## P4 gate: how badly, exactly, and the near-neighbor instability (2026-11-16)
+
+Follow-up to the full 128-point gate re-check above: the family-wise p-value/relevance-score
+table doesn't show the actual size of the predicted-vs-true mismatch, and doesn't explain a
+genuinely odd pattern -- several theta points right next to each other in the design land on
+opposite sides of FAIL/PASS. Investigated both with a new HTML section (reports repo,
+`reports/m3-surrogate-fidelity/2026-11-16T1653-0800_jewel-v3_hightref-stratified-gate-comparison/index.html`,
+"How badly, exactly?" section).
+
+**The near-neighbor pattern is real but mostly not alarming.** Nearest-neighbor distance
+over all 128 points (normalized box coordinates) has median 0.165; 44 pairs under the new
+checkpoint (27 under production) have opposite FAIL/PASS verdicts at distances 0.08-0.17 --
+the close end of the distribution but not pathologically so. For 3 representative pairs
+(recomputed directly from the published checkpoint/seed/settings via
+`gate.py run --points ... --save-samples`, not a cheaper approximation), the actual
+predicted-(surrogate)-vs-true-(direct) observable gaps are **small in absolute terms** for
+2 of the 3 pairs -- a few percent of the observable's own scale. The FAIL/PASS line falls
+wherever the error bars happen to just barely separate or overlap at `n_generate=22000`'s
+very high statistical precision, not because the two neighboring points are physically very
+different. This is the direct answer to "why do neighbors disagree": tiny, real,
+well-resolved shifts near the edge of significance, not large qualitative jumps.
+
+**One pair is a genuine exception, not borderline at all**: point 52 fails by a decisive
+margin on nearly every one of the 7 gate observables, under BOTH checkpoints, while its
+neighbor (point 100, distance 0.124) passes cleanly on all 7. This is a real, large, locally
+consistent mismatch at that specific theta, not a statistical coin-flip -- worth flagging as
+a candidate for its own investigation if the surrogate's local behavior near that corner of
+the box ever becomes a priority (not pursued further in this entry).
+
+Real bug caught and fixed while building the recompute: the first version of the analysis
+script used each point JSON's own `verdict.fail` field, computed by `gate.py run()` at an
+**uncorrected** alpha=0.05 (its per-point default) -- not the Bonferroni-corrected
+alpha/S=3.91e-04 this whole campaign (and the original `collect.py`, which explicitly flagged
+this exact trap) uses everywhere else. Recomputing `fail` from `p_family < alpha_s` directly
+fixed it; the underlying means/standard errors were unaffected.
