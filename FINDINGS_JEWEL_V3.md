@@ -1214,3 +1214,38 @@ test + per-observable relevance) cannot by itself distinguish "the surrogate's t
 thin" from "the surrogate is locally wrong everywhere" -- both trip the same flag. Pulling
 the actual distribution (cheap: one `gate.py run --points N --save-samples` call) is the
 right next step before concluding anything about a specific FAIL point's severity or cause.
+
+## Correction to the bulk-vs-tail entry above: the tail punches above its weight, but isn't the whole story (2026-11-17)
+
+Follow-up question challenged the "pure tail effect" claim above (the log-scale histograms
+*look* like all the mismatch sits 2+ orders of magnitude below the peak). Decomposed each
+mean-shift quantitatively by percentile of the true distribution instead of trusting the
+plot by eye: for each point/observable, compute the mean-shift restricted to just the
+bottom 90% of jets (where the histograms visually overlap) and compare to the total shift.
+
+**Honest result: a mix, not purely tail-driven for most of these.**
+
+| point | observable | share of total mean-shift already present in the bottom 90% of jets |
+|---|---|---|
+| 88 | n_constituents | 66% |
+| 107 | n_constituents | 22% |
+| 107 | ptd | 61% |
+| 52 | n_constituents | 43% |
+| 52 | lead_fraction | 89% |
+| 52 | ptd | 91% |
+
+The rarest jets are genuinely disproportionate (point 88's rarest 0.1%, N>31, alone account
+for 10% of its shift despite being 1-in-1000 jets) -- the earlier intuition that the tail
+matters more than its probability mass isn't wrong. But calling point 88 a "pure tail
+effect" overstated it: 66% of its shift is already present in the 90% of jets where the
+histograms visually overlap -- a small, real, per-bin difference too subtle to see on a log
+axis, not confined to the tail at all. Point 107 is the one case that really is
+tail-dominated (78% from the top 10%). Point 52's `lead_fraction` and `ptd` are
+overwhelmingly bulk-driven (89-91%), confirming it as the real, broad local miscalibration
+described above, not a tail artifact in any sense.
+
+**Lesson for next time**: a log-scale overlay plot is good for spotting *where* two
+distributions visibly differ, but is actively misleading for judging *how much* of a
+mean-shift comes from where -- a uniform few-percent shift across the bulk is invisible by
+eye on a log axis but can dominate the total. Decompose quantitatively (as above) before
+describing a mismatch's character, not just by looking at the plot.
