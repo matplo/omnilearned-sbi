@@ -53,14 +53,32 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               points toward the trained velocity field's own smoothness (likely near the
               ODE's t=0/1 endpoints) as the real constraint, not a code bug -- see FINDINGS
               "a full line-by-line audit... rk4-512 confirms rk4 itself is nowhere near
-              converged". Still blocked on a user decision: investigate the vector field's
-              smoothness directly (more promising than further brute-force step increases,
-              which cost ~2h GPU per doubling already with no sign of plateauing), or accept
-              something on other grounds. `scripts/p5_trajectory_diagnostic.py`
-              reproduces the per-jet version of this on any jet/theta. Only after the
-              per-jet signal is confirmed above the discretization floor (and
+              converged".
+              **Pinned down (2026-11-18, FINDINGS "P5 resumed"): confirmed on 2 independent
+              real jets. The velocity field's divergence genuinely spikes at t=0 specifically
+              (~20-90x the bulk value, decaying to bulk level within the first few % of the
+              trajectory) -- NOT t=1, which is perfectly smooth throughout (solver ratio
+              std=0.000 in the back half of every trajectory tried). Ruled out an autograd
+              bug via `omnilearned.sbi.smoothness.finite_difference_divergence` (an existing,
+              previously-unused module): relative agreement between autograd and finite
+              differences is excellent everywhere, including right at the spike -- the field
+              itself is genuinely large there, not miscomputed. This explains both the stalled
+              uniform-nsteps convergence (a boundary-layer singularity is exactly what uniform
+              step refinement under-resolves worst) and rk4's own non-convergence at
+              nsteps=512 (a fixed-order method's convergence rate assumes smoothness that
+              doesn't hold at t=0).**
+              **Still a decision point, now with a concrete mechanism, not just a code bug
+              ruled out: how to fix it.** Candidates, none chosen or implemented yet (see
+              FINDINGS for detail): (a) a graded/non-uniform time grid concentrating steps
+              near t=0; (b) an adaptive-step solver with local error control instead of fixed
+              `midpoint`/`rk4`; (c) semi-analytic handling of the first few steps if the base
+              distribution's own score has a closed form near t=0 (not yet checked what the
+              training objective's conditional path actually is there); (d) accept an
+              empirically-"good enough" nsteps/solver choice for the fit's actual precision
+              needs rather than chasing full convergence. `scripts/p5_trajectory_diagnostic.py`
+              reproduces the per-jet check on any jet/theta; only after a fix is chosen and
               `numerics.py`'s `TEST`/`REFERENCE` or `LikelihoodOptions` defaults are updated
-              accordingly) should P6 proceed. ptbins.py (the P4 followup, 20-500 GeV window) was
+              accordingly should P6 proceed. ptbins.py (the P4 followup, 20-500 GeV window) was
               deprioritized in favor of P5 per the user's direction and was not run this
               session; its fix is in FINDINGS/test_ptbins.py but still uncommitted as of the
               last P4 snapshot (c9ed27f) -- revisit if/when useful again, not urgent.

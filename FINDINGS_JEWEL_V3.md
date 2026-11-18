@@ -1289,3 +1289,64 @@ where that investigation left off: the trained velocity field's own smoothness (
 the ODE's t=0/1 endpoints) is the leading candidate for the real constraint, not a code bug
 (ruled out by the full line-by-line audit) and not pure under-resolution (ruled out by
 rk4-512 itself failing to converge as a true 4th-order method should).
+
+## P5 resumed: the velocity field's divergence genuinely spikes at t=0, not t=1 (2026-11-18)
+
+Picked up the standing P5 decision point ("investigate the vector field's smoothness
+directly"). Used `scripts/p5_trajectory_diagnostic.py` (exact, non-stochastic divergence,
+float64) on 2 real jets from `p5_obs.h5` at `primary_test` theta=(4.5, 0.45, 0.65), logging
+every per-step divergence value (not just the final accumulated sum) -- checkpoint
+`v3_set_d256_L6_400k_s0` (sha `7ce2e63d5504`, the same one all prior P5 numbers used).
+
+**Jet 904 (N=5 constituents), nsteps=256:** midpoint's per-step divergence `d2` at t=0
+exactly is **3101**, vs. a bulk value (middle of the trajectory) of ~35 -- a ~90x spike that
+decays to bulk level within the first ~9 steps (~3.5% of the trajectory). The
+midpoint/rk4 ratio tracks this exactly: std=0.163 in the first 5% of steps, vs. std=0.004 in
+the bulk and std=0.000 (!) in the last 5% of steps, near t=1. t=1 shows essentially perfect
+solver agreement throughout (e.g. d2=19.9603 vs. rk4-avg=19.9594 at the second-to-last step).
+
+**Jet 26 (N=25 constituents), nsteps=64:** identical pattern. d2 at t=0 is **2888.8** vs. a
+bulk value of ~100-143 (~20-29x spike); the midpoint/rk4 ratio at that very first step is
+3.59, collapsing to 1.00-1.06 by the second step and staying at 1.000 throughout the back
+half of the trajectory (t>0.9).
+
+**Ruled out: this is not an autograd bug.** `omnilearned.sbi.smoothness.finite_difference_divergence`
+(an existing, previously-unused diagnostic module -- `git log` shows it predates this
+session, from the "Route A" package work) compares the exact autograd divergence against a
+central finite difference at a range of t. Relative agreement is excellent everywhere,
+including right next to the singularity: max_rel_diff = 0.0038 at t=1e-4, 4.6e-5 at t=1e-3,
+shrinking to ~1e-10 by the bulk. The large *absolute* difference very close to t=0 (64.8 at
+t=1e-4) is exactly proportional to how large the divergence value itself is there -- i.e.
+autograd is computing the (large, real) value correctly, not malfunctioning.
+
+**Conclusion: a genuine near-singularity in the trained velocity field's divergence sits
+right at the t=0 (base-distribution) boundary, not t=1 (data) and not spread through the
+bulk.** This explains why uniform step refinement (same spacing at every t) converges so
+slowly and inconsistently between solvers: both midpoint and rk4 assume local smoothness of
+the integrand within each step, and a boundary-layer singularity concentrated in roughly the
+first few percent of the trajectory is exactly what a *uniform* grid under-resolves worst,
+regardless of how many total steps are used elsewhere. This also explains two things from
+earlier in the P5 campaign that were otherwise puzzling: (a) doubling `nsteps` uniformly
+(64->128->256->512) shrank but never closed the midpoint/rk4 gap, costing ~2h GPU per
+doubling with "no sign of plateauing" (RESTART trap/NEXT ACTION) -- uniform refinement
+converges slowly against a boundary singularity; (b) rk4 itself was found not converged at
+nsteps=512 vs. 256 (~40% change, far short of the ~16x a true 4th-order method should show)
+-- a fixed-order method's formal convergence rate assumes smoothness that doesn't hold near
+t=0.
+
+**Not yet decided, left for the user**: how to fix it. Candidates, not implemented or chosen
+here:
+  (a) a graded/non-uniform time grid (e.g. a reparameterization concentrating many more,
+      smaller steps near t=0, coarser steps in the smooth bulk) -- directly targets the
+      boundary layer without the cost of uniformly refining the whole trajectory;
+  (b) an adaptive-step solver (e.g. embedded RK with local error control) instead of the
+      current fixed-step `midpoint`/`rk4` -- would concentrate effort near t=0 automatically;
+  (c) semi-analytic handling of the first few steps near t=0, if the base distribution's own
+      score/density has a closed form there (would need checking what the flow-matching
+      training objective's conditional path actually is near t=0 -- not yet investigated);
+  (d) accept the known cost and pick a nsteps/solver combination empirically validated to be
+      "good enough" for the fit's actual precision needs, rather than chasing full numerical
+      convergence.
+Either way, (a)/(b) seem more promising than further brute-force uniform step increases,
+which is exactly what the standing NEXT ACTION already said before this entry pinned down
+*why*.
