@@ -1183,3 +1183,34 @@ not yet decided: whether to pursue this further (e.g. retrain with the new point
 reweighted down to their "natural" share rather than equal per-point weight) or treat the
 beyond-R=0.4 halo deficit as the known, accepted limitation it was before mitigation (3)
 started (per the original P4 gate's own accepted-known-issue decision).
+
+## P4 gate: bulk shift vs. tail effect, point-by-point (2026-11-17)
+
+Follow-up: what does the "n_constituents"-driven FAIL actually look like at the
+distribution level, not just mean+-SE? Pulled full (weighted) per-jet distributions --
+true (direct) vs. predicted (surrogate) -- for 3 representative points under the isolation
+checkpoint (`v3_set_d256_L6_400k_s0_hightref`), using `gate.py run --points ... --save-samples`
+at the same settings as the published gate (new HTML section, reports repo, same report
+directory as the comparison and near-neighbor addenda above, "What does FAIL actually mean?").
+
+**The mechanism differs by point, and both exist:**
+- **Point 88** (newly fails, T_ref=0.146, outside the target band): **pure tail effect**.
+  The bulk (N<35, >99.99% of the probability mass) overlaps true and predicted almost
+  exactly. The mean shift that trips the relevance test (11.5 vs 11.8) comes entirely from
+  the surrogate under-producing a real, rare high-multiplicity tail (N>45, true probability
+  down to ~1e-7/jet) that it should reproduce but mostly doesn't.
+- **Point 107** (fixed by mitigation 3, T_ref=0.824, inside the target band): good agreement
+  through the bulk and most of the tail; the only visible difference is noisy over/under
+  production in the sparse extreme tail (N>90, a handful of jets on each side, no consistent
+  direction) -- tail statistics noise, not a systematic effect.
+- **Point 52** (fails under every checkpoint tried so far, T_ref=0.198): the opposite
+  picture. All 4 flagged observables (`lead_fraction`, `n_constituents`, `ptd`,
+  `soft8_fraction`) show a genuine, consistent shift across the **whole bulk** distribution,
+  not a thin tail -- a real, broad local miscalibration of the surrogate at this theta,
+  present before mitigation (3) and unrelated to it.
+
+**Practical takeaway for reading any future gate FAIL**: the family-wise test (permutation
+test + per-observable relevance) cannot by itself distinguish "the surrogate's tail is a bit
+thin" from "the surrogate is locally wrong everywhere" -- both trip the same flag. Pulling
+the actual distribution (cheap: one `gate.py run --points N --save-samples` call) is the
+right next step before concluding anything about a specific FAIL point's severity or cause.
