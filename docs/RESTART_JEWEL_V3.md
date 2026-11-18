@@ -72,7 +72,10 @@ DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (pe
               all 552 points (the original 512 + 40 new high-T_ref points, point_id 512-551,
               mitigation (3) below); merged/ (512 points, production) is untouched.
 CHECKPOINTS:  $JEST_NLE_ROOT/runs/jewel_v3/p3_train/{v3_set_d256_L6_400k_s0,_s1,_s2,
-              v3_set_d256_L6_200k_ctl}/checkpoint.pt (+ run.json, resume.pt)
+              v3_set_d256_L6_200k_ctl,v3_set_d256_L6_400k_s0_hightref_stratified,
+              v3_set_d256_L6_400k_s0_hightref}/checkpoint.pt (+ run.json, resume.pt).
+              **Working checkpoint as of 2026-11-18: v3_set_d256_L6_400k_s0_hightref_stratified**
+              (sha 3ea5328a5c86) -- adopted over production s0, see P4 MITIGATIONS below.
 GATE RESULTS: $JEST_NLE_ROOT/runs/jewel_v3/p4_gate/s0/point_NNNNN.json (all 128, checkpoint
               s0); $JEST_NLE_ROOT/runs/jewel_v3/p4_ptbins/ (not produced -- deprioritized)
 NUMERICS:     $JEST_NLE_ROOT/runs/jewel_v3/p5_numerics/ (p5_obs.h5 -- 1000 real jets at the
@@ -140,12 +143,19 @@ approved to implement and run all three:
       regression elsewhere (14-16 newly-failing points, T_ref spanning almost the whole box,
       not just the target band) -- present with or without stratified reweighting, so it's a
       side effect of adding the 40 points to training at all, not of the reweighting scheme.
-      Not yet understood: why adding training points changes the model's calibration broadly
-      rather than just locally; see FINDINGS for candidate explanations not yet investigated
-      (capacity/generalization trade-off; `merge_v3`'s per-point weight renormalization
-      changing every existing point's relative training influence, not just the new ones').
-      Not yet decided: pursue further (e.g. a non-equal-weight retrain) or accept the
-      beyond-R=0.4 halo deficit as the known limitation it was before mitigation (3) started.
+      **CLOSED (2026-11-18), user decision**: pulled the actual quantitative shifts behind
+      every FAIL (true vs. predicted mean, per observable -- see FINDINGS "P4 gate: how
+      badly, exactly" and the bulk-vs-tail entries); every one was 2-7% of the true mean,
+      nothing off by 2x or more. User confirmed shifts at this magnitude are an acceptable
+      level of discrepancy -- the 19->30/31 FAIL increase is mostly the gate's statistical
+      power (tens of thousands of jets/point) surfacing small, tolerable shifts, not a
+      meaningful regression. **Adopted `v3_set_d256_L6_400k_s0_hightref_stratified` (sha
+      `3ea5328a5c86`) as the working checkpoint going forward**, replacing production
+      `v3_set_d256_L6_400k_s0` for P6/P7 -- it fixes a real problem (the targeted halo
+      deficit) with no cost that matters at this tolerance. Point 52 (b=3.48, T_ref=0.198,
+      tau_init=0.636) stays flagged separately: a real, broad bulk-distribution mismatch on
+      4 observables present in every checkpoint including production, predating mitigation
+      (3) -- not closed by this decision, not investigated further.
 
 DONE (2026-11-08, ahead of P7, since trap 24 flagged it): closure.py's jewel_ensembles now
 takes a `config` param and dispatches via shards_for_config, same as direct_by_point already

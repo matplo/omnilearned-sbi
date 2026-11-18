@@ -1249,3 +1249,43 @@ distributions visibly differ, but is actively misleading for judging *how much* 
 mean-shift comes from where -- a uniform few-percent shift across the bulk is invisible by
 eye on a log axis but can dominate the total. Decompose quantitatively (as above) before
 describing a mismatch's character, not just by looking at the plot.
+
+## Mitigation (3) campaign closed: shifts accepted, adopting the combined checkpoint (2026-11-18)
+
+User reviewed the actual quantitative shifts behind every FAIL in the isolation/combined
+checkpoint comparisons above (see "P4 gate: how badly, exactly" and the bulk-vs-tail
+entries) and confirmed: **few-percent-level shifts in the mean of a jet observable are an
+acceptable level of discrepancy.** Every shift examined was 2-7% of the true mean (e.g.
+point 88's n_constituents +2.7%, point 107's +7.4%, point 52's soft8_fraction -7.4%) --
+nothing was off by a factor of 2 or more. The family-wise test's enormous statistical power
+(tens of thousands of jets per point) means it can and does flag real differences at this
+magnitude as decisive FAILs; that sensitivity does not by itself make the magnitude
+practically significant.
+
+**This reframes the net verdict.** The 19->30/31 FAIL count increase from mitigations
+(2)/(3) is not evidence of a meaningful regression at this tolerance -- it is largely the
+gate's sensitivity surfacing small, acceptable shifts across more points. Mitigation (3)'s
+own target fix (the beyond-R=0.4 halo deficit's width/outer_fraction symptom at the highest
+T_ref points) remains a genuine, uncontested improvement at those points.
+
+**Decision: adopt `v3_set_d256_L6_400k_s0_hightref_stratified`** (mitigation (2)+(3)
+combined: 40 extra high-T_ref training points + stratified reweighting, sha
+`3ea5328a5c86`) as the working checkpoint going forward, in place of production
+`v3_set_d256_L6_400k_s0`. It fixes a real problem with no cost that matters at this
+tolerance.
+
+**Point 52 remains flagged separately, not closed by this decision.** Its mismatch (4
+observables, 2-7% shifts but consistent across the *entire* bulk distribution, not a tail
+artifact -- see the bulk-vs-tail decomposition) is present in every checkpoint tried,
+including production, and predates mitigation (3). Not investigated further in this entry;
+noted as a candidate for separate attention if the surrogate's local behavior near
+b=3.48, T_ref=0.198, tau_init=0.636 ever becomes a priority.
+
+**Next**: return to the standing P5 blocker (solver-precision discrepancy between
+`midpoint` and `rk4`, ~20-25x in Delta-log-L, which is a different kind of problem -- a
+large discrepancy, not a few percent -- and has been gating P6/P7 throughout this entire P4
+mitigation detour). See FINDINGS "P5 follow-up" / "a full line-by-line audit... rk4-512" for
+where that investigation left off: the trained velocity field's own smoothness (likely near
+the ODE's t=0/1 endpoints) is the leading candidate for the real constraint, not a code bug
+(ruled out by the full line-by-line audit) and not pure under-resolution (ruled out by
+rk4-512 itself failing to converge as a true 4th-order method should).
