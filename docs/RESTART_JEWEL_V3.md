@@ -67,13 +67,23 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               step refinement under-resolves worst) and rk4's own non-convergence at
               nsteps=512 (a fixed-order method's convergence rate assumes smoothness that
               doesn't hold at t=0).**
-              **Still a decision point, now with a concrete mechanism, not just a code bug
-              ruled out: how to fix it.** Candidates, none chosen or implemented yet (see
-              FINDINGS for detail): (a) a graded/non-uniform time grid concentrating steps
-              near t=0; (b) an adaptive-step solver with local error control instead of fixed
-              `midpoint`/`rk4`; (c) semi-analytic handling of the first few steps if the base
-              distribution's own score has a closed form near t=0 (not yet checked what the
-              training objective's conditional path actually is there); (d) accept an
+              **Candidate (c) -- "just truncate/approximate the first few steps" -- tested
+              and RULED OUT (2026-11-18, FINDINGS "just ignore the t=0 spike is ruled out,
+              not just untested"): measured the spike region's own pairwise Delta against
+              the real, full-trajectory Delta for the same 2 jets at the same 4
+              established theta pairs. Safe-looking for the N=5 jet (spike is 2-12% of the
+              full Delta) but for the N=25 jet the spike region's own Delta is LARGER than
+              the full answer and has the OPPOSITE SIGN from the bulk's -- the small
+              full-trajectory Delta there is a near-cancellation of two comparable,
+              opposing terms, not evidence neither matters. Truncating would give a
+              different (sometimes wrong-signed) number, not a cleaner one. Whether it's
+              safe is jet-dependent and already fails for a fairly simple jet (real jets go
+              up to ~100 constituents) -- not a general fix.**
+              Remaining candidates, none chosen or implemented yet (see FINDINGS for
+              detail): (a) a graded/non-uniform time grid concentrating steps near t=0; (b)
+              an adaptive-step solver with local error control instead of fixed
+              `midpoint`/`rk4` -- both actually resolve the region rather than discard it,
+              and are what the ruled-out truncation result points toward; (d) accept an
               empirically-"good enough" nsteps/solver choice for the fit's actual precision
               needs rather than chasing full convergence. `scripts/p5_trajectory_diagnostic.py`
               reproduces the per-jet check on any jet/theta; only after a fix is chosen and

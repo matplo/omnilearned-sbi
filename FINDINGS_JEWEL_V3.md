@@ -1350,3 +1350,50 @@ here:
 Either way, (a)/(b) seem more promising than further brute-force uniform step increases,
 which is exactly what the standing NEXT ACTION already said before this entry pinned down
 *why*.
+
+## P5 follow-up: "just ignore the t=0 spike" is ruled out, not just untested (2026-11-18)
+
+Direct test of the obvious cheap fix for the t=0 divergence spike found above: does that
+region's own contribution to the accumulated integral depend on theta, or is it a
+theta-independent offset safe to truncate/skip? Measured, for the same 2 jets (N=5, N=25)
+at `primary_test` theta0=(4.5, 0.45, 0.65) and the same 4 established nearby-theta pairs
+(+-2%-of-range single-axis steps in b/T_ref/tau_init, plus one diagonal step -- identical to
+the original formal P5 check), midpoint's accumulated divergence split into "spike" (first
+5% of steps, nsteps=64) vs. "bulk" (the rest), and compared each region's own pairwise Delta
+against the real, full-trajectory pairwise Delta a fit actually uses.
+
+**Result: no, this is not safe -- ruled out, not just unconfirmed.**
+
+For the simplest jet (N=5), the spike region's own Delta is a small fraction of the full
+Delta (2-12%) -- consistent with "safe to ignore" for this one jet. But for the N=25 jet,
+the picture inverts completely:
+
+```
+                      Delta_spike   Delta_bulk   Delta_full
+pair0 (b)               -0.0116      +0.0107      -0.0009
+pair1 (T_ref)           +0.0992      -0.0630      +0.0363
+pair2 (tau_init)        +0.0205      -0.0188      +0.0017
+pair3 (diagonal)        +0.1069      -0.0706      +0.0363
+```
+
+The spike region's own theta-sensitivity is **larger in magnitude than the whole
+trajectory's final answer**, with the **opposite sign** from the bulk region's own
+sensitivity. The small `Delta_full` values are not evidence that neither region's
+theta-dependence matters -- they are a near-cancellation between two comparably-sized,
+oppositely-signed terms. Truncating the spike region would not produce a cleaner version of
+the real signal; it would produce a different number, in several cases with the wrong sign.
+
+This also sharpens the original P5 follow-up's "noise floor" framing (2026-11-05): the
+pairwise Delta a fit uses was already known to be tiny and sign-flipping across jets at
+nsteps=64; this pins down that a meaningful part of that instability is specifically the
+badly-resolved spike region's contribution fighting the bulk's, not generic diffuse
+discretization error.
+
+**Conclusion: truncating or approximating the t=0 region is not a viable fix in general --
+whether it would be safe is jet-dependent, and it already fails for a jet with only 25
+constituents** (real jets range up to ~100, so this is a conservative test case, not an edge
+case). This rules out candidate (c) from the entry above ("accept/approximate the first few
+steps") as a general solution. The remaining candidates -- a graded/non-uniform time grid
+concentrating steps near t=0, or an adaptive-step solver with local error control -- actually
+resolve the region rather than discard it, and are what this result points toward. Neither
+implemented yet; still the open decision.
