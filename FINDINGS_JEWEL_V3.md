@@ -1459,3 +1459,29 @@ for inference, at the ensemble scale a real fit would use.
 
 Script: `scripts/p5_ensemble_spike_sensitivity.py` (chunked by multiplicity; batching the
 full global-max-width batch in one pass is NOT safe -- see the stall above).
+
+## Surrogate fidelity vs. centrality: no real trend, T_ref confounding (2026-11-19)
+
+Follow-up question: how does surrogate fidelity vary with centrality (impact parameter
+`b`)? Read directly from the production checkpoint's existing 128-point P4 gate
+(`v3_set_d256_L6_400k_s0`, no new sampling), recomputing `fail` at the Bonferroni-corrected
+threshold (`p_family < 0.05/128` AND >=1 relevant observable, as used throughout this
+analysis).
+
+**Marginally, it looks real:** central events (b in [0, 2.75] fm) fail 18.8% of the time vs.
+6.2% for the most peripheral quartile (b in [8.21, 10.94] fm); mean max relevance drops
+monotonically from 2.29 to 1.69 across the four b quartiles.
+
+**But it's T_ref confounding, not centrality.** `b` and `T_ref` are sampled independently by
+design (`corr(b, T_ref) = -0.000` over the 128 points), so this was checked by restricting to
+the safe mid-range T_ref band [0.25, 0.75] (n=80, excludes the already-known T_ref-edge
+instability from mitigation (3)'s root-cause analysis). Within that band, fail rate is flat
+at ~3.7% across all three b terciles, and the partial correlation of `b` with fail/relevance
+controlling for T_ref is ~0 (+0.036 / -0.129), vs. -0.40 for T_ref-edge-distance alone. This
+particular 128-point design happens to have more extreme-T_ref points at low `b` by chance,
+which is what produced the marginal trend.
+
+**Conclusion: there is no separate centrality-driven fidelity problem.** All of the real
+fidelity degradation already identified lives at the T_ref extremes (near 0.1 and 0.9 GeV);
+fidelity vs. centrality alone is flat once that confound is removed. Full writeup, figure and
+reproducible script: `omni-sbi-nle-jet-dev-reports/reports/m3-surrogate-fidelity/2026-11-19T1007-0800_jewel-v3_fidelity-vs-centrality/`.
