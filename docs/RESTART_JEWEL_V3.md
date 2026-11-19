@@ -79,14 +79,33 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               different (sometimes wrong-signed) number, not a cleaner one. Whether it's
               safe is jet-dependent and already fails for a fairly simple jet (real jets go
               up to ~100 constituents) -- not a general fix.**
+              **Severity confirmed at ensemble scale, not just per-jet (2026-11-19,
+              FINDINGS "the t=0 spike is an ensemble-level bias, not jet-to-jet noise"):**
+              the n=2 test above only proved truncation isn't *always* safe; it couldn't say
+              how common/severe this is, or whether it survives summing over an inference
+              ensemble (the question that actually matters) rather than cancelling as
+              jet-to-jet noise. Reran the same spike/bulk/full decomposition on **all 1000
+              jets** in `p5_obs.h5` (multiplicity-sorted chunking of 50 -- batching the
+              global max-width in one pass blew up ~50x and stalled; the model's per-jet
+              cost scales as `batch x width^2`). Result: the spike's mean contribution
+              across jets is non-zero at 4.5-19 sigma for all 4 theta directions, and the
+              ensemble ratio Delta_spike_sum/Delta_full_sum is flat from N~200 to N=1000
+              (not shrinking toward 0) at **-0.91 (b), +0.67 (T_ref), +1.65 (tau_init),
+              +0.57 (diagonal)**. For `b` the spike nearly cancels the real bulk signal
+              (measured ensemble sensitivity is ~half the bulk-only value); for `tau_init`
+              the spike *exceeds* the bulk and sets the sign of the net result. **This is a
+              systematic, dataset-wide corruption of the ensemble log-likelihood gradient in
+              theta, not a rare per-jet edge case** -- raises the priority of actually fixing
+              it.
               Remaining candidates, none chosen or implemented yet (see FINDINGS for
               detail): (a) a graded/non-uniform time grid concentrating steps near t=0; (b)
               an adaptive-step solver with local error control instead of fixed
-              `midpoint`/`rk4` -- both actually resolve the region rather than discard it,
-              and are what the ruled-out truncation result points toward; (d) accept an
-              empirically-"good enough" nsteps/solver choice for the fit's actual precision
-              needs rather than chasing full convergence. `scripts/p5_trajectory_diagnostic.py`
-              reproduces the per-jet check on any jet/theta; only after a fix is chosen and
+              `midpoint`/`rk4` -- both actually resolve the region rather than discard it;
+              (d) accept an empirically-"good enough" nsteps/solver choice for the fit's
+              actual precision needs rather than chasing full convergence -- now a weaker
+              option given the confirmed severity above. `scripts/p5_trajectory_diagnostic.py`
+              reproduces the per-jet check on any jet/theta; `scripts/p5_ensemble_spike_sensitivity.py`
+              reproduces the ensemble-scale check. Only after a fix is chosen and
               `numerics.py`'s `TEST`/`REFERENCE` or `LikelihoodOptions` defaults are updated
               accordingly should P6 proceed. ptbins.py (the P4 followup, 20-500 GeV window) was
               deprioritized in favor of P5 per the user's direction and was not run this

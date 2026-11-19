@@ -1397,3 +1397,65 @@ steps") as a general solution. The remaining candidates -- a graded/non-uniform 
 concentrating steps near t=0, or an adaptive-step solver with local error control -- actually
 resolve the region rather than discard it, and are what this result points toward. Neither
 implemented yet; still the open decision.
+
+**Caveat on this result, flagged directly by a follow-up question ("you are flagging an
+issue based on TWO jets?"):** the n=2 test above is valid evidence for the narrow claim it
+was designed for -- a single counterexample is enough to disprove "truncating the spike is
+*always* safe," the same way one black swan disproves "all swans are white." It says
+nothing about how common or severe the effect is across the dataset, or (the question that
+actually matters for inference) whether it survives summing over the ensemble of jets a fit
+would actually use rather than being jet-to-jet noise that cancels under that sum. See the
+next entry for the properly-powered version of that question.
+
+## P5 follow-up: the t=0 spike is an ensemble-level bias, not jet-to-jet noise -- confirmed at n=1000, not n=2 (2026-11-19)
+
+Direct test of the question above: does the spike region's contribution to the accumulated
+divergence have a non-zero *mean* across jets (a real bias that survives summing over an
+inference ensemble), or is it zero-mean jet-to-jet noise that cancels under that sum? Ran
+the same spike (first 5% of steps, nsteps=64) / bulk / full midpoint-divergence
+decomposition, at `primary_test` theta0 and the same 4 established nearby-theta pairs, on
+**all 1000 jets** in `p5_obs.h5` (multiplicity 5-93) -- not 2 cherry-picked jets.
+
+First attempt stalled: batching all 1000 jets into one pass (padding every jet, including
+N=5 ones, to the batch's global max multiplicity of 93) blew the cost up by ~50x relative
+to a 50-jet calibration run, because the model's per-jet attention cost scales as
+`batch x width^2` -- 90 minutes with zero output before being killed. Fixed by processing
+jets in multiplicity-sorted chunks of 50 (each chunk padded only to its own max width, not
+the global one); full run completed in ~77 minutes.
+
+**Result: the spike's mean contribution across jets is non-zero at very high significance,
+for all 4 theta directions, and does not shrink as the ensemble grows -- it is a real,
+non-cancelling bias, not noise.**
+
+| pair | mean Delta_spike/jet +- SE (significance) | mean Delta_full/jet +- SE (significance) | ensemble ratio Delta_spike_sum/Delta_full_sum |
+|---|---|---|---|
+| b | -0.00607 +- 0.00063 (9.6 sigma) | +0.00667 +- 0.00097 (6.9 sigma) | **-0.91** |
+| T_ref | +0.02595 +- 0.00223 (11.7 sigma) | +0.03867 +- 0.00360 (10.7 sigma) | **+0.67** |
+| tau_init | +0.00807 +- 0.00042 (19.0 sigma) | +0.00490 +- 0.00110 (4.5 sigma) | **+1.65** |
+| diagonal | +0.02726 +- 0.00206 (13.2 sigma) | +0.04776 +- 0.00384 (12.4 sigma) | **+0.57** |
+
+The cumulative ensemble ratio vs. ensemble size N (mean over 20 random orderings) converges
+to these same values by N~200-500 and stays flat out to N=1000 (e.g. tau_init: 1.79 at
+N=200, 1.63 at N=500, 1.65 at N=1000) -- the signature of a real asymptotic bias, not
+noise that keeps shrinking.
+
+This is a materially stronger and worse finding than the n=2 per-jet test above. It isn't a
+rare, jet-dependent edge case: the spike region's own theta-sensitivity is a *dominant
+fraction* of the real ensemble-level signal in every direction tested, with the wrong sign
+in two of four. For `b`, the spike (-0.0061/jet) is comparable in magnitude to and opposite
+in sign from the real bulk signal (+0.0127/jet) -- they nearly cancel, so the measured
+ensemble sensitivity to `b` (+0.0067/jet) is roughly half of what the bulk physics alone
+would give. For `tau_init`, the spike (+0.0081/jet) *exceeds* the bulk (-0.0032/jet, opposite
+sign) and sets the sign of the net result -- the measured sensitivity to `tau_init` is
+dominated by a numerical artifact, not physics.
+
+**Conclusion: this is not a per-jet curiosity to be worked around case-by-case -- it is a
+systematic, dataset-wide corruption of the ensemble log-likelihood gradient in theta.**
+Raises the priority of actually fixing the t=0 singularity (graded time grid or adaptive
+solver, candidates (a)/(b) above) rather than treating P5 as a secondary concern: as
+currently integrated, the surrogate's likelihood is not just "a little off near t=0," it is
+giving a wrong-sign or roughly-2x-wrong answer for the parameter directions that matter most
+for inference, at the ensemble scale a real fit would use.
+
+Script: `scripts/p5_ensemble_spike_sensitivity.py` (chunked by multiplicity; batching the
+full global-max-width batch in one pass is NOT safe -- see the stall above).
