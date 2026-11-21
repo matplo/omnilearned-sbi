@@ -120,15 +120,17 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               grow larger and now nearly perfectly cancel.** This means the production
               uniform grid's "b" ensemble-level bias (reported two entries above as a real,
               non-cancelling effect) was very likely itself a numerical artifact of an
-              under-resolved spike, not genuine physics -- **b identifiability conclusions
-              drawn from the production numerics so far should be treated with caution** until
-              cross-checked against a second grid_power or the formal gate. See FINDINGS "P5
-              candidate (a) validated at n=1000" for the full table and script
-              (`scripts/p5_graded_grid_validation.py`). **Not yet done, deliberately**: the
-              formal `numerics.py` TEST-vs-REFERENCE gate with the graded grid, a second
-              grid_power at n=1000 to confirm the `b` cancellation isn't a coincidence of
-              `grid_power=3.0` specifically, and updating `numerics.py`'s `TEST`/`REFERENCE`
-              or `LikelihoodOptions`' production defaults -- that's the next decision point.
+              under-resolved spike, not genuine physics. **Cross-checked at `grid_power=4.0`,
+              n=1000 (2026-11-21): confirmed, not a coincidence of `grid_power=3.0`** -- all
+              four pairs agree between `grid_power=3.0` and `4.0` to within 0.18-0.20 sigma,
+              including `b`'s spike and bulk continuing to grow together while their
+              difference stays pinned near zero. **b identifiability conclusions drawn from
+              the production numerics so far should be treated with caution.** See FINDINGS
+              "P5 candidate (a) validated at n=1000, confirmed across grid_power 3.0 and 4.0"
+              for the full tables and script (`scripts/p5_graded_grid_validation.py`). **Not
+              yet done, deliberately**: the formal `numerics.py` TEST-vs-REFERENCE gate with
+              the graded grid, and updating `numerics.py`'s `TEST`/`REFERENCE` or
+              `LikelihoodOptions`' production defaults -- that's the next decision point.
               `scripts/p5_trajectory_diagnostic.py` reproduces the per-jet check on any
               jet/theta; `scripts/p5_ensemble_spike_sensitivity.py` reproduces the original
               (grid_power=1.0) ensemble-scale check; `scripts/p5_graded_grid_validation.py`
@@ -248,7 +250,7 @@ since P7 itself has not started.
 | P2 | generation (train/val/fidelity/test) **with event stores** | **done** |
 | P3 | training (jet_pT conditioning, no standardisation) | **done** (4 checkpoints) |
 | P4 | fidelity: gate + ptbins, weighted estimators | gate **done -- decisive fail, user accepted (core dR<0.4 fidelity is excellent)**; ptbins not pursued further |
-| P5 | NLE numerics (rule 6) | **candidate (a) graded grid implemented + validated at n=1000 (converged, 1.7-2.6x correction for T_ref/tau_init/diagonal; `b`'s production-grid signal looks like a numerical artifact); production defaults not yet switched; blocks P6** |
+| P5 | NLE numerics (rule 6) | **candidate (a) graded grid implemented + validated at n=1000, confirmed across grid_power 3.0/4.0 (1.7-2.6x correction for T_ref/tau_init/diagonal; `b`'s production-grid signal confirmed a numerical artifact); production defaults not yet switched; blocks P6** |
 | P6 | three-factor likelihood + Jacobian + scan | not started |
 | P7 | closure at the 4 withheld θ | not started |
 | P8 | composite-likelihood correction | not started |

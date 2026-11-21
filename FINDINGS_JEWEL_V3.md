@@ -1486,7 +1486,7 @@ fidelity degradation already identified lives at the T_ref extremes (near 0.1 an
 fidelity vs. centrality alone is flat once that confound is removed. Full writeup, figure and
 reproducible script: `omni-sbi-nle-jet-dev-reports/reports/m3-surrogate-fidelity/2026-11-19T1007-0800_jewel-v3_fidelity-vs-centrality/`.
 
-## P5 candidate (a) validated at n=1000: graded time grid, same cost, converged -- production grid under-resolves T_ref/tau_init/diagonal by 1.7-2.6x, and its "b" signal looks like a numerical artifact (2026-11-20)
+## P5 candidate (a) validated at n=1000, confirmed across grid_power 3.0 and 4.0: production grid under-resolves T_ref/tau_init/diagonal by 1.7-2.6x, and its "b" signal is a numerical artifact (2026-11-20/21)
 
 Candidate (b) (adaptive solver) was tested and ruled out this session: correct but
 ~100-150x too expensive at the tolerance needed (scalar `rtol=atol=1e-5`), and unsafe at a
@@ -1570,16 +1570,34 @@ from the production numerics so far should be treated with caution** until this 
 cross-checked (e.g. a second grid_power value, or the formal `numerics.py` gate) -- the
 apparent signal for this one direction may not be real physics.
 
+**Cross-check at `grid_power=4.0`, n=1000, same cost (2026-11-21): confirmed, not a
+`grid_power=3.0` coincidence.** All four pairs agree between `grid_power=3.0` and `4.0` to
+within 0.18-0.20 sigma -- effectively indistinguishable:
+
+| pair | grid_power=3.0 full | grid_power=4.0 full | difference |
+|---|---|---|---|
+| b | -0.00051 +- 0.00247 | -0.00118 +- 0.00250 | 0.19 sigma |
+| T_ref | +0.10101 +- 0.00906 | +0.10363 +- 0.00916 | 0.20 sigma |
+| tau_init | +0.00818 +- 0.00195 | +0.00868 +- 0.00197 | 0.18 sigma |
+| diagonal | +0.10517 +- 0.00897 | +0.10762 +- 0.00907 | 0.19 sigma |
+
+`b`'s spike and bulk both continue growing slightly in magnitude from `grid_power=3.0` to
+`4.0` (spike -0.01613->-0.01703, bulk +0.01562->+0.01585) while their difference stays pinned
+near zero -- the cancellation is a genuine, converged, grid_power-independent feature, not a
+fluke of one particular grading. **This closes the open question from the previous entry: the
+production grid's "b" signal is a numerical artifact, confirmed independently of grading
+choice.** T_ref/tau_init/diagonal's corrected (roughly doubled) values are likewise stable
+across gradings, reinforcing they are converged and trustworthy.
+
 **Not yet done** (deliberately out of scope for this step): the formal `numerics.py`
-TEST-vs-REFERENCE Delta log L gate with the graded grid as TEST; a second `grid_power` value
-at n=1000 to cross-check the `b` cancellation isn't itself a coincidence of `grid_power=3.0`;
-updating `numerics.py`'s `TEST`/`REFERENCE` dicts or `LikelihoodOptions`' production defaults.
-Per the standing rule, production defaults change only after a fix is chosen and reviewed,
-not automatically from a validation script.
+TEST-vs-REFERENCE Delta log L gate with the graded grid as TEST; updating `numerics.py`'s
+`TEST`/`REFERENCE` dicts or `LikelihoodOptions`' production defaults. Per the standing rule,
+production defaults change only after a fix is chosen and reviewed, not automatically from a
+validation script.
 
 GPU: NERSC Perlmutter interactive QOS (`-A alice_g -C gpu -q interactive`), used after the
 first attempt hit a CUDA OOM from unrelated users' jobs on a shared/contended node. Data
 computed directly from `p5_obs.h5`, not stored; raw per-pair JSON preserved at
-`$JEST_NLE_ROOT/scratch/p5_graded_grid_validation_n1000_gp3_nsteps64.json` (the n=1000 result
-above), `..._nsteps64.json` (n=100, grid_power 1.0 vs 3.0) and the nsteps=128 convergence
-check's live output file.
+`$JEST_NLE_ROOT/scratch/p5_graded_grid_validation_n1000_gp3_nsteps64.json` and
+`..._n1000_gp4_nsteps64.json` (the two n=1000 results above), `..._nsteps64.json` (n=100,
+grid_power 1.0 vs 3.0) and the nsteps=128 convergence check's live output file.
