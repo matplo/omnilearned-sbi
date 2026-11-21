@@ -44,6 +44,11 @@ class LikelihoodOptions:
     # index); same expectation, variance averaged over the path. Fixed-step only.
     probe_schedule: str = "per_event"
     max_nfe: int = 4096
+    # Graded time grid for fixed-step solvers: step edges t_i = (i/nsteps)**grid_power.
+    # 1.0 (default) is today's exact uniform grid. >1 concentrates many small steps
+    # near t=0 (where the divergence integrand has a sharp boundary-layer spike) and
+    # leaves the smooth bulk near t=1 coarser, at the same total step count/cost.
+    grid_power: float = 1.0
 
     def validate(self):
         if self.solver not in FIXED_STEP_SOLVERS + ADAPTIVE_SOLVERS:
@@ -58,6 +63,16 @@ class LikelihoodOptions:
             raise ValueError(f"Unknown probe schedule '{self.probe_schedule}'")
         if self.probe_schedule == "per_step" and self.solver not in FIXED_STEP_SOLVERS:
             raise ValueError("probe_schedule='per_step' needs a fixed-step solver")
+        if self.grid_power < 1.0:
+            raise ValueError(
+                f"grid_power must be >= 1.0 (concentrates steps toward t=0), "
+                f"got {self.grid_power}"
+            )
+        if self.grid_power != 1.0 and self.solver in ADAPTIVE_SOLVERS:
+            raise ValueError(
+                "grid_power != 1.0 is only meaningful for fixed-step solvers; "
+                f"adaptive solver '{self.solver}' already grades its own steps"
+            )
         if self.solver in FIXED_STEP_SOLVERS:
             nfe = self.nsteps * NFE_PER_STEP[self.solver]
             if nfe > self.max_nfe:
@@ -185,12 +200,47 @@ def _rhs_factory(velocity, cond, mask, mask_f, options, probes, counter):
     return rhs
 
 
-def _fixed_step(rhs, x0, solver, nsteps):
-    h = 1.0 / nsteps
+def _graded_edges(nsteps, grid_power):
+    """Step edges t_i = (i/nsteps)**grid_power, i=0..nsteps, as a float64 array.
+
+    grid_power=1.0 is the uniform grid; >1 concentrates many small steps near t=0
+    (where the flow's divergence integrand has a sharp boundary-layer spike) and
+    leaves correspondingly larger steps near t=1, where it is smooth.
+    """
+    return (np.arange(nsteps + 1, dtype=np.float64) / nsteps) ** grid_power
+
+
+def _fixed_step(rhs, x0, solver, nsteps, grid_power=1.0):
     x = x0
     acc = torch.zeros(x0.shape[0], device=x0.device, dtype=x0.dtype)
+    if grid_power == 1.0:
+        # Exact original uniform-grid path: unchanged, bit-for-bit, for every
+        # existing caller (none of which pass grid_power).
+        h = 1.0 / nsteps
+        for i in range(nsteps):
+            t = i * h
+            if solver == "euler":
+                v, d = rhs(t, x)
+                x = x + h * v
+                acc = acc + h * d
+            elif solver == "midpoint":
+                v1, _ = rhs(t, x, need_div=False)  # first-stage divergence is unused
+                v2, d2 = rhs(t + 0.5 * h, x + 0.5 * h * v1)
+                x = x + h * v2
+                acc = acc + h * d2
+            else:
+                v1, d1 = rhs(t, x)
+                v2, d2 = rhs(t + 0.5 * h, x + 0.5 * h * v1)
+                v3, d3 = rhs(t + 0.5 * h, x + 0.5 * h * v2)
+                v4, d4 = rhs(t + h, x + h * v3)
+                x = x + (h / 6.0) * (v1 + 2 * v2 + 2 * v3 + v4)
+                acc = acc + (h / 6.0) * (d1 + 2 * d2 + 2 * d3 + d4)
+        return x, acc
+
+    edges = _graded_edges(nsteps, grid_power)
     for i in range(nsteps):
-        t = i * h
+        t = float(edges[i])
+        h = float(edges[i + 1] - edges[i])
         if solver == "euler":
             v, d = rhs(t, x)
             x = x + h * v
@@ -301,7 +351,7 @@ def log_prob(
     synchronize(device)
     start = time.perf_counter()
     if options.solver in FIXED_STEP_SOLVERS:
-        z1, delta = _fixed_step(rhs, x0, options.solver, options.nsteps)
+        z1, delta = _fixed_step(rhs, x0, options.solver, options.nsteps, options.grid_power)
     else:
         z1, delta = _adaptive(rhs, x0, options)
     synchronize(device)
@@ -315,6 +365,7 @@ def log_prob(
     diagnostics = {
         "solver": options.solver,
         "nsteps": options.nsteps,
+        "grid_power": options.grid_power,
         "divergence": options.divergence,
         "num_probes": options.num_probes if options.divergence == "hutchinson" else 0,
         "probe_schedule": options.probe_schedule if options.divergence == "hutchinson" else None,

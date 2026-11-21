@@ -1485,3 +1485,71 @@ which is what produced the marginal trend.
 fidelity degradation already identified lives at the T_ref extremes (near 0.1 and 0.9 GeV);
 fidelity vs. centrality alone is flat once that confound is removed. Full writeup, figure and
 reproducible script: `omni-sbi-nle-jet-dev-reports/reports/m3-surrogate-fidelity/2026-11-19T1007-0800_jewel-v3_fidelity-vs-centrality/`.
+
+## P5 candidate (a) validated: graded time grid, same cost, converged -- production grid under-resolved by ~2x for T_ref/diagonal (2026-11-20)
+
+Candidate (b) (adaptive solver) was tested and ruled out this session: correct but
+~100-150x too expensive at the tolerance needed (scalar `rtol=atol=1e-5`), and unsafe at a
+cheaper tolerance (`1e-3` corrupted the *bulk* integral by 10-100x, e.g. pair0_b's bulk went
+from +0.001 to -0.35); splitting tolerance per-component (loose on positions, tight only on
+the accumulator) made cost *worse*, not better, confirming the expense is intrinsic to
+resolving the boundary layer, not wasted precision elsewhere. This left candidate (a) -- a
+graded, non-uniform **fixed** time grid -- as the leading option, since it keeps total step
+count (and cost) fixed and known in advance.
+
+**Implementation.** New `LikelihoodOptions.grid_power` field (default 1.0 = today's exact
+uniform grid, bit-identical fast path preserved): step edges `t_i = (i/nsteps)**grid_power`
+for `i=0..nsteps`. `grid_power>1` concentrates many small steps near `t=0` and leaves
+correspondingly larger steps near `t=1`, at the *same* `nsteps` (no change to the
+`NFE_PER_STEP`/`max_nfe` budget check). New helper `_graded_edges(nsteps, grid_power)`;
+`_fixed_step` generalized to use it when `grid_power != 1.0`; validated against adaptive
+solvers (`grid_power != 1.0` with `solver in ADAPTIVE_SOLVERS` raises -- adaptive solvers
+already grade their own steps) and against `grid_power < 1.0` (meaningless for this use).
+New tests `tests/sbi/test_likelihood_graded_grid.py` (grid shape, backward compatibility,
+validation errors, convergence on the analytic `LinearField` fixture under grading) --
+8/8 pass; full `tests/sbi` suite: **274 passed, 0 failed, 7 skipped** (zero regression).
+
+**Real-data validation**, `scripts/p5_graded_grid_validation.py` (modeled on
+`p5_ensemble_spike_sensitivity.py`'s multiplicity-chunked batching; spike window now defined
+by **t-value** `t<0.05`, not step index, since step index no longer tracks `t` proportionally
+once the grid is graded). First 100 jets of `p5_obs.h5`, `primary_test` theta0, the same 4
+established nearby-theta pairs, `nsteps=64` (today's production cost) throughout:
+
+| pair | grid_power=1.0 full | grid_power=3.0 full (nsteps=64) | grid_power=3.0 full (nsteps=128) |
+|---|---|---|---|
+| b | +0.00412 +- 0.00301 | -0.00231 +- 0.00614 | -0.00311 +- 0.00621 |
+| T_ref | +0.03576 +- 0.01135 | **+0.07977 +- 0.02137** | +0.08311 +- 0.02159 |
+| tau_init | -0.00015 +- 0.00292 | +0.00147 +- 0.00478 | +0.00205 +- 0.00481 |
+| diagonal | +0.03741 +- 0.01171 | **+0.07527 +- 0.02089** | +0.07838 +- 0.02105 |
+
+**For T_ref and the diagonal direction -- the two pairs with a `full` signal well clear of
+zero at n=100 -- grid_power=3.0 roughly doubles the inferred theta-sensitivity relative to
+today's uniform grid, at the identical step budget**, and both the spike *and* the bulk
+components grow (not just the spike shrinking relative to a fixed bulk). This raised an
+immediate question: is grid_power=3 actually more accurate, or just trading spike
+under-resolution for bulk under-resolution (its last step near t=1 is ~3x the uniform step
+size)? **Checked directly**: doubling `nsteps` 64->128 at fixed `grid_power=3.0` moves T_ref's
+`full` by +0.15 sigma and diagonal's by +0.15 sigma (bulk alone: +0.05 sigma and +0.03 sigma)
+-- both comfortably converged already at `nsteps=64`, ruling out the under-resolved-bulk
+concern. **Conclusion: today's production uniform 64-step grid is itself not converged for
+T_ref and diagonal-direction theta-sensitivity -- it underestimates the true value by roughly
+2x, not just mishandling the t=0 region specifically.** The graded grid fixes this at no
+extra cost and is demonstrably converged at the production step budget.
+
+**b and tau_init remain inconclusive**: `full` is consistent with zero at n=100 for both
+grid_power values (same statistical-power issue the n=2-vs-n=1000 lesson already taught --
+these two directions need a larger ensemble to resolve against noise, as the full n=1000 run
+already showed for grid_power=1.0). Not yet rerun at n=1000 with the graded grid.
+
+**Not yet done** (deliberately out of scope for this step): the formal `numerics.py`
+TEST-vs-REFERENCE Delta log L gate with the graded grid as TEST; updating `numerics.py`'s
+`TEST`/`REFERENCE` dicts or `LikelihoodOptions`' production defaults to `grid_power=3.0`
+(or similar). Per the standing rule, production defaults change only after a fix is chosen
+and reviewed, not automatically from a validation script.
+
+GPU: NERSC Perlmutter interactive QOS (`-A alice_g -C gpu -q interactive`), used after the
+first attempt hit a CUDA OOM from unrelated users' jobs on a shared/contended node. Data
+computed directly from `p5_obs.h5`, not stored; raw per-pair JSON at
+`$JEST_NLE_ROOT/scratch/p5_graded_grid_validation.json` (latest run, nsteps=128) and
+`p5_graded_grid_validation_nsteps64.json` (preserved copy of the nsteps=64 run before the
+nsteps=128 rerun overwrote the live output file).

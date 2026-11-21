@@ -97,20 +97,38 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               systematic, dataset-wide corruption of the ensemble log-likelihood gradient in
               theta, not a rare per-jet edge case** -- raises the priority of actually fixing
               it.
-              Remaining candidates, none chosen or implemented yet (see FINDINGS for
-              detail): (a) a graded/non-uniform time grid concentrating steps near t=0; (b)
-              an adaptive-step solver with local error control instead of fixed
-              `midpoint`/`rk4` -- both actually resolve the region rather than discard it;
-              (d) accept an empirically-"good enough" nsteps/solver choice for the fit's
-              actual precision needs rather than chasing full convergence -- now a weaker
-              option given the confirmed severity above. `scripts/p5_trajectory_diagnostic.py`
-              reproduces the per-jet check on any jet/theta; `scripts/p5_ensemble_spike_sensitivity.py`
-              reproduces the ensemble-scale check. Only after a fix is chosen and
-              `numerics.py`'s `TEST`/`REFERENCE` or `LikelihoodOptions` defaults are updated
-              accordingly should P6 proceed. ptbins.py (the P4 followup, 20-500 GeV window) was
-              deprioritized in favor of P5 per the user's direction and was not run this
-              session; its fix is in FINDINGS/test_ptbins.py but still uncommitted as of the
-              last P4 snapshot (c9ed27f) -- revisit if/when useful again, not urgent.
+              **(2026-11-20) Candidate (b) ruled out, candidate (a) implemented and
+              validated -- production grid confirmed under-resolved, not just at t=0.**
+              (b) an adaptive-step solver (`torchdiffeq` dopri5, already wired in) is correct
+              but ~100-150x too expensive at the tolerance needed (every adaptive stage needs
+              exact divergence, unlike fixed-step's cheaper first stage); a cheaper tolerance
+              corrupts the *bulk* integral by 10-100x instead; splitting tolerance
+              per-component made cost worse, not better. (a) a graded/non-uniform fixed time
+              grid -- new `LikelihoodOptions.grid_power` field (default 1.0 = today's exact
+              uniform grid; see `likelihood.py`'s `_graded_edges`/`_fixed_step`) -- is
+              implemented, unit-tested (`tests/sbi/test_likelihood_graded_grid.py`, 8/8 pass;
+              full `tests/sbi` suite 274 passed/0 failed), and validated on 100 real jets:
+              `grid_power=3.0` at the *same* `nsteps=64` roughly **doubles** the inferred
+              T_ref/diagonal theta-sensitivity vs. today's grid (T_ref full: 0.036->0.080;
+              diagonal: 0.037->0.075), and this is confirmed *converged* (nsteps 64->128
+              moves the result <0.2 sigma) -- i.e. **today's production uniform grid
+              under-resolves these two directions by ~2x, not just the t=0 region
+              specifically.** b/tau_init still inconclusive at n=100 (near-zero `full`, same
+              statistical-power issue as before -- needs the full n=1000 ensemble). See
+              FINDINGS "P5 candidate (a) validated" for the full table and script
+              (`scripts/p5_graded_grid_validation.py`). **Not yet done, deliberately**: the
+              formal `numerics.py` TEST-vs-REFERENCE gate with the graded grid, the full
+              n=1000 rerun for b/tau_init, and updating `numerics.py`'s `TEST`/`REFERENCE` or
+              `LikelihoodOptions`' production defaults -- that's the next decision point.
+              `scripts/p5_trajectory_diagnostic.py` reproduces the per-jet check on any
+              jet/theta; `scripts/p5_ensemble_spike_sensitivity.py` reproduces the original
+              (grid_power=1.0) ensemble-scale check; `scripts/p5_graded_grid_validation.py`
+              reproduces the graded-grid comparison. Only after `numerics.py`'s
+              `TEST`/`REFERENCE` or `LikelihoodOptions` defaults are updated should P6
+              proceed. ptbins.py (the P4 followup, 20-500 GeV window) was deprioritized in
+              favor of P5 per the user's direction and was not run this session; its fix is
+              in FINDINGS/test_ptbins.py but still uncommitted as of the last P4 snapshot
+              (c9ed27f) -- revisit if/when useful again, not urgent.
 RUNNING:      nothing
 DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
               + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
@@ -221,7 +239,7 @@ since P7 itself has not started.
 | P2 | generation (train/val/fidelity/test) **with event stores** | **done** |
 | P3 | training (jet_pT conditioning, no standardisation) | **done** (4 checkpoints) |
 | P4 | fidelity: gate + ptbins, weighted estimators | gate **done -- decisive fail, user accepted (core dR<0.4 fidelity is excellent)**; ptbins not pursued further |
-| P5 | NLE numerics (rule 6) | **done -- decisive FAIL: midpoint vs rk4 solver disagree ~20-25x; blocks P6** |
+| P5 | NLE numerics (rule 6) | **candidate (a) graded grid implemented + validated (converged, ~2x correction for T_ref/diagonal); production defaults not yet switched; blocks P6** |
 | P6 | three-factor likelihood + Jacobian + scan | not started |
 | P7 | closure at the 4 withheld θ | not started |
 | P8 | composite-likelihood correction | not started |
