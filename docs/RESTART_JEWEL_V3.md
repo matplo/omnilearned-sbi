@@ -109,28 +109,29 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               implemented, unit-tested (`tests/sbi/test_likelihood_graded_grid.py`, 8/8 pass;
               full `tests/sbi` suite 274 passed/0 failed), and validated on 100 real jets:
               `grid_power=3.0` at the *same* `nsteps=64` roughly **doubles** the inferred
-              T_ref/diagonal theta-sensitivity vs. today's grid (T_ref full: 0.036->0.080;
-              diagonal: 0.037->0.075), confirmed *converged* (nsteps 64->128 moves the result
-              <0.2 sigma). **Rerun at the full n=1000 (2026-11-20, ~79 min on a dedicated
-              interactive-QOS GPU node, incremental per-chunk checkpointing added to the
-              script): T_ref/tau_init/diagonal come out 1.7-2.6x larger and still highly
-              significant (confirms the n=100 pattern at full statistics) -- but `b`'s production-
-              grid signal (+0.00667, 6.9 sigma) collapses to consistent-with-zero
-              (-0.00051, 0.2 sigma) under the graded grid, because its spike and bulk both
-              grow larger and now nearly perfectly cancel.** This means the production
-              uniform grid's "b" ensemble-level bias (reported two entries above as a real,
-              non-cancelling effect) was very likely itself a numerical artifact of an
-              under-resolved spike, not genuine physics. **Cross-checked at `grid_power=4.0`,
-              n=1000 (2026-11-21): confirmed, not a coincidence of `grid_power=3.0`** -- all
-              four pairs agree between `grid_power=3.0` and `4.0` to within 0.18-0.20 sigma,
-              including `b`'s spike and bulk continuing to grow together while their
-              difference stays pinned near zero. **b identifiability conclusions drawn from
-              the production numerics so far should be treated with caution.** See FINDINGS
-              "P5 candidate (a) validated at n=1000, confirmed across grid_power 3.0 and 4.0"
-              for the full tables and script (`scripts/p5_graded_grid_validation.py`). **Not
-              yet done, deliberately**: the formal `numerics.py` TEST-vs-REFERENCE gate with
-              the graded grid, and updating `numerics.py`'s `TEST`/`REFERENCE` or
-              `LikelihoodOptions`' production defaults -- that's the next decision point.
+              T_ref/diagonal theta-sensitivity vs. today's grid, confirmed *converged* (nsteps
+              64->128 moves the result <0.2 sigma). Rerun at the full n=1000 (2026-11-20) and
+              cross-checked at `grid_power=4.0` (2026-11-21) using the scripts' own hand-rolled
+              "delta-only" (divergence-integral-only) metric: T_ref/tau_init/diagonal came out
+              1.7-2.6x larger; `b` appeared to collapse to consistent-with-zero.
+              **CORRECTION (2026-11-21): the "b collapses to zero" result was wrong --
+              retracted.** The hand-rolled scripts never computed `base.log_prob(z1)` or
+              `log_multiplicity` (this checkpoint has a multiplicity model), both real,
+              theta-dependent terms `FlowSurrogate.log_prob` correctly includes. Running the
+              project's own formal `numerics.py` gate (the real `log_prob`, float32 *and*
+              float64, n=1000, 3 seeds) as a check showed **all four directions, including
+              `b`, improve by a consistent ~1.9-3.0x under the graded grid, same sign, no
+              cancellation** (b: +3.04x, T_ref: +2.84x, tau_init: +1.87x, diagonal: +2.56x).
+              The t=0 divergence-*integrand* spike itself (raw per-step trajectory data) is
+              unaffected by this correction -- only the delta-only ensemble numbers and the
+              "b is a numerical artifact" interpretation are superseded. See FINDINGS
+              "CORRECTION: ... numerics.py gate shows all 4 directions improve consistently"
+              (2026-11-21) for the full writeup, root cause, and a lesson for future P5 work
+              (validate custom ensemble diagnostics against `numerics.py`'s formal gate before
+              drawing conclusions). **Not yet done, deliberately**: updating `numerics.py`'s
+              `TEST`/`REFERENCE` dicts or `LikelihoodOptions`' production defaults to
+              `grid_power=3.0` (or similar) -- the correction strengthens rather than weakens
+              this case, but the decision is still open.
               `scripts/p5_trajectory_diagnostic.py` reproduces the per-jet check on any
               jet/theta; `scripts/p5_ensemble_spike_sensitivity.py` reproduces the original
               (grid_power=1.0) ensemble-scale check; `scripts/p5_graded_grid_validation.py`
@@ -250,7 +251,7 @@ since P7 itself has not started.
 | P2 | generation (train/val/fidelity/test) **with event stores** | **done** |
 | P3 | training (jet_pT conditioning, no standardisation) | **done** (4 checkpoints) |
 | P4 | fidelity: gate + ptbins, weighted estimators | gate **done -- decisive fail, user accepted (core dR<0.4 fidelity is excellent)**; ptbins not pursued further |
-| P5 | NLE numerics (rule 6) | **candidate (a) graded grid implemented + validated at n=1000, confirmed across grid_power 3.0/4.0 (1.7-2.6x correction for T_ref/tau_init/diagonal; `b`'s production-grid signal confirmed a numerical artifact); production defaults not yet switched; blocks P6** |
+| P5 | NLE numerics (rule 6) | **candidate (a) graded grid implemented + validated via the formal `numerics.py` gate: all 4 directions improve ~1.9-3.0x, consistently (b's earlier "artifact" claim was wrong -- corrected 2026-11-21); production defaults not yet switched; blocks P6** |
 | P6 | three-factor likelihood + Jacobian + scan | not started |
 | P7 | closure at the 4 withheld θ | not started |
 | P8 | composite-likelihood correction | not started |

@@ -1409,6 +1409,14 @@ next entry for the properly-powered version of that question.
 
 ## P5 follow-up: the t=0 spike is an ensemble-level bias, not jet-to-jet noise -- confirmed at n=1000, not n=2 (2026-11-19)
 
+**CORRECTION (2026-11-21), see the entry at the end of this file:** the quantity measured
+here is the *accumulated divergence integral only* ("delta"/"acc" in the script), not the
+full log-likelihood (`log p_base(z1) + delta + log_jacobian [+ log_multiplicity]`) that
+`FlowSurrogate.log_prob`/`numerics.py` actually compute. The raw observation that the
+divergence *integrand* spikes at t=0 (shown directly in per-step trajectory data) still
+stands, but conclusions drawn here about the *ensemble log-likelihood*'s sensitivity used an
+incomplete proxy -- see the correction entry for what changes and what doesn't.
+
 Direct test of the question above: does the spike region's contribution to the accumulated
 divergence have a non-zero *mean* across jets (a real bias that survives summing over an
 inference ensemble), or is it zero-mean jet-to-jet noise that cancels under that sum? Ran
@@ -1487,6 +1495,17 @@ fidelity vs. centrality alone is flat once that confound is removed. Full writeu
 reproducible script: `omni-sbi-nle-jet-dev-reports/reports/m3-surrogate-fidelity/2026-11-19T1007-0800_jewel-v3_fidelity-vs-centrality/`.
 
 ## P5 candidate (a) validated at n=1000, confirmed across grid_power 3.0 and 4.0: production grid under-resolves T_ref/tau_init/diagonal by 1.7-2.6x, and its "b" signal is a numerical artifact (2026-11-20/21)
+
+**CORRECTION (2026-11-21), see the entry at the end of this file: the "b's signal is a
+numerical artifact" conclusion in this entry is WRONG**, and is retracted. It was based on
+the same incomplete proxy (divergence-integral-only "delta", missing `base_logp(z1)` and
+`log_multiplicity`'s theta-dependence) as the entry above. The corrected, complete
+log-likelihood (computed via the project's own existing `numerics.py` tool) shows `b`'s
+signal is real, does not cancel, and *also* grows ~3x under the graded grid, same as the
+other three directions -- no anomaly. The implementation (`LikelihoodOptions.grid_power`
+etc.) and the underlying t=0 divergence-integrand spike observation are unaffected by this
+correction; only the per-jet-mean "delta-only" ensemble numbers in this entry (and their
+interpretation for `b`) are superseded.
 
 Candidate (b) (adaptive solver) was tested and ruled out this session: correct but
 ~100-150x too expensive at the tolerance needed (scalar `rtol=atol=1e-5`), and unsafe at a
@@ -1601,3 +1620,73 @@ computed directly from `p5_obs.h5`, not stored; raw per-pair JSON preserved at
 `$JEST_NLE_ROOT/scratch/p5_graded_grid_validation_n1000_gp3_nsteps64.json` and
 `..._n1000_gp4_nsteps64.json` (the two n=1000 results above), `..._nsteps64.json` (n=100,
 grid_power 1.0 vs 3.0) and the nsteps=128 convergence check's live output file.
+
+## CORRECTION: the two entries above measured an incomplete quantity -- "b's signal is a numerical artifact" is retracted; the formal numerics.py gate shows all 4 directions improve consistently (2026-11-21)
+
+**Root cause.** `scripts/p5_ensemble_spike_sensitivity.py` and
+`scripts/p5_graded_grid_validation.py` hand-roll the midpoint/rk4 step loop (needed for
+step-level access to split spike/bulk/full) by calling `_rhs_factory` directly and tracking
+only the accumulated divergence integral (`acc`, called "delta" in the scripts). They never
+compute `base.log_prob(z1, mask)` -- the base-density term of the real log-likelihood,
+`logp = log p_base(z1) + delta + log_jacobian [+ log_multiplicity]` (see `likelihood.py`'s
+`log_prob()`, and `flow.py`'s `FlowSurrogate.log_prob()`, which adds a third term,
+`log_multiplicity`, when the checkpoint has a multiplicity model attached -- this one does).
+`z1` (and therefore `base_logp`) depends on theta, since it's the endpoint of integrating the
+theta-conditioned velocity field -- it is not a constant that cancels in a pairwise
+difference. **Two full theta-dependent terms were silently missing from every "delta-only"
+ensemble number in the two entries above**, for both the original n=1000 ensemble-bias study
+and this session's candidate (a) validation.
+
+**How this was caught.** Before finalizing candidate (a), the project's own existing formal
+gate (`numerics.py`'s `deltas()`/`evaluate()`, which correctly calls the real
+`FlowSurrogate.log_prob`) was run as a cross-check -- the step this should have been checked
+against from the start. `numerics.py run --test '{"solver":"midpoint","nsteps":64,
+"divergence":"hutchinson","num_probes":8,"probe":"rademacher","probe_schedule":"per_step"[,
+"grid_power":3.0]}'`, n=1000, 3 seeds, both `float32` and `float64` (ruling out precision as
+the cause -- both agree closely):
+
+| pair | grid_power=1.0 (full logp, summed) | grid_power=3.0 (full logp, summed) | ratio |
+|---|---|---|---|
+| b | -12.559 +- 0.017 | -38.162 +- 0.044 | **+3.04x** |
+| T_ref | +42.873 +- 0.090 | +121.786 +- 0.229 | **+2.84x** |
+| tau_init | +11.580 +- 0.034 | +21.648 +- 0.031 | **+1.87x** |
+| diagonal | +41.336 +- 0.126 | +105.629 +- 0.158 | **+2.56x** |
+
+(SEs here are seed-to-seed Hutchinson-probe scatter at n=1000 summed events, not jet-to-jet
+scatter -- a different, much tighter quantity than the per-jet-mean +- SE used in the
+delta-only entries above; the two aren't directly comparable in absolute scale, only in sign
+and ratio.)
+
+**Corrected conclusion: all four directions, including `b`, show a consistent, same-sign
+~1.9-3.0x increase in full log-likelihood sensitivity under the graded grid, at the same
+cost.** There is no cancellation, no sign flip, and no anomaly for `b` -- the delta-only
+proxy's near-perfect spike/bulk cancellation for `b` (confirmed reproducible across
+grid_power=3.0 and 4.0 in the entry above) was real, but it was a cancellation *within the
+incomplete proxy itself*, not evidence that the production grid's true likelihood
+sensitivity for `b` was spurious. **The "b identifiability conclusions should be treated
+with caution" warning in both entries above is retracted.** If anything, the corrected
+result makes candidate (a)'s case stronger and cleaner than before: a uniform ~2-3x
+under-resolution across every tested direction, with the production grid's own existing
+numerics gate as the judge, not a custom proxy.
+
+**What is unaffected by this correction:** the raw, directly-observed per-step divergence
+*integrand* trajectories (e.g. `trajectory_diag_sweep.json`, the t0-spike-explainer report)
+showing a sharp boundary-layer spike at t=0 are real data, not a derived ensemble statistic,
+and stand on their own. `LikelihoodOptions.grid_power`, `_graded_edges`, and `_fixed_step`'s
+generalization are unaffected (they are solver internals, not analysis). The unit tests, the
+nsteps 64->128 convergence check, and the grid_power 3.0-vs-4.0 agreement all remain valid
+*as checks of the integrator's own self-consistency* -- they just weren't, on their own,
+checks of the *real* log-likelihood, which is why this gap went unnoticed until the formal
+gate was run.
+
+**Lesson for future P5/numerics work:** validate any custom ensemble diagnostic against
+`numerics.py`'s formal gate (or at minimum spot-check it against `FlowSurrogate.log_prob`'s
+own `logp` output, not just its `delta_logp` diagnostic) *before* drawing conclusions,
+especially before writing a "this signal is spurious" claim into FINDINGS. A custom script
+that reimplements part of the solver for instrumentation purposes can silently omit real
+theta-dependent terms that the production code path includes.
+
+**Not yet done**: updating `numerics.py`'s `TEST`/`REFERENCE` dicts or
+`LikelihoodOptions`' production defaults to `grid_power=3.0` (or similar) -- this correction
+if anything strengthens the case, but the decision is still open. Data:
+`$JEST_NLE_ROOT/scratch/numerics_gate_test{A,B}_gp{1,3}_f64.json`.
