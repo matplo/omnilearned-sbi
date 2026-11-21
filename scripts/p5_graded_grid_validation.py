@@ -137,6 +137,7 @@ def main():
         acc_full_full = {name: np.zeros(n_jets) for name in thetas}
 
         n_chunks = int(np.ceil(n_jets / args.chunk_size))
+        done_mask = np.zeros(n_jets, dtype=bool)
         t_start = time.time()
         for c in range(n_chunks):
             idx = order[c * args.chunk_size:(c + 1) * args.chunk_size]
@@ -148,6 +149,17 @@ def main():
             for name in thetas:
                 acc_spike_full[name][idx] = acc_s[name]
                 acc_full_full[name][idx] = acc_f[name]
+            done_mask[idx] = True
+            # Incremental checkpoint: a multi-hour run with no partial save is a real
+            # walltime-cap risk on interactive QOS (see RESTART_JEWEL_V3.md trap 26).
+            with open(OUT + ".partial.json", "w") as f:
+                json.dump({
+                    "n_jets": n_jets, "nsteps": nsteps, "grid_power": grid_power,
+                    "chunks_done": c + 1, "n_chunks": n_chunks,
+                    "done_mask": done_mask.tolist(),
+                    "acc_spike": {k: v.tolist() for k, v in acc_spike_full.items()},
+                    "acc_full": {k: v.tolist() for k, v in acc_full_full.items()},
+                }, f)
             mult_lo, mult_hi = int(n_real_all[idx].min()), int(n_real_all[idx].max())
             print(f"chunk {c+1}/{n_chunks} (n={len(idx)}, mult=[{mult_lo},{mult_hi}]) "
                   f"done in {time.time()-t0:.1f}s (elapsed {time.time()-t_start:.0f}s)", flush=True)

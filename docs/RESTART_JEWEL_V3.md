@@ -110,16 +110,25 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               full `tests/sbi` suite 274 passed/0 failed), and validated on 100 real jets:
               `grid_power=3.0` at the *same* `nsteps=64` roughly **doubles** the inferred
               T_ref/diagonal theta-sensitivity vs. today's grid (T_ref full: 0.036->0.080;
-              diagonal: 0.037->0.075), and this is confirmed *converged* (nsteps 64->128
-              moves the result <0.2 sigma) -- i.e. **today's production uniform grid
-              under-resolves these two directions by ~2x, not just the t=0 region
-              specifically.** b/tau_init still inconclusive at n=100 (near-zero `full`, same
-              statistical-power issue as before -- needs the full n=1000 ensemble). See
-              FINDINGS "P5 candidate (a) validated" for the full table and script
+              diagonal: 0.037->0.075), confirmed *converged* (nsteps 64->128 moves the result
+              <0.2 sigma). **Rerun at the full n=1000 (2026-11-20, ~79 min on a dedicated
+              interactive-QOS GPU node, incremental per-chunk checkpointing added to the
+              script): T_ref/tau_init/diagonal come out 1.7-2.6x larger and still highly
+              significant (confirms the n=100 pattern at full statistics) -- but `b`'s production-
+              grid signal (+0.00667, 6.9 sigma) collapses to consistent-with-zero
+              (-0.00051, 0.2 sigma) under the graded grid, because its spike and bulk both
+              grow larger and now nearly perfectly cancel.** This means the production
+              uniform grid's "b" ensemble-level bias (reported two entries above as a real,
+              non-cancelling effect) was very likely itself a numerical artifact of an
+              under-resolved spike, not genuine physics -- **b identifiability conclusions
+              drawn from the production numerics so far should be treated with caution** until
+              cross-checked against a second grid_power or the formal gate. See FINDINGS "P5
+              candidate (a) validated at n=1000" for the full table and script
               (`scripts/p5_graded_grid_validation.py`). **Not yet done, deliberately**: the
-              formal `numerics.py` TEST-vs-REFERENCE gate with the graded grid, the full
-              n=1000 rerun for b/tau_init, and updating `numerics.py`'s `TEST`/`REFERENCE` or
-              `LikelihoodOptions`' production defaults -- that's the next decision point.
+              formal `numerics.py` TEST-vs-REFERENCE gate with the graded grid, a second
+              grid_power at n=1000 to confirm the `b` cancellation isn't a coincidence of
+              `grid_power=3.0` specifically, and updating `numerics.py`'s `TEST`/`REFERENCE`
+              or `LikelihoodOptions`' production defaults -- that's the next decision point.
               `scripts/p5_trajectory_diagnostic.py` reproduces the per-jet check on any
               jet/theta; `scripts/p5_ensemble_spike_sensitivity.py` reproduces the original
               (grid_power=1.0) ensemble-scale check; `scripts/p5_graded_grid_validation.py`
@@ -239,7 +248,7 @@ since P7 itself has not started.
 | P2 | generation (train/val/fidelity/test) **with event stores** | **done** |
 | P3 | training (jet_pT conditioning, no standardisation) | **done** (4 checkpoints) |
 | P4 | fidelity: gate + ptbins, weighted estimators | gate **done -- decisive fail, user accepted (core dR<0.4 fidelity is excellent)**; ptbins not pursued further |
-| P5 | NLE numerics (rule 6) | **candidate (a) graded grid implemented + validated (converged, ~2x correction for T_ref/diagonal); production defaults not yet switched; blocks P6** |
+| P5 | NLE numerics (rule 6) | **candidate (a) graded grid implemented + validated at n=1000 (converged, 1.7-2.6x correction for T_ref/tau_init/diagonal; `b`'s production-grid signal looks like a numerical artifact); production defaults not yet switched; blocks P6** |
 | P6 | three-factor likelihood + Jacobian + scan | not started |
 | P7 | closure at the 4 withheld θ | not started |
 | P8 | composite-likelihood correction | not started |

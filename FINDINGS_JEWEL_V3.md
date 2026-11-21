@@ -1486,7 +1486,7 @@ fidelity degradation already identified lives at the T_ref extremes (near 0.1 an
 fidelity vs. centrality alone is flat once that confound is removed. Full writeup, figure and
 reproducible script: `omni-sbi-nle-jet-dev-reports/reports/m3-surrogate-fidelity/2026-11-19T1007-0800_jewel-v3_fidelity-vs-centrality/`.
 
-## P5 candidate (a) validated: graded time grid, same cost, converged -- production grid under-resolved by ~2x for T_ref/diagonal (2026-11-20)
+## P5 candidate (a) validated at n=1000: graded time grid, same cost, converged -- production grid under-resolves T_ref/tau_init/diagonal by 1.7-2.6x, and its "b" signal looks like a numerical artifact (2026-11-20)
 
 Candidate (b) (adaptive solver) was tested and ruled out this session: correct but
 ~100-150x too expensive at the tolerance needed (scalar `rtol=atol=1e-5`), and unsafe at a
@@ -1536,20 +1536,50 @@ T_ref and diagonal-direction theta-sensitivity -- it underestimates the true val
 2x, not just mishandling the t=0 region specifically.** The graded grid fixes this at no
 extra cost and is demonstrably converged at the production step budget.
 
-**b and tau_init remain inconclusive**: `full` is consistent with zero at n=100 for both
-grid_power values (same statistical-power issue the n=2-vs-n=1000 lesson already taught --
-these two directions need a larger ensemble to resolve against noise, as the full n=1000 run
-already showed for grid_power=1.0). Not yet rerun at n=1000 with the graded grid.
+**b and tau_init were inconclusive at n=100** (same statistical-power issue the n=2-vs-n=1000
+lesson already taught). Rerun at the full **n=1000**, `grid_power=3.0`, `nsteps=64` (same
+cost), multiplicity-sorted chunking (20x50), ~79 min on a dedicated interactive-QOS GPU node
+with incremental per-chunk checkpointing (`scripts/p5_graded_grid_validation.py`'s
+`.partial.json` sidecar, added this session after a multi-hour-script-with-no-partial-save
+near-miss on a different script, see trap 26):
+
+| pair | grid_power=1.0 full (production, n=1000) | grid_power=3.0 full (n=1000) |
+|---|---|---|
+| b | +0.00667 +- 0.00097 (**6.9 sigma**) | **-0.00051 +- 0.00247 (0.2 sigma)** |
+| T_ref | +0.03867 +- 0.00360 (10.7 sigma) | +0.10101 +- 0.00906 (**11.2 sigma, ~2.6x**) |
+| tau_init | +0.00490 +- 0.00110 (4.5 sigma) | +0.00818 +- 0.00195 (**4.2 sigma, ~1.7x**) |
+| diagonal | +0.04776 +- 0.00384 (12.4 sigma) | +0.10517 +- 0.00897 (**11.7 sigma, ~2.2x**) |
+
+T_ref, tau_init and diagonal confirm the n=100 pattern at full statistics: the graded grid
+yields a 1.7-2.6x *larger*, still highly significant signal, for the same cost.
+
+**`b` is a different and more important story.** At `grid_power=3.0`, both the spike
+(-0.01613 +- 0.00222, 7.3 sigma) and bulk (+0.01562 +- 0.00083, 18.8 sigma) grew *larger* in
+magnitude than their production-grid counterparts (spike -0.00607, bulk +0.01274) -- but now
+they nearly perfectly cancel, leaving `full` consistent with zero. **The production uniform
+grid's "b" signal (6.9 sigma, reported in the entry above as a real, non-cancelling
+ensemble-level bias) was very likely itself a numerical artifact**: an incompletely-resolved
+spike that didn't cancel its bulk counterpart correctly, leaving a spurious residual that
+looked like real theta-sensitivity. This is not a fluke of `grid_power=3.0` specifically --
+the n=100 nsteps 64->128 convergence check already showed `b`'s near-zero result stable under
+refinement (-0.00231 vs -0.00311, well within 1 SE), i.e. the cancellation is the *converged*
+answer, not an artifact of insufficient resolution in the other direction.
+
+**Implication: conclusions about `b` (impact parameter) sensitivity/identifiability drawn
+from the production numerics so far should be treated with caution** until this is
+cross-checked (e.g. a second grid_power value, or the formal `numerics.py` gate) -- the
+apparent signal for this one direction may not be real physics.
 
 **Not yet done** (deliberately out of scope for this step): the formal `numerics.py`
-TEST-vs-REFERENCE Delta log L gate with the graded grid as TEST; updating `numerics.py`'s
-`TEST`/`REFERENCE` dicts or `LikelihoodOptions`' production defaults to `grid_power=3.0`
-(or similar). Per the standing rule, production defaults change only after a fix is chosen
-and reviewed, not automatically from a validation script.
+TEST-vs-REFERENCE Delta log L gate with the graded grid as TEST; a second `grid_power` value
+at n=1000 to cross-check the `b` cancellation isn't itself a coincidence of `grid_power=3.0`;
+updating `numerics.py`'s `TEST`/`REFERENCE` dicts or `LikelihoodOptions`' production defaults.
+Per the standing rule, production defaults change only after a fix is chosen and reviewed,
+not automatically from a validation script.
 
 GPU: NERSC Perlmutter interactive QOS (`-A alice_g -C gpu -q interactive`), used after the
 first attempt hit a CUDA OOM from unrelated users' jobs on a shared/contended node. Data
-computed directly from `p5_obs.h5`, not stored; raw per-pair JSON at
-`$JEST_NLE_ROOT/scratch/p5_graded_grid_validation.json` (latest run, nsteps=128) and
-`p5_graded_grid_validation_nsteps64.json` (preserved copy of the nsteps=64 run before the
-nsteps=128 rerun overwrote the live output file).
+computed directly from `p5_obs.h5`, not stored; raw per-pair JSON preserved at
+`$JEST_NLE_ROOT/scratch/p5_graded_grid_validation_n1000_gp3_nsteps64.json` (the n=1000 result
+above), `..._nsteps64.json` (n=100, grid_power 1.0 vs 3.0) and the nsteps=128 convergence
+check's live output file.
