@@ -19,6 +19,19 @@ instead of the default float32 -- the 2026-11-05 P5 follow-up's "never tested" q
 whether the midpoint-vs-rk4 gap is a float32 discretization-floor effect that float64
 resolves, independent of nsteps.
 
+TEST/REFERENCE were updated 2026-11-22 (P5 candidate (a), graded time grid): the old
+midpoint-64/rk4-64 pair FAILED this gate by 11-85 log L units (dominated by the t=0
+divergence-integrand boundary-layer spike, see FINDINGS_JEWEL_V3.md "P5 resumed" and
+follow-ups) -- not caught earlier because the two solvers' own disagreement happened to be
+of a similar, also-wrong, order near t=0. midpoint-128 with `grid_power=4.0` (concentrates
+steps near t=0 at ~2x, not ~100x, the step-count cost of today's default; see
+``LikelihoodOptions.grid_power`` / ``likelihood._graded_edges``) PASSES against a rk4-256,
+grid_power=4.0, 16-probe reference with 0.02-0.36 log L shift on all 4 established pairs
+(formal gate, n=1000, 3 seeds, float64; see FINDINGS "P5 formal gate" for the full A/B/C/D
+progression). A real fit's own ``[likelihood]`` TOML section should set this explicitly
+(``LikelihoodOptions``'s own dataclass defaults are intentionally left unchanged --
+``solver="rk4"`` there has not itself been validated with grading).
+
     python -m omnilearned.sbi.toy.numerics run --checkpoint CKPT --observations OBS.h5 \\
         --pair b0 T0 tau0 b1 T1 tau1 [--pair ...] --seeds 0 1 2 --out part0.json
     python -m omnilearned.sbi.toy.numerics merge --parts part*.json --out numerics.json
@@ -33,10 +46,10 @@ import numpy as np
 
 from omnilearned.sbi.toy.simulator import PARAMETERS
 
-TEST = {"solver": "midpoint", "nsteps": 64, "divergence": "hutchinson", "num_probes": 8,
-        "probe": "rademacher", "probe_schedule": "per_step"}
-REFERENCE = {"solver": "rk4", "nsteps": 64, "divergence": "hutchinson", "num_probes": 16,
-             "probe": "rademacher", "probe_schedule": "per_step"}
+TEST = {"solver": "midpoint", "nsteps": 128, "divergence": "hutchinson", "num_probes": 8,
+        "probe": "rademacher", "probe_schedule": "per_step", "grid_power": 4.0}
+REFERENCE = {"solver": "rk4", "nsteps": 256, "divergence": "hutchinson", "num_probes": 16,
+             "probe": "rademacher", "probe_schedule": "per_step", "grid_power": 4.0}
 LIMIT = 0.5
 
 

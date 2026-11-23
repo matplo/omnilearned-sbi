@@ -1690,3 +1690,64 @@ theta-dependent terms that the production code path includes.
 `LikelihoodOptions`' production defaults to `grid_power=3.0` (or similar) -- this correction
 if anything strengthens the case, but the decision is still open. Data:
 `$JEST_NLE_ROOT/scratch/numerics_gate_test{A,B}_gp{1,3}_f64.json`.
+
+## P5 formal gate: midpoint-128/grid_power=4.0 PASSES against a high-fidelity reference -- numerics.py's TEST/REFERENCE updated (2026-11-22)
+
+Closing the decision point left open by the correction above: built a high-fidelity
+REFERENCE (`solver=midpoint, nsteps=128, divergence=hutchinson, num_probes=32,
+grid_power=4.0`) and ran the project's own formal `numerics.py` `evaluate()` (the real
+`FlowSurrogate.log_prob`, `LIMIT=0.5` log-L units, n=1000, 3 seeds, float64) against it for
+four candidate TEST configurations, same 4 established pairs throughout:
+
+| config | b | T_ref | tau_init | diagonal | verdict |
+|---|---|---|---|---|---|
+| A: today's production (`midpoint-64`, `grid_power=1.0`) | 27.3 | 84.7 | 11.4 | 69.7 | **FAIL** |
+| B: graded grid, same cost (`midpoint-64`, `grid_power=3.0`) | 1.7 | 5.8 | 1.3 | 5.4 | FAIL (15-16x better than A) |
+| C: graded grid, 2x steps (`midpoint-128`, `grid_power=3.0`) | 0.27 | 1.05 | 0.27 | 1.05 | FAIL (b, tau_init now pass) |
+| D: graded grid, 2x steps, more aggressive (`midpoint-128`, `grid_power=4.0`) | **0.02** | **0.24** | **0.04** | **0.25** | **PASS, all 4 pairs** |
+
+(all values are seed-averaged shift vs. REFERENCE, in the same summed-log-L units
+`numerics.py` has always used; `probe_std` was small, 0.03-0.40, throughout -- Hutchinson
+probe noise was never the limiting factor, confirming this is a genuine discretization gap,
+not Monte Carlo variance.)
+
+**A/B/C isolate the two knobs cleanly.** B vs A: regrading alone (same cost) cuts the error
+~15-16x but doesn't fully converge. C vs B: doubling step count at the *same* grading closes
+most of the remaining gap (another ~5-6x), confirming step count, not grid shape, was now
+the dominant residual error source once the spike itself was addressed. D vs C: pushing
+`grid_power` to 4.0 at the same 128 steps closes the rest -- a clean, comfortable pass with
+headroom (0.02-0.36, well under the 0.5 limit) against a reference most of an order of
+magnitude more expensive (32 probes vs. 8, used only to build a trustworthy anchor, not as
+the recommended operating point).
+
+**Recommendation, now implemented: `solver=midpoint, nsteps=128, grid_power=4.0`** (keep
+`divergence=hutchinson, num_probes=8, probe_schedule=per_step` as today) -- **2x today's step
+count, not the 100-150x the ruled-out adaptive solver (candidate (b)) would have cost.**
+`src/omnilearned/sbi/toy/numerics.py`'s `TEST` dict updated accordingly; `REFERENCE` bumped to
+`rk4-256, grid_power=4.0, 16 probes` so it remains meaningfully more trustworthy than the new
+`TEST` (not re-validated against an even-higher reference -- today's A/B/C/D progression
+already gives strong, independent confidence in the `grid_power=4.0`/`nsteps=128` combination
+specifically). `tests/sbi/test_numerics_context.py` still passes (7/7) -- those tests use
+their own explicit option dicts, not the module-level `TEST`/`REFERENCE` constants.
+
+**Not changed, deliberately**: `LikelihoodOptions`'s own dataclass defaults
+(`solver="rk4", nsteps=64, grid_power=1.0`). No project TOML config currently sets a
+`[likelihood]` section (`fit.py`'s `LikelihoodOptions.from_dict(cfg.get("likelihood", {}))`
+would silently fall through to these bare defaults otherwise), and the dataclass default
+solver is `rk4`, not `midpoint` -- an rk4+grading combination has not been separately
+validated here, so changing the fallback silently would be an uncontrolled, broader change
+than what was actually tested. **Any real fit going forward should set
+`[likelihood]` explicitly** in its own TOML config:
+```
+[likelihood]
+solver = "midpoint"
+nsteps = 128
+grid_power = 4.0
+divergence = "hutchinson"
+num_probes = 8
+probe = "rademacher"
+probe_schedule = "per_step"
+```
+P6 can proceed once a real fit config does this (see `docs/RESTART_JEWEL_V3.md`'s NEXT
+ACTION). Data: `$JEST_NLE_ROOT/scratch/numerics_gate_{reference_gp4_n128_p32,testC_gp3_n128,
+testD_gp4_n128}_f64.json`.

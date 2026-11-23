@@ -10,7 +10,8 @@ Brief: `docs/PLAN_JEWEL_V3.md`. Format: `docs/FORMAT_JEWEL_V3.md`. Log: `FINDING
 ## Current state
 
 ```
-PHASE:        P2, P3, P4's gate.py part, P5 all done (2026-11-05). P4's gate: checkpoint s0
+PHASE:        P2, P3, P4's gate.py part, P5 all done (2026-11-22, P5 resolved -- see NEXT
+                ACTION's end for the final fix/config). P4's gate: checkpoint s0
                 (sha 7ce2e63d5504), all 128 fidelity points, --redraw. Family-wise result:
                 **decisive fail** (19/128 FAIL at alpha/S=3.91e-04). Root-caused in the
                 reports repo (`reports/m3-surrogate-fidelity/.../root_cause.html`) to the
@@ -124,21 +125,39 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               cancellation** (b: +3.04x, T_ref: +2.84x, tau_init: +1.87x, diagonal: +2.56x).
               The t=0 divergence-*integrand* spike itself (raw per-step trajectory data) is
               unaffected by this correction -- only the delta-only ensemble numbers and the
-              "b is a numerical artifact" interpretation are superseded. See FINDINGS
-              "CORRECTION: ... numerics.py gate shows all 4 directions improve consistently"
-              (2026-11-21) for the full writeup, root cause, and a lesson for future P5 work
-              (validate custom ensemble diagnostics against `numerics.py`'s formal gate before
-              drawing conclusions). **Not yet done, deliberately**: updating `numerics.py`'s
-              `TEST`/`REFERENCE` dicts or `LikelihoodOptions`' production defaults to
-              `grid_power=3.0` (or similar) -- the correction strengthens rather than weakens
-              this case, but the decision is still open.
+              "b is a numerical artifact" interpretation are superseded.
+              **(2026-11-22) P5 RESOLVED: formal `numerics.py` gate now PASSES.** Built a
+              high-fidelity REFERENCE (`midpoint-128, grid_power=4.0`, 32 probes) and ran the
+              formal `evaluate()` (n=1000, 3 seeds, float64, `LIMIT=0.5`) against four
+              candidates: today's production (`midpoint-64, grid_power=1.0`) **FAILS by
+              11-85 units**; the graded grid at the same cost (`grid_power=3.0`) FAILS but
+              is 15-16x closer (1.3-5.8); doubling steps at the same grading
+              (`midpoint-128, grid_power=3.0`) closes most of the rest (0.27-1.05, 2/4 pairs
+              now pass); **`midpoint-128, grid_power=4.0` PASSES cleanly on all 4 pairs
+              (0.02-0.36)** -- 2x today's step count, not the 100-150x the ruled-out adaptive
+              solver would have cost. `src/omnilearned/sbi/toy/numerics.py`'s `TEST`/
+              `REFERENCE` dicts updated accordingly (`TEST` = the validated
+              midpoint-128/grid_power=4.0 config; `REFERENCE` bumped to rk4-256/grid_power=4.0
+              so it stays meaningfully ahead of `TEST`). `LikelihoodOptions`'s own dataclass
+              defaults deliberately NOT changed (its default solver is `rk4`, not `midpoint`,
+              an rk4+grading combination was not separately validated, and no project TOML
+              config currently sets `[likelihood]` -- changing the bare fallback would be an
+              uncontrolled, broader change than what was tested). **A real fit going forward
+              must set `[likelihood]` explicitly**:
+              `solver="midpoint", nsteps=128, grid_power=4.0, divergence="hutchinson",
+              num_probes=8, probe="rademacher", probe_schedule="per_step"`. See FINDINGS "P5
+              formal gate: midpoint-128/grid_power=4.0 PASSES..." (2026-11-22) for the full
+              A/B/C/D table and data provenance.
               `scripts/p5_trajectory_diagnostic.py` reproduces the per-jet check on any
               jet/theta; `scripts/p5_ensemble_spike_sensitivity.py` reproduces the original
               (grid_power=1.0) ensemble-scale check; `scripts/p5_graded_grid_validation.py`
-              reproduces the graded-grid comparison. Only after `numerics.py`'s
-              `TEST`/`REFERENCE` or `LikelihoodOptions` defaults are updated should P6
-              proceed. ptbins.py (the P4 followup, 20-500 GeV window) was deprioritized in
-              favor of P5 per the user's direction and was not run this session; its fix is
+              reproduces the graded-grid comparison (note: both scripts measure the
+              divergence-integral-only "delta-only" proxy, superseded by the formal gate
+              above for drawing conclusions -- useful only for the raw t=0 spike shape, not
+              ensemble log-likelihood sensitivity). P5 is resolved; **P6 can proceed** once
+              its fit config sets `[likelihood]` as above. ptbins.py (the P4 followup, 20-500
+              GeV window) was deprioritized in favor of P5 per the user's direction and was
+              not run this session; its fix is
               in FINDINGS/test_ptbins.py but still uncommitted as of the last P4 snapshot
               (c9ed27f) -- revisit if/when useful again, not urgent.
 RUNNING:      nothing
@@ -170,7 +189,8 @@ SNAPSHOT:     c9ed27f is the latest committed (FlowSurrogate.sample jet_pt fix).
               scripts/p5_prepare_observations.py) are committed on top of it as of this
               entry -- cut a fresh snapshot before any future batch (sbatch, not interactive
               srun) job that needs them.
-BLOCKED ON:   user decision on the P5 solver discrepancy (see NEXT ACTION) before P6 can
+BLOCKED ON:   nothing -- P5 resolved (2026-11-22, see NEXT ACTION): set
+              `[likelihood]` (midpoint-128, grid_power=4.0) in P6's own fit config, then
               proceed
 
 SIDE WORK (2026-11-07/08, does not unblock P6/P7 -- uses ad hoc nsteps=256/float64 scripts,
@@ -251,7 +271,7 @@ since P7 itself has not started.
 | P2 | generation (train/val/fidelity/test) **with event stores** | **done** |
 | P3 | training (jet_pT conditioning, no standardisation) | **done** (4 checkpoints) |
 | P4 | fidelity: gate + ptbins, weighted estimators | gate **done -- decisive fail, user accepted (core dR<0.4 fidelity is excellent)**; ptbins not pursued further |
-| P5 | NLE numerics (rule 6) | **candidate (a) graded grid implemented + validated via the formal `numerics.py` gate: all 4 directions improve ~1.9-3.0x, consistently (b's earlier "artifact" claim was wrong -- corrected 2026-11-21); production defaults not yet switched; blocks P6** |
+| P5 | NLE numerics (rule 6) | **RESOLVED (2026-11-22): `midpoint-128, grid_power=4.0` passes the formal `numerics.py` gate (0.02-0.36 vs. limit 0.5, all 4 pairs); `numerics.py`'s TEST/REFERENCE updated; a real fit must set `[likelihood]` explicitly** |
 | P6 | three-factor likelihood + Jacobian + scan | not started |
 | P7 | closure at the 4 withheld θ | not started |
 | P8 | composite-likelihood correction | not started |
