@@ -621,11 +621,14 @@ def _axes(spec):
 
 
 def acceptance_part(checkpoint, axes, n_samples, seed, nsteps, shard, num_shards, out, device="cuda",
-                    config=V2_CONFIG, log=print):
+                    config=V2_CONFIG, log=print, batch=1024):
     """Acceptance at the grid points ``shard::num_shards`` (same base seed everywhere: CRN).
 
     ``config`` is the sample configuration whose selection defines acceptance -- the toy's or
-    a JEWEL backend's; it must be the one the surrogate was trained for."""
+    a JEWEL backend's; it must be the one the surrogate was trained for. ``batch``: passed to
+    ``sur.sample()``; some design points draw a rare, very-high-multiplicity outlier that OOMs
+    the whole batch's O(width^2) attention even at the previously-hardcoded 1024 (same failure
+    mode as gate.py's trap 28) -- lower it (e.g. 128-256) for those points' shards."""
     from omnilearned.sbi.flow import FlowSurrogate
     from omnilearned.sbi.toy.selection import select_clouds
 
@@ -639,7 +642,7 @@ def acceptance_part(checkpoint, axes, n_samples, seed, nsteps, shard, num_shards
     acc_n = np.full((len(pts), width), -1, np.int64)
     for i in idx:
         x, m = sur.sample(pts[i], n_samples, None, seed=seed, nsteps=nsteps,
-                          candidate_names=list(PARAMETERS), batch=1024)
+                          candidate_names=list(PARAMETERS), batch=batch)
         ok, _, _ = select_clouds(x.astype(np.float64), sel, m)
         acc[i] = ok.mean()
         cnt = m.sum(1)
@@ -727,6 +730,9 @@ def main(argv=None):
     a1.add_argument("--config", default=str(V2_CONFIG),
                     help="sample config whose selection defines acceptance (toy or JEWEL)")
     a1.add_argument("--out", required=True)
+    a1.add_argument("--batch", type=int, default=1024,
+                    help="sur.sample()'s internal batch size; lower (e.g. 128-256) if a "
+                         "point's rare high-multiplicity outlier OOMs the whole batch")
     a2 = sub.add_parser("acceptance-merge")
     a2.add_argument("--parts", nargs="+", required=True)
     a2.add_argument("--out", required=True)
@@ -762,7 +768,7 @@ def main(argv=None):
                   "levels KS p", agg["levels_ks"]["ks_p"])
     elif a.cmd == "acceptance":
         acceptance_part(a.checkpoint, _axes(a.axis), a.n_samples, a.seed, a.nsteps, a.shard,
-                        a.num_shards, a.out, a.device, a.config)
+                        a.num_shards, a.out, a.device, a.config, batch=a.batch)
     else:
         acc = acceptance_merge(a.parts, a.out, a.per_n_out, a.n_knots)
         print(f"acceptance table {acc.shape}, range [{acc.min():.4f}, {acc.max():.4f}] -> {a.out}")
