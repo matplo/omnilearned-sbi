@@ -34,6 +34,7 @@ from omnilearned.sbi.likelihood import (
     log_prob,
     sample,
 )
+from omnilearned.sbi.jetpt import JetPtModel
 from omnilearned.sbi.multiplicity import (
     MULTIPLICITY_COLUMN,
     MultiplicityModel,
@@ -136,7 +137,7 @@ class FlowSurrogate:
     """A conditional generator O with everything needed to use it."""
 
     def __init__(self, model, base, transform, layout, metadata=None, device="cpu",
-                 multiplicity=None):
+                 multiplicity=None, jet_pt=None):
         self.model = model
         self.base = base
         self.transform = transform
@@ -146,6 +147,9 @@ class FlowSurrogate:
         self.multiplicity = multiplicity
         if multiplicity is not None:
             multiplicity.to(self.device)
+        self.jet_pt = jet_pt
+        if jet_pt is not None:
+            jet_pt.to(self.device)
 
     @property
     def uses_multiplicity_context(self):
@@ -186,6 +190,26 @@ class FlowSurrogate:
         out[:, (counts < 0) | (counts > self.multiplicity.max_n)] = -np.inf
         return out
 
+    def log_jet_pt(self, log_pt, candidates, candidate_names=None):
+        """log p(pT_J | theta) [M, len(log_pt)] for candidate rows (0 without a model).
+
+        Args:
+            log_pt: [N] or [M, N] observed log(pT_J/GeV) values.
+            candidates: [M, D] or [D] unknown parameter values.
+            candidate_names: order of candidates (default: layout.unknown).
+        """
+        candidates = np.atleast_2d(candidates)
+        log_pt = np.asarray(log_pt)
+        if self.jet_pt is None:
+            return np.zeros((candidates.shape[0], log_pt.size))
+        lay = self.jet_pt.layout
+        M, N = candidates.shape[0], log_pt.size
+        cond_np = lay.assemble(np.repeat(candidates, N, axis=0), candidate_names)
+        cond = torch.from_numpy(cond_np).to(self.device)
+        with torch.no_grad():
+            lp = self.jet_pt.log_prob(np.tile(log_pt.reshape(-1), M), cond)
+        return lp.double().cpu().numpy().reshape(M, N)
+
     @staticmethod
     def _trim(x, mask):
         m = np.asarray(mask, dtype=bool)
@@ -213,6 +237,9 @@ class FlowSurrogate:
         """
         x_phys, mask = self._trim(x_phys, mask)
         context, context_names = self._context(mask, context, None)
+        log_pt_obs = None
+        if self.jet_pt is not None and context is not None and context_names and "jet_pt" in context_names:
+            log_pt_obs = np.asarray(context)[:, context_names.index("jet_pt")]
         x = torch.as_tensor(np.asarray(x_phys), dtype=dtype)
         mask_t = torch.as_tensor(np.asarray(mask), dtype=torch.bool)
         u, logj = self.transform.forward(x.double(), mask_t)
@@ -266,6 +293,10 @@ class FlowSurrogate:
                                       context=mult_ctx, context_names=mult_ctx_names)
             diag["log_multiplicity"] = lm
             out = out + lm
+        if self.jet_pt is not None and log_pt_obs is not None:
+            lj = self.log_jet_pt(log_pt_obs, candidates, candidate_names)
+            diag["log_jet_pt"] = lj
+            out = out + lj
         return out, diag
 
     @ieee_float32()
@@ -274,6 +305,9 @@ class FlowSurrogate:
         """Log density of event i at its own parameter row ``rows[i]`` -> [N]."""
         x_phys, mask = self._trim(x_phys, mask)
         context, context_names = self._context(mask, context, None)
+        log_pt_obs = None
+        if self.jet_pt is not None and context is not None and context_names and "jet_pt" in context_names:
+            log_pt_obs = np.asarray(context)[:, context_names.index("jet_pt")]
         x = torch.as_tensor(np.asarray(x_phys), dtype=torch.float32)
         mask_t = torch.as_tensor(np.asarray(mask), dtype=torch.bool)
         u, logj = self.transform.forward(x.double(), mask_t)
@@ -306,6 +340,12 @@ class FlowSurrogate:
                            for i in range(len(counts))])
             diag["log_multiplicity"] = lm
             out = out + lm
+        if self.jet_pt is not None and log_pt_obs is not None:
+            rows = np.atleast_2d(rows)
+            lj = np.array([self.log_jet_pt(log_pt_obs[i:i + 1], rows[i:i + 1], candidate_names)[0, 0]
+                          for i in range(len(log_pt_obs))])
+            diag["log_jet_pt"] = lj
+            out = out + lj
         return out, diag
 
     # ---- generation -----------------------------------------------------
@@ -340,6 +380,14 @@ class FlowSurrogate:
         if jet_pt is not None:
             jp = np.broadcast_to(np.asarray(jet_pt, np.float64).reshape(-1) if np.ndim(jet_pt)
                                  else np.full(1, float(jet_pt)), (n,)).copy()
+        if jp is None and self.jet_pt is not None:
+            needs_jp = ("jet_pt" in self.layout.known
+                       or (self.multiplicity is not None and "jet_pt" in self.multiplicity.layout.known))
+            if needs_jp:
+                jp_cond = torch.from_numpy(
+                    self.jet_pt.layout.assemble(np.repeat(cand, n, 0), candidate_names)
+                ).to(self.device)
+                jp = np.exp(self.jet_pt.sample(jp_cond, gen).double().cpu().numpy())
         def _need_jet_pt(known):
             return "jet_pt" in known and jp is None
         if num_particles is None:
@@ -419,6 +467,7 @@ class FlowSurrogate:
             "condition_layout": self.layout.to_dict(),
             "metadata": self.metadata,
             "multiplicity": None if self.multiplicity is None else self.multiplicity.state(),
+            "jet_pt": None if self.jet_pt is None else self.jet_pt.state(),
         }
 
     def save(self, path):
@@ -453,6 +502,8 @@ class FlowSurrogate:
             device,
             multiplicity=(None if state.get("multiplicity") is None
                           else MultiplicityModel.from_state(state["multiplicity"], device)),
+            jet_pt=(None if state.get("jet_pt") is None
+                   else JetPtModel.from_state(state["jet_pt"], device)),
         )
 
 
