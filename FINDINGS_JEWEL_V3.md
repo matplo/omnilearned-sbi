@@ -1827,19 +1827,25 @@ worth recording:
   (hardcoded at 1024) is now a parameter, exposed as `--batch` on the CLI (commit `f9565f3`,
   default unchanged) so an affected shard can be rerun with a smaller batch (128-512) without
   touching the rest of the grid.
-- **A seemingly-stuck shard that was actually node contention, not a real per-point cost.**
-  After fixing the OOM, shard 3 still would not finish within a 4h interactive allocation
-  across several attempts, at both the default batch and reduced batches (256, 512) -- one
-  attempt's very first point ran for 1.5+ hours at sustained 100% GPU utilization with no
-  crash. Direct investigation (not more blind batch-size guessing, per explicit user
-  direction) found: the multiplicity model actually predicts *lower* multiplicity at that
-  point (mean N~11) than at an arbitrary "normal" point (mean N~20) or the T_ref=0.9 OOM point
-  (mean N~23-28) -- ruling out a genuine high-multiplicity cost. Timing `sur.sample()` +
-  `select_clouds()` for the exact same point and `n_samples=8192` *outside* the `srun`
-  allocation (a different, non-allocated GPU context) completed in **~2 minutes**, not
-  1.5+ hours. **Conclusion: the slowness was node-specific (a degraded/contended node despite
-  an exclusive `--gpus 4 -N 1` allocation), not a property of the design point.** Retrying on
-  a fresh allocation.
+- **A seemingly-stuck shard that was actually a mis-measurement, not a real anomaly.** After
+  fixing the OOM, shard 3 still would not finish within a 4h interactive allocation across
+  several attempts, at both the default batch and reduced batches (256, 512) -- one attempt's
+  very first point ran for 1.5+ hours at sustained 100% GPU utilization with no crash.
+  Investigation first ruled out a genuine high-multiplicity cost: the multiplicity model
+  actually predicts *lower* N at that point (mean N~11) than an arbitrary "normal" point
+  (mean N~20) or the T_ref=0.9 OOM point (mean N~23-28). A quick diagnostic then timed
+  `sur.sample()` + `select_clouds()` for the exact same point and `n_samples=8192` directly
+  in a `Bash` tool call (no `srun`) and got **~2 minutes**, which was taken as evidence of
+  node contention on the `srun`-allocated compute nodes -- **wrong**: that diagnostic ran on
+  the Perlmutter *login node's own GPU* (`hostname` -> `login15`, an A100 that's lightly used
+  since almost nobody runs real compute there), not a representative `-q interactive` compute
+  node. **The real, representative rate is the one shards 0-2 already demonstrated by
+  actually completing: ~3-3.5 min/point, ~3.5-4h for a full 72-point shard.** Shard 3 was
+  never anomalous -- every retry so far was simply budgeted too short (2h, after the
+  misleading 2-minute benchmark) or killed before its legitimate ~4h need. **Lesson: a quick
+  ad hoc timing check run directly in a tool call, without checking what node/GPU it actually
+  landed on, is not a valid comparison against an `srun`-allocated compute job -- `hostname`
+  first.** Retrying shard 3 with the full 4h budget that worked for shards 0-2.
 - Shards 0-2 (216/288 points) are done and saved; shard 0-2's coverage is well-distributed
   across the *entire* box (interleaved `shard::num_shards` sharding, not a contiguous
   sub-region), so even the incomplete table already has broad coverage. **Not yet merged**

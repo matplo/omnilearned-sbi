@@ -200,19 +200,26 @@ P6 PROGRESS:  **(2026-11-22 to 2026-11-25) Started. Part A and Part B done and c
               region) are done, saved at
               `$JEST_NLE_ROOT/runs/jewel_v3/p6_acceptance/v3_set_d256_L6_400k_s0_with_jetpt_v2_remaining/part_{0,1,2}.npz`.
               Shard 3 repeatedly failed to finish within a 4h interactive allocation across
-              several attempts (one genuine CUDA OOM on a point near the T_ref=0.9 edge --
+              several attempts: one genuine CUDA OOM on a point near the T_ref=0.9 edge --
               fixed by exposing `acceptance_part`'s hitherto-hardcoded `batch=1024` as a
-              `--batch` CLI arg, commit `f9565f3` -- and several much-longer-than-expected
-              runs on what turned out NOT to be a genuinely expensive design point: a direct
-              timing test of the exact same computation outside the `srun` allocation
-              completed in ~2 minutes, not 1.5+ hours, pointing at node-specific contention/a
-              degraded node rather than a real per-point cost). Currently retrying shard 3 on
-              a fresh allocation; **not yet merged into a final `acceptance.npz`**
-              (`acceptance_merge` requires all cells non-NaN).
+              `--batch` CLI arg, commit `f9565f3` -- and then several apparently-stuck runs
+              that turned out to just be mis-measured, not actually slow: a quick diagnostic
+              timed the exact computation at ~2 min, but that ran on the Perlmutter *login*
+              node's own lightly-used A100 (`hostname` -> `login15`), not a representative
+              `-q interactive` compute node -- an apples-to-oranges comparison, not evidence
+              of contention. The real, representative per-point rate is the one already seen
+              from shards 0-2 actually completing: ~3-3.5 min/point, ~3.5-4h for a full
+              72-point shard -- i.e. shard 3 was never anomalous, every retry so far was
+              simply budgeted too short (2h) or killed before finishing. Retrying shard 3
+              with the full 4h budget that worked for shards 0-2; **not yet merged into a
+              final `acceptance.npz`** (`acceptance_merge` requires all cells non-NaN).
 RUNNING:      scripts/p6_train_jetpt.py and the acceptance-table shards are done except
-              shard 3, which is retrying on a fresh interactive allocation as of this entry
+              shard 3, which is retrying on a 4h interactive allocation as of this entry
               (see P6 PROGRESS above) -- check `squeue -u $USER` and
               `$JEST_NLE_ROOT/runs/jewel_v3/p6_acceptance/v3_set_d256_L6_400k_s0_with_jetpt_v2_remaining/part_3.npz`.
+              **Do not benchmark this checkpoint's cost from a login node (login15 has its
+              own lightly-loaded GPU, not representative of the interactive/regular compute
+              pool) -- compare against another `srun`-allocated run instead.**
 DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
               + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
               four splits under a `splits` key -- see FORMAT doc §4). As of 2026-11-10,
