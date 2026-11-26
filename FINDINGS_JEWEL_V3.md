@@ -1751,3 +1751,101 @@ probe_schedule = "per_step"
 P6 can proceed once a real fit config does this (see `docs/RESTART_JEWEL_V3.md`'s NEXT
 ACTION). Data: `$JEST_NLE_ROOT/scratch/numerics_gate_{reference_gp4_n128_p32,testC_gp3_n128,
 testD_gp4_n128}_f64.json`.
+
+## P6 started: JetPtModel wired and trained (Parts A/B done); acceptance table 75% done (Part C); jet-axis Jacobian still a separate open task (2026-11-22 to 2026-11-25)
+
+P6 ("likelihood and scan", `docs/PLAN_JEWEL_V3.md`) builds the three-factor v3 likelihood
+`log p(pT_J|theta) + log p(N|pT_J,theta) + log q(shape|pT_J,N,theta) + log|J| - log
+Pr_q(S|theta)`. It decomposes into three largely independent pieces of very different
+readiness, discovered by exploration before starting: (1) `p(pT_J|theta)` already existed as
+a fully-implemented, fully-tested, but never-wired-in model (`jetpt.py`'s own module
+docstring: "the jet pT is a known observation... we model it as a conditional mixture of
+Gaussians"; `flow.py`'s docstring said outright "there is no p(pT_J|theta) model yet (reserved
+for P6)"); (2) `-log Pr_q(S|theta)` is already fully wired end-to-end as the generic
+`log_norm_fn` hook through `closure.py -> fit.run_fit -> scan.joint_scan/support_scan/
+ridge.ridge_scan` -- what's missing is just a v3-specific table, computable today with
+existing tooling; (3) the jet-axis Jacobian is a genuine open derivation (the axis is a
+self-referential function of the same constituents whose relative coordinates are reported
+against it, making the naive "N independent relative-coordinate pairs" representation
+rank-deficient) -- **per explicit user direction, this is out of scope for this pass** and
+will be designed separately, not guessed at.
+
+**Part A: wire `JetPtModel` into `FlowSurrogate` -- done.** Mirrored the existing
+`multiplicity` wiring in `flow.py` exactly: `__init__`/`state()`/`load()` round-trip, new
+`log_jet_pt()` accessor (same pattern as `log_multiplicity()`), call sites in `log_prob()`/
+`log_prob_paired()` that add `log p(pT_J|theta)` using the observed jet_pt value already
+present as known context, and `sample()` now generates jet_pt via
+`self.jet_pt.sample(theta)` when the caller doesn't supply one (falls back to the exact prior
+required-kwarg behavior when `self.jet_pt is None` -- zero regression for checkpoints/callers
+without a jet_pt sub-model). New `tests/sbi/test_flow_jetpt.py` (8 tests: round-trip,
+`log_prob` contribution, sample-time generation, explicit override, backward compatibility)
+all pass; full `tests/sbi` suite 267 passed/7 skipped (zero regression). Commit `bec97fa`.
+
+**Part B: train `JetPtModel` on real v3 data -- done.** `MultiplicityModel` is trained
+*inline* during the main flow's training run (`toy/train.py`), but `JetPtModel` needs none of
+the flow/velocity net's weights, only `(theta, jet_pt, weight)` per event -- retraining the
+whole flow would be unnecessary and an uncontrolled change to the production checkpoint. New
+`scripts/p6_train_jetpt.py` reads the exact production train/val split (same `--data-dir`/
+`--config` recorded in `v3_set_d256_L6_400k_s0`'s own `run.json`) via a lightweight `h5py`
+reader that pulls only `theta`/`global`/`weight` -- `toy.train`'s own
+`shards_for_config`/`read_v3_shards` always loads the full constituent-cloud arrays too (tens
+of GB for ~10M events, even though none of it is needed) and OOM-killed the first attempt.
+Trained on the full 10,705,283 train / 653,086 val events, `weight_mode=loss` (matching the
+production flow/multiplicity training's hard-pT-bias correction), 4000 steps, ~6 min wall
+time. Loads the existing checkpoint, attaches the new `jet_pt` sub-model, saves to a **new**
+checkpoint directory -- the original is never modified.
+`$JEST_NLE_ROOT/runs/jewel_v3/p3_train/v3_set_d256_L6_400k_s0_with_jetpt/` (not committed,
+per AGENTS.md -- checkpoints are data). **Sanity check**: sampled `log(pT_J)` mean/std at 5
+random design points matches the real weighted empirical distribution closely (differences
+~0.01-0.02 in both mean and std, well within noise for ~5000 events/point) -- not an obviously
+broken fit. Commit `856ab45`.
+
+**Part C: recompute the v3 acceptance table -- 75% done (3/4 shards), still in progress.** No
+new plumbing needed; this is purely running the existing, already-config-aware
+`closure.acceptance_part`/`acceptance_merge` (`shell/nle/fid_acceptance.sbatch`) against the
+v3 selection (`configs/jewel-2.6.0-cs-v3.toml`). Several operational lessons from this part,
+worth recording:
+
+- **Grid-size arithmetic error, caught late.** First attempt used `--axis 0:11:12 0.1:0.9:9
+  0.2:1.0:9` -- the full production design grid -- which is 12x9x9 = **972** points, not the
+  108 initially (wrongly) estimated. Corrected to `0:11:8 0.1:0.9:6 0.2:1.0:6` = 288 points,
+  matching the scale of this project's own documented precedent for this exact job type
+  (`shell/nle/fid_acceptance.sbatch`'s own example axes, 96 points, for a narrower box).
+  **Always sanity-check a grid's total point count explicitly (multiply it out) before
+  estimating a job's cost from it.**
+- **`acceptance_part` has no incremental checkpointing within a shard** -- it writes one
+  `np.savez` at the very end, after every point in that shard's `idx` subset. A shard killed
+  by its walltime cap (or crashing partway) loses 100% of that shard's progress, even if most
+  points already printed their per-point `acceptance [...]` log line (the log survives, the
+  `.npz` does not). Recovery used `--shard k --num-shards 4` to target only the missing
+  shard(s), reusing already-saved `part_*.npz` files for the ones that did finish --
+  `acceptance_part` doesn't need to be re-run for shards that already succeeded.
+- **A genuine CUDA OOM near the T_ref=0.9 edge** (the same known edge-instability region as
+  mitigation (3)'s root-cause analysis): a rare, very-high-multiplicity outlier within one
+  `sur.sample()` batch forced that batch's `O(width^2)` attention to a width needing >20GB --
+  same failure mode as `gate.py`'s trap 26. `acceptance_part`'s internal sample `batch`
+  (hardcoded at 1024) is now a parameter, exposed as `--batch` on the CLI (commit `f9565f3`,
+  default unchanged) so an affected shard can be rerun with a smaller batch (128-512) without
+  touching the rest of the grid.
+- **A seemingly-stuck shard that was actually node contention, not a real per-point cost.**
+  After fixing the OOM, shard 3 still would not finish within a 4h interactive allocation
+  across several attempts, at both the default batch and reduced batches (256, 512) -- one
+  attempt's very first point ran for 1.5+ hours at sustained 100% GPU utilization with no
+  crash. Direct investigation (not more blind batch-size guessing, per explicit user
+  direction) found: the multiplicity model actually predicts *lower* multiplicity at that
+  point (mean N~11) than at an arbitrary "normal" point (mean N~20) or the T_ref=0.9 OOM point
+  (mean N~23-28) -- ruling out a genuine high-multiplicity cost. Timing `sur.sample()` +
+  `select_clouds()` for the exact same point and `n_samples=8192` *outside* the `srun`
+  allocation (a different, non-allocated GPU context) completed in **~2 minutes**, not
+  1.5+ hours. **Conclusion: the slowness was node-specific (a degraded/contended node despite
+  an exclusive `--gpus 4 -N 1` allocation), not a property of the design point.** Retrying on
+  a fresh allocation.
+- Shards 0-2 (216/288 points) are done and saved; shard 0-2's coverage is well-distributed
+  across the *entire* box (interleaved `shard::num_shards` sharding, not a contiguous
+  sub-region), so even the incomplete table already has broad coverage. **Not yet merged**
+  into a final `acceptance.npz`/`acceptance_per_n.npz` -- `acceptance_merge` requires every
+  cell non-NaN and refuses otherwise.
+
+**Not done, deliberately**: the jet-axis Jacobian (Phase 2, separate task, per explicit user
+direction); merging the acceptance table and wiring a real fit config's `[likelihood]`/
+acceptance-table settings to actually exercise the three-factor likelihood end-to-end.

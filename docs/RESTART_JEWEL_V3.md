@@ -11,7 +11,9 @@ Brief: `docs/PLAN_JEWEL_V3.md`. Format: `docs/FORMAT_JEWEL_V3.md`. Log: `FINDING
 
 ```
 PHASE:        P2, P3, P4's gate.py part, P5 all done (2026-11-22, P5 resolved -- see NEXT
-                ACTION's end for the final fix/config). P4's gate: checkpoint s0
+                ACTION's end for the final fix/config). **P6 started 2026-11-22/25 -- see
+                "P6 PROGRESS" below for current state (Parts A/B done, Part C 75% done).**
+                P4's gate: checkpoint s0
                 (sha 7ce2e63d5504), all 128 fidelity points, --redraw. Family-wise result:
                 **decisive fail** (19/128 FAIL at alpha/S=3.91e-04). Root-caused in the
                 reports repo (`reports/m3-surrogate-fidelity/.../root_cause.html`) to the
@@ -160,7 +162,57 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               not run this session; its fix is
               in FINDINGS/test_ptbins.py but still uncommitted as of the last P4 snapshot
               (c9ed27f) -- revisit if/when useful again, not urgent.
-RUNNING:      nothing
+P6 PROGRESS:  **(2026-11-22 to 2026-11-25) Started. Part A and Part B done and committed;
+              Part C in progress (75% done); the jet-axis Jacobian is a separate, not-yet-
+              started design task per the user's explicit direction.**
+              **Part A -- wire `JetPtModel` (`log p(pT_J|theta)`) into `FlowSurrogate`**: done.
+              `JetPtModel` (`src/omnilearned/sbi/jetpt.py`) already existed from earlier Track
+              B work but was never wired in anywhere (`flow.py`'s own docstring said so
+              explicitly). Mirrored the existing `multiplicity` wiring exactly in `flow.py`:
+              `__init__`/`state()`/`load()` round-trip, new `log_jet_pt()` accessor, call
+              sites in `log_prob()`/`log_prob_paired()`, and `sample()` now generates jet_pt
+              from `self.jet_pt.sample(theta)` when not supplied (falls back to the prior
+              required-kwarg behavior when `jet_pt=None` -- zero regression for existing
+              checkpoints/callers). New `tests/sbi/test_flow_jetpt.py` (8/8 pass); full
+              `tests/sbi` suite 267 passed/7 skipped (zero regression). Commit `bec97fa`.
+              **Part B -- train `JetPtModel` on real v3 data**: done. New
+              `scripts/p6_train_jetpt.py` trains on the full production train/val split
+              (10,705,283 / 653,086 events, weight_mode=loss matching the flow/multiplicity
+              training) by reading only `(theta, global, weight)` directly via `h5py` --
+              `toy.train`'s own `shards_for_config`/`read_v3_shards` always loads the full
+              constituent-cloud arrays too (tens of GB for ~10M events) and OOM-killed on
+              first attempt. Does NOT retrain the flow -- loads the existing checkpoint,
+              attaches the new sub-model, saves to a NEW checkpoint
+              (`$JEST_NLE_ROOT/runs/jewel_v3/p3_train/v3_set_d256_L6_400k_s0_with_jetpt/`,
+              not committed -- it's data). Sanity-checked: sampled log(pT_J) mean/std at 5
+              random design points matches the real weighted empirical distribution closely
+              (within ~0.01-0.02). Commit `856ab45`.
+              **Part C -- recompute the v3 acceptance table `Pr_q(S|theta)`**: in progress,
+              no new plumbing needed (`-log Pr_q(S|theta)` is already wired end-to-end as
+              `log_norm_fn` through `closure.py` -> `fit.run_fit` ->
+              `scan.joint_scan`/`support_scan`/`ridge.ridge_scan`); this is purely running
+              the existing, already-config-aware `closure.acceptance_part`/`acceptance_merge`
+              CLI (`shell/nle/fid_acceptance.sbatch`) against the v3 selection
+              (`configs/jewel-2.6.0-cs-v3.toml`). Axis grid corrected to `0:11:8 0.1:0.9:6
+              0.2:1.0:6` (288 points) after a first attempt mistakenly used the full design
+              grid (972 points, ~10x too many, didn't finish in 4h). 3 of 4 interleaved
+              shards (216/288 points, well-distributed across the whole box, not a localized
+              region) are done, saved at
+              `$JEST_NLE_ROOT/runs/jewel_v3/p6_acceptance/v3_set_d256_L6_400k_s0_with_jetpt_v2_remaining/part_{0,1,2}.npz`.
+              Shard 3 repeatedly failed to finish within a 4h interactive allocation across
+              several attempts (one genuine CUDA OOM on a point near the T_ref=0.9 edge --
+              fixed by exposing `acceptance_part`'s hitherto-hardcoded `batch=1024` as a
+              `--batch` CLI arg, commit `f9565f3` -- and several much-longer-than-expected
+              runs on what turned out NOT to be a genuinely expensive design point: a direct
+              timing test of the exact same computation outside the `srun` allocation
+              completed in ~2 minutes, not 1.5+ hours, pointing at node-specific contention/a
+              degraded node rather than a real per-point cost). Currently retrying shard 3 on
+              a fresh allocation; **not yet merged into a final `acceptance.npz`**
+              (`acceptance_merge` requires all cells non-NaN).
+RUNNING:      scripts/p6_train_jetpt.py and the acceptance-table shards are done except
+              shard 3, which is retrying on a fresh interactive allocation as of this entry
+              (see P6 PROGRESS above) -- check `squeue -u $USER` and
+              `$JEST_NLE_ROOT/runs/jewel_v3/p6_acceptance/v3_set_d256_L6_400k_s0_with_jetpt_v2_remaining/part_3.npz`.
 DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
               + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
               four splits under a `splits` key -- see FORMAT doc §4). As of 2026-11-10,
@@ -169,7 +221,12 @@ DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (pe
               mitigation (3) below); merged/ (512 points, production) is untouched.
 CHECKPOINTS:  $JEST_NLE_ROOT/runs/jewel_v3/p3_train/{v3_set_d256_L6_400k_s0,_s1,_s2,
               v3_set_d256_L6_200k_ctl,v3_set_d256_L6_400k_s0_hightref_stratified,
-              v3_set_d256_L6_400k_s0_hightref}/checkpoint.pt (+ run.json, resume.pt).
+              v3_set_d256_L6_400k_s0_hightref,v3_set_d256_L6_400k_s0_with_jetpt}/checkpoint.pt
+              (+ run.json, resume.pt). **v3_set_d256_L6_400k_s0_with_jetpt** (2026-11-25, P6
+              Part B) = `v3_set_d256_L6_400k_s0` + a trained `jet_pt` sub-model, otherwise
+              identical (same flow/multiplicity weights) -- used for P6 Part C's acceptance
+              table; not a replacement for the hightref_stratified mitigation below, which
+              remains the P4-gate working checkpoint.
               **Working checkpoint as of 2026-11-18: v3_set_d256_L6_400k_s0_hightref_stratified**
               (sha 3ea5328a5c86) -- adopted over production s0, see P4 MITIGATIONS below.
 GATE RESULTS: $JEST_NLE_ROOT/runs/jewel_v3/p4_gate/s0/point_NNNNN.json (all 128, checkpoint
@@ -184,14 +241,18 @@ NUMERICS:     $JEST_NLE_ROOT/runs/jewel_v3/p5_numerics/ (p5_obs.h5 -- 1000 real 
               CLI, since each part recorded only one side's options at the new settings and
               the other at the module default -- merge's consistency check correctly refuses
               to combine them; see FINDINGS)
-SNAPSHOT:     c9ed27f is the latest committed (FlowSurrogate.sample jet_pt fix). P5's fixes
-              (numerics.py context forwarding, tests/sbi/test_numerics_context.py,
-              scripts/p5_prepare_observations.py) are committed on top of it as of this
-              entry -- cut a fresh snapshot before any future batch (sbatch, not interactive
-              srun) job that needs them.
-BLOCKED ON:   nothing -- P5 resolved (2026-11-22, see NEXT ACTION): set
-              `[likelihood]` (midpoint-128, grid_power=4.0) in P6's own fit config, then
-              proceed
+SNAPSHOT:     `f9565f3` is the latest committed (closure.py's `acceptance_part` `--batch`
+              fix) as of this entry -- a snapshot of it already exists at
+              `$JEST_NLE_ROOT/src_snapshots/f9565f3176fe2c10315f81773c4c7c7a7ee2d17d` (used
+              for P6 Part C's acceptance-table batch jobs). Cut a fresh one
+              (`shell/nle/snapshot.sh HEAD`) before any future batch job if more commits land
+              on top of this.
+BLOCKED ON:   nothing structurally -- P6 Part C just needs shard 3 of the acceptance table
+              to finish (see P6 PROGRESS/RUNNING above); Parts A/B are done. Once Part C
+              merges cleanly, set `[likelihood]` (midpoint-128, grid_power=4.0, per P5) and
+              the new acceptance table in a real fit config to actually exercise the
+              three-factor likelihood -- the jet-axis Jacobian (separate design task, not
+              started) is the one piece still missing from that likelihood's correctness.
 
 SIDE WORK (2026-11-07/08, does not unblock P6/P7 -- uses ad hoc nsteps=256/float64 scripts,
 not the production `LikelihoodOptions` defaults, which are UNCHANGED): built the
@@ -272,7 +333,7 @@ since P7 itself has not started.
 | P3 | training (jet_pT conditioning, no standardisation) | **done** (4 checkpoints) |
 | P4 | fidelity: gate + ptbins, weighted estimators | gate **done -- decisive fail, user accepted (core dR<0.4 fidelity is excellent)**; ptbins not pursued further |
 | P5 | NLE numerics (rule 6) | **RESOLVED (2026-11-22): `midpoint-128, grid_power=4.0` passes the formal `numerics.py` gate (0.02-0.36 vs. limit 0.5, all 4 pairs); `numerics.py`'s TEST/REFERENCE updated; a real fit must set `[likelihood]` explicitly** |
-| P6 | three-factor likelihood + Jacobian + scan | not started |
+| P6 | three-factor likelihood + Jacobian + scan | **IN PROGRESS (2026-11-25): Part A (JetPtModel wiring) and Part B (training) done; Part C (acceptance table) 75% done, shard 3 retrying; jet-axis Jacobian not started (separate design task)** |
 | P7 | closure at the 4 withheld θ | not started |
 | P8 | composite-likelihood correction | not started |
 | P9 | final HTML report | not started |
