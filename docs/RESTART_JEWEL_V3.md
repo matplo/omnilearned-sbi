@@ -162,9 +162,9 @@ NEXT ACTION:  **This blocks P6 (likelihood/scan) and P7 (closure) pending a user
               not run this session; its fix is
               in FINDINGS/test_ptbins.py but still uncommitted as of the last P4 snapshot
               (c9ed27f) -- revisit if/when useful again, not urgent.
-P6 PROGRESS:  **(2026-11-22 to 2026-11-25) Started. Part A and Part B done and committed;
-              Part C in progress (75% done); the jet-axis Jacobian is a separate, not-yet-
-              started design task per the user's explicit direction.**
+P6 PROGRESS:  **(2026-11-22 to 2026-11-25) Parts A, B and C all done.** The jet-axis Jacobian
+              is a separate, not-yet-started design task per the user's explicit direction --
+              the only piece of the three-factor likelihood still missing.
               **Part A -- wire `JetPtModel` (`log p(pT_J|theta)`) into `FlowSurrogate`**: done.
               `JetPtModel` (`src/omnilearned/sbi/jetpt.py`) already existed from earlier Track
               B work but was never wired in anywhere (`flow.py`'s own docstring said so
@@ -187,39 +187,25 @@ P6 PROGRESS:  **(2026-11-22 to 2026-11-25) Started. Part A and Part B done and c
               not committed -- it's data). Sanity-checked: sampled log(pT_J) mean/std at 5
               random design points matches the real weighted empirical distribution closely
               (within ~0.01-0.02). Commit `856ab45`.
-              **Part C -- recompute the v3 acceptance table `Pr_q(S|theta)`**: in progress,
-              no new plumbing needed (`-log Pr_q(S|theta)` is already wired end-to-end as
+              **Part C -- recompute the v3 acceptance table `Pr_q(S|theta)`**: done.
+              No new plumbing needed (`-log Pr_q(S|theta)` is already wired end-to-end as
               `log_norm_fn` through `closure.py` -> `fit.run_fit` ->
-              `scan.joint_scan`/`support_scan`/`ridge.ridge_scan`); this is purely running
+              `scan.joint_scan`/`support_scan`/`ridge.ridge_scan`); this was purely running
               the existing, already-config-aware `closure.acceptance_part`/`acceptance_merge`
               CLI (`shell/nle/fid_acceptance.sbatch`) against the v3 selection
               (`configs/jewel-2.6.0-cs-v3.toml`). Axis grid corrected to `0:11:8 0.1:0.9:6
               0.2:1.0:6` (288 points) after a first attempt mistakenly used the full design
-              grid (972 points, ~10x too many, didn't finish in 4h). 3 of 4 interleaved
-              shards (216/288 points, well-distributed across the whole box, not a localized
-              region) are done, saved at
-              `$JEST_NLE_ROOT/runs/jewel_v3/p6_acceptance/v3_set_d256_L6_400k_s0_with_jetpt_v2_remaining/part_{0,1,2}.npz`.
-              Shard 3 repeatedly failed to finish within a 4h interactive allocation across
-              several attempts: one genuine CUDA OOM on a point near the T_ref=0.9 edge --
-              fixed by exposing `acceptance_part`'s hitherto-hardcoded `batch=1024` as a
-              `--batch` CLI arg, commit `f9565f3` -- and then several apparently-stuck runs
-              that turned out to just be mis-measured, not actually slow: a quick diagnostic
-              timed the exact computation at ~2 min, but that ran on the Perlmutter *login*
-              node's own lightly-used A100 (`hostname` -> `login15`), not a representative
-              `-q interactive` compute node -- an apples-to-oranges comparison, not evidence
-              of contention. The real, representative per-point rate is the one already seen
-              from shards 0-2 actually completing: ~3-3.5 min/point, ~3.5-4h for a full
-              72-point shard -- i.e. shard 3 was never anomalous, every retry so far was
-              simply budgeted too short (2h) or killed before finishing. Retrying shard 3
-              with the full 4h budget that worked for shards 0-2; **not yet merged into a
-              final `acceptance.npz`** (`acceptance_merge` requires all cells non-NaN).
-RUNNING:      scripts/p6_train_jetpt.py and the acceptance-table shards are done except
-              shard 3, which is retrying on a 4h interactive allocation as of this entry
-              (see P6 PROGRESS above) -- check `squeue -u $USER` and
-              `$JEST_NLE_ROOT/runs/jewel_v3/p6_acceptance/v3_set_d256_L6_400k_s0_with_jetpt_v2_remaining/part_3.npz`.
-              **Do not benchmark this checkpoint's cost from a login node (login15 has its
-              own lightly-loaded GPU, not representative of the interactive/regular compute
-              pool) -- compare against another `srun`-allocated run instead.**
+              grid (972 points, ~10x too many, didn't finish in 4h). One genuine CUDA OOM
+              near the T_ref=0.9 edge was fixed by exposing `acceptance_part`'s
+              hitherto-hardcoded `batch=1024` as a `--batch` CLI arg (commit `f9565f3`).
+              Shard 3 then needed several retries purely because of under-budgeting (a
+              misleading ~2-min timing benchmark had actually run on the Perlmutter login
+              node's own lightly-used A100, not a representative compute node -- see
+              FINDINGS for the full account) -- the real rate is ~3-3.5 min/point,
+              ~3.5-4h for a 72-point shard, same as shards 0-2. All 4 shards merged cleanly,
+              **acceptance table (8,6,6), range [0.0190, 0.0275], no NaN cells**:
+              `$JEST_NLE_ROOT/runs/jewel_v3/p6_acceptance/v3_set_d256_L6_400k_s0_with_jetpt_v2_remaining/{acceptance,acceptance_per_n}.npz`.
+RUNNING:      nothing
 DATASET:      $JEST_NLE_ROOT/data/jewel_v3/{train,fidelity,validation,test}/ (per-task shards
               + event stores), merged/ (training-ready, dataset.json/yaml sidecar covers all
               four splits under a `splits` key -- see FORMAT doc §4). As of 2026-11-10,
@@ -254,12 +240,11 @@ SNAPSHOT:     `f9565f3` is the latest committed (closure.py's `acceptance_part` 
               for P6 Part C's acceptance-table batch jobs). Cut a fresh one
               (`shell/nle/snapshot.sh HEAD`) before any future batch job if more commits land
               on top of this.
-BLOCKED ON:   nothing structurally -- P6 Part C just needs shard 3 of the acceptance table
-              to finish (see P6 PROGRESS/RUNNING above); Parts A/B are done. Once Part C
-              merges cleanly, set `[likelihood]` (midpoint-128, grid_power=4.0, per P5) and
-              the new acceptance table in a real fit config to actually exercise the
-              three-factor likelihood -- the jet-axis Jacobian (separate design task, not
-              started) is the one piece still missing from that likelihood's correctness.
+BLOCKED ON:   nothing structurally -- P6 Parts A, B and C are all done (see P6 PROGRESS
+              above). Set `[likelihood]` (midpoint-128, grid_power=4.0, per P5) and the new
+              acceptance table in a real fit config to actually exercise the three-factor
+              likelihood -- the jet-axis Jacobian (separate design task, not started) is the
+              one piece still missing from that likelihood's correctness.
 
 SIDE WORK (2026-11-07/08, does not unblock P6/P7 -- uses ad hoc nsteps=256/float64 scripts,
 not the production `LikelihoodOptions` defaults, which are UNCHANGED): built the
@@ -340,7 +325,7 @@ since P7 itself has not started.
 | P3 | training (jet_pT conditioning, no standardisation) | **done** (4 checkpoints) |
 | P4 | fidelity: gate + ptbins, weighted estimators | gate **done -- decisive fail, user accepted (core dR<0.4 fidelity is excellent)**; ptbins not pursued further |
 | P5 | NLE numerics (rule 6) | **RESOLVED (2026-11-22): `midpoint-128, grid_power=4.0` passes the formal `numerics.py` gate (0.02-0.36 vs. limit 0.5, all 4 pairs); `numerics.py`'s TEST/REFERENCE updated; a real fit must set `[likelihood]` explicitly** |
-| P6 | three-factor likelihood + Jacobian + scan | **IN PROGRESS (2026-11-25): Part A (JetPtModel wiring) and Part B (training) done; Part C (acceptance table) 75% done, shard 3 retrying; jet-axis Jacobian not started (separate design task)** |
+| P6 | three-factor likelihood + Jacobian + scan | **Parts A (JetPtModel wiring), B (training) and C (acceptance table) all done (2026-11-25); jet-axis Jacobian not started (separate design task) -- the one piece missing before a real fit can run** |
 | P7 | closure at the 4 withheld θ | not started |
 | P8 | composite-likelihood correction | not started |
 | P9 | final HTML report | not started |

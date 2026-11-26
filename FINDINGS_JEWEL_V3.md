@@ -1752,7 +1752,7 @@ P6 can proceed once a real fit config does this (see `docs/RESTART_JEWEL_V3.md`'
 ACTION). Data: `$JEST_NLE_ROOT/scratch/numerics_gate_{reference_gp4_n128_p32,testC_gp3_n128,
 testD_gp4_n128}_f64.json`.
 
-## P6 started: JetPtModel wired and trained (Parts A/B done); acceptance table 75% done (Part C); jet-axis Jacobian still a separate open task (2026-11-22 to 2026-11-25)
+## P6 Parts A, B, C done: JetPtModel wired and trained, v3 acceptance table recomputed; jet-axis Jacobian still a separate open task (2026-11-22 to 2026-11-25)
 
 P6 ("likelihood and scan", `docs/PLAN_JEWEL_V3.md`) builds the three-factor v3 likelihood
 `log p(pT_J|theta) + log p(N|pT_J,theta) + log q(shape|pT_J,N,theta) + log|J| - log
@@ -1800,11 +1800,13 @@ random design points matches the real weighted empirical distribution closely (d
 ~0.01-0.02 in both mean and std, well within noise for ~5000 events/point) -- not an obviously
 broken fit. Commit `856ab45`.
 
-**Part C: recompute the v3 acceptance table -- 75% done (3/4 shards), still in progress.** No
-new plumbing needed; this is purely running the existing, already-config-aware
-`closure.acceptance_part`/`acceptance_merge` (`shell/nle/fid_acceptance.sbatch`) against the
-v3 selection (`configs/jewel-2.6.0-cs-v3.toml`). Several operational lessons from this part,
-worth recording:
+**Part C: recompute the v3 acceptance table -- done.** No new plumbing needed; this was
+purely running the existing, already-config-aware `closure.acceptance_part`/
+`acceptance_merge` (`shell/nle/fid_acceptance.sbatch`) against the v3 selection
+(`configs/jewel-2.6.0-cs-v3.toml`). Final table: shape (8,6,6), range **[0.0190, 0.0275]**,
+no NaN cells --
+`$JEST_NLE_ROOT/runs/jewel_v3/p6_acceptance/v3_set_d256_L6_400k_s0_with_jetpt_v2_remaining/{acceptance,acceptance_per_n}.npz`.
+Several operational lessons from this part, worth recording for next time:
 
 - **Grid-size arithmetic error, caught late.** First attempt used `--axis 0:11:12 0.1:0.9:9
   0.2:1.0:9` -- the full production design grid -- which is 12x9x9 = **972** points, not the
@@ -1845,13 +1847,15 @@ worth recording:
   misleading 2-minute benchmark) or killed before its legitimate ~4h need. **Lesson: a quick
   ad hoc timing check run directly in a tool call, without checking what node/GPU it actually
   landed on, is not a valid comparison against an `srun`-allocated compute job -- `hostname`
-  first.** Retrying shard 3 with the full 4h budget that worked for shards 0-2.
-- Shards 0-2 (216/288 points) are done and saved; shard 0-2's coverage is well-distributed
-  across the *entire* box (interleaved `shard::num_shards` sharding, not a contiguous
-  sub-region), so even the incomplete table already has broad coverage. **Not yet merged**
-  into a final `acceptance.npz`/`acceptance_per_n.npz` -- `acceptance_merge` requires every
-  cell non-NaN and refuses otherwise.
+  first.** Rerunning shard 3 with the full, correctly-sized 4h budget completed successfully.
+- A second mundane trap on the merge step itself: `acceptance-merge` run without
+  `PYTHONPATH=src` set picked up a different installed package version that didn't recognize
+  `--per-n-out` at all (`unrecognized arguments`) -- always set `PYTHONPATH=src` for this repo's
+  own CLIs when working from the editable checkout, not just for the batch jobs.
+- All 4 shards (288/288 points, interleaved `shard::num_shards` sharding so each shard's
+  points are spread across the *entire* box, not a contiguous sub-region) merged cleanly on
+  the first attempt once run with the right `PYTHONPATH`.
 
 **Not done, deliberately**: the jet-axis Jacobian (Phase 2, separate task, per explicit user
-direction); merging the acceptance table and wiring a real fit config's `[likelihood]`/
-acceptance-table settings to actually exercise the three-factor likelihood end-to-end.
+direction) -- the one piece still missing before a real fit config's `[likelihood]` and
+acceptance-table settings can exercise the complete three-factor likelihood end-to-end.
